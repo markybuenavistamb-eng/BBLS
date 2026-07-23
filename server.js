@@ -24,9 +24,16 @@ app.use(['/api', '/files'], async (req, res, next) => {
   try { await db.load(); } catch (e) { return res.status(503).json({ error: 'Storage temporarily unavailable' }); }
   const sendJson = res.json.bind(res);
   res.json = (body) => {
-    if (db.isDirty()) {
-      db.flush().then(() => sendJson(body)).catch(() => { if (!res.headersSent) res.status(500); sendJson({ error: 'Failed to save changes' }); });
-    } else { sendJson(body); }
+    (async () => {
+      // Send any freshly-queued SMS in-request — no background worker/cron needed (Hobby-friendly).
+      try {
+        const d = db.get();
+        if (d.notifications && d.notifications.some(n => n.status === 'QUEUED' && n.attempts < 3)) {
+          await notif.processOnce();
+        }
+      } catch (e) { /* never block the response on SMS delivery */ }
+      if (db.isDirty()) await db.flush();
+    })().then(() => sendJson(body)).catch(() => { if (!res.headersSent) res.status(500); sendJson({ error: 'Failed to save changes' }); });
     return res;
   };
   next();

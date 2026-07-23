@@ -100,13 +100,15 @@ tokens are added to this project's environment.
 | Database (one JSON doc) | `data/db.json` | Vercel KV / Upstash Redis |
 | Uploads | `data/uploads/` | Vercel Blob, served only via the authed `/files/*` proxy |
 | Sessions | signed cookie | signed cookie (stateless — no change) |
-| SMS worker | in-process `setInterval` | Vercel Cron → `/api/cron/process-notifications` (see `vercel.json`) |
+| SMS worker | in-process `setInterval` | sent **in-request** when a status change queues an SMS (no cron) |
 
 ### Notes & limits
 
-- **Cron cadence:** `vercel.json` runs the notification worker every 5 minutes.
-  On Vercel's Hobby plan crons run at most **once per hour** — the schedule still
-  deploys; upgrade to Pro for finer cadence.
+- **Notifications / cron:** the Hobby plan only allows **daily** cron jobs, so there is
+  no cron in `vercel.json`. Instead, queued SMS are sent within the request that
+  creates them (immediate, no worker). The `/api/cron/process-notifications` endpoint
+  is still there — on the **Pro** plan you can add a `crons` entry to `vercel.json`
+  pointing at it for scheduled retry sweeps.
 - **PII files:** Vercel Blob objects are public-by-URL, so passports/packing lists
   are stored under opaque keys and **only ever served through the authenticated
   `/files/*` proxy** — the raw blob URL is never exposed. For strict isolation,
