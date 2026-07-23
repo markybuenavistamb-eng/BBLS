@@ -970,7 +970,7 @@ if (require.main === module) {
     app.listen(PORT, () => {
       console.log(`VFIC Balikbayan Box Operations running at http://localhost:${PORT}`);
       console.log('Logins (password demo1234): admin@vfic.demo | shipper@vfic.demo | consignee@vfic.demo | warehouse@vfic.demo');
-      console.log(`SMS: ${process.env.SMS_PROVIDER || 'console'} · store: ${storage.useBlob ? 'blob' : 'fs'}/${require('./lib/store').useKV ? 'kv' : 'fs'}`);
+      console.log(`SMS: ${process.env.SMS_PROVIDER || 'console'} · data: ${require('./lib/store').backend} · files: ${storage.useBlob ? 'blob' : 'fs'}`);
     });
   })();
 }

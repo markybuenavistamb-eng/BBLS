@@ -48,18 +48,38 @@ gh repo create vfic-box-operations --private --source=. --push
 
 ---
 
-## 3. Add storage (Vercel dashboard → Storage)
+## 3. Database (pick ONE) + file storage
 
-The app auto-switches from local filesystem to these when their env vars exist —
-no code changes needed.
+The app auto-selects its backend from env vars — no code changes needed.
 
-| Add this | Injects automatically | Used for |
-|---|---|---|
-| **KV / Upstash Redis** | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | the DB document (`lib/store.js`) |
-| **Blob** | `BLOB_READ_WRITE_TOKEN` | uploaded files — passports, POD photos (`lib/storage.js`) |
+### Database — Option A: Supabase (recommended)
 
-Create each store from the project's **Storage** tab and click **Connect** so the
-tokens are added to this project's environment.
+1. Create a project at <https://supabase.com>.
+2. **SQL Editor → New query**, run and **Run**:
+   ```sql
+   create table if not exists kv (k text primary key, v jsonb);
+   ```
+3. **Project Settings → API** → copy the **Project URL** and the **`service_role`** secret.
+4. In Vercel → **Settings → Environment Variables** add:
+   - `SUPABASE_URL` = the Project URL
+   - `SUPABASE_SERVICE_ROLE_KEY` = the service_role secret
+
+   > The service_role key bypasses row-level security and is used only server-side
+   > (in `lib/store.js`). Keep it secret — Vercel env vars only, never client code.
+   > No RLS policies are needed because only the server touches the table.
+
+### Database — Option B: Vercel KV / Upstash Redis
+
+Storage tab → add **Upstash for Redis** → **Connect** to the project. Injects
+`KV_REST_API_URL` / `KV_REST_API_TOKEN` automatically.
+
+### File storage — Vercel Blob
+
+Storage tab → add **Blob** → **Connect**. Injects `BLOB_READ_WRITE_TOKEN`, used for
+uploaded files (passports, POD photos). Only needed once someone uploads a file —
+the rest of the app runs without it.
+
+> After adding any of these, you **must Redeploy** — env vars only apply to new builds.
 
 ---
 
@@ -97,7 +117,7 @@ tokens are added to this project's environment.
 | Concern | Local (`npm start`) | Vercel (production) |
 |---|---|---|
 | HTTP server | `app.listen` in `server.js` | `api/index.js` re-exports the Express app as one function |
-| Database (one JSON doc) | `data/db.json` | Vercel KV / Upstash Redis |
+| Database (one JSON doc) | `data/db.json` | Supabase (Postgres) or Vercel KV / Upstash Redis |
 | Uploads | `data/uploads/` | Vercel Blob, served only via the authed `/files/*` proxy |
 | Sessions | signed cookie | signed cookie (stateless — no change) |
 | SMS worker | in-process `setInterval` | sent **in-request** when a status change queues an SMS (no cron) |

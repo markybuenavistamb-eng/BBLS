@@ -17,7 +17,7 @@ The app runs on Vercel as a single serverless function (`api/index.js` re-export
 
 | Concern | Local | Vercel (production) |
 |---|---|---|
-| Database (one JSON document) | `data/db.json` | **Vercel KV / Upstash Redis** (`lib/store.js`) |
+| Database (one JSON document) | `data/db.json` | **Supabase (Postgres)** or Vercel KV / Upstash Redis (`lib/store.js`) |
 | Uploads (passports, POD photos) | `data/uploads/` | **Vercel Blob** (`lib/storage.js`), served only via the authed `/files/*` proxy |
 | Sessions | signed cookie | signed cookie (`lib/session.js`, stateless — no server store) |
 | SMS worker | in-process `setInterval` | sent **in-request** when a status change queues one (no cron needed on Hobby; `/api/cron/process-notifications` remains for optional Pro-plan scheduled retries) |
