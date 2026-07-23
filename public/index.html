@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VFIC Box Operations — Staff</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Login screen renders into #view before the shell exists -->
+  <div id="preauth"><main class="wrap" id="view"></main></div>
+
+  <!-- Authenticated app shell (sidebar + main); shown after login -->
+  <div class="app-shell" id="shell" style="display:none">
+    <div class="sidebar-backdrop" onclick="toggleNav(false)"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <a class="vf-logo-plate" href="/" style="width:100%;padding:8px 10px">
+          <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver">
+        </a>
+        <span class="co" id="brandOps">Box Operations</span>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sidebar-foot">
+        <div class="who" id="who"></div>
+        <div class="role" id="whoRole"></div>
+        <div id="langMount" style="margin-bottom:10px"></div>
+        <button class="secondary small" style="width:100%" onclick="logout()" id="logoutBtn">Log out</button>
+      </div>
+    </aside>
+    <div class="main-area">
+      <div class="topbar-mobile">
+        <button class="burger" onclick="toggleNav(true)" aria-label="Menu">☰</button>
+        <span class="vf-logo-plate" style="padding:5px 9px"><img class="vf-logo-img" src="/vfic-logo.png" alt="VFIC" style="width:150px"></span>
+      </div>
+      <main class="wrap" id="view2"></main>
+    </div>
+  </div>
+
+  <script src="/vendor/html5-qrcode.min.js"></script>
+  <script src="/i18n.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

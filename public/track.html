@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Track your Balikbayan Box — VICTORS FREIGHT INTERNATIONAL CORPORATION</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="pub-band" style="--hero-img:url('https://images.unsplash.com/photo-1494412574643-ff11b0a5c1c3?auto=format&fit=crop&w=1400&q=70')">
+    <div class="inner">
+      <a class="vf-logo-plate" href="/">
+        <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:230px">
+      </a>
+      <div class="spacer"></div>
+      <span id="langMount"></span>
+    </div>
+  </div>
+  <div style="max-width:640px;margin:0 auto;padding:24px 16px 2px;text-align:center">
+    <h1 style="font-size:25px;margin:0 0 6px">📦 <span data-i18n="track.title">Track your Balikbayan Box</span></h1>
+    <p class="muted" style="margin:0" data-i18n="track.sub">Enter your box number and the last 4 digits of the receiver's phone.</p>
+  </div>
+  <div class="track-search" style="margin-top:14px">
+    <div class="card" id="lookupForm">
+      <div style="flex:1">
+        <input id="boxNum" data-i18n-ph="track.boxNo" placeholder="Box number" autocomplete="off" style="margin-bottom:8px">
+        <input id="phone4" data-i18n-ph="track.phone4" placeholder="Last 4 digits of receiver's phone" maxlength="4" inputmode="numeric" autocomplete="off">
+      </div>
+      <button onclick="lookup()" data-i18n="track.btn">Track</button>
+    </div>
+  </div>
+  <div class="track-result" id="result"></div>
+  <script src="/i18n.js"></script>
+  <script src="/track.js"></script>
+</body>
+</html>

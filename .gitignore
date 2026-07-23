@@ -1,0 +1,19 @@
+# dependencies (Vercel/npm install these)
+node_modules/
+
+# local data store & uploads (KV + Blob hold these in production)
+data/
+
+# secrets & env
+.env
+.env.local
+.env.*.local
+
+# vercel / logs / os
+.vercel
+*.log
+.DS_Store
+Thumbs.db
+
+# local agent/IDE config (machine-specific)
+.claude/
