@@ -289,6 +289,10 @@ app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => 
     shipping_fee_amount: b.shipping_fee_amount != null ? +b.shipping_fee_amount : null,
     currency: b.currency || 'USD',
     payment_status: b.payment_status === 'PAID' ? 'PAID' : 'UNPAID',
+    // BOC Form BB-IS-001 data carried over from the online booking (availment/sender type,
+    // name parts, passport, addresses, pick-up). Drives the printed Information Sheet.
+    boc: b.boc || null,
+    mbl_mawb_number: b.mbl_mawb_number || '',
     created_by: req.user.id, created_at: nowIso
   };
   d.shipments.push(shipment);
@@ -304,6 +308,9 @@ app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => 
       weight_kg: bx.weight_kg ? +bx.weight_kg : null,
       declared_contents: bx.declared_contents || '', special_instructions: bx.special_instructions || '',
       packing_list_items: sanitizeItems(bx.packing_list_items),
+      // Per-box BOC data: recipient name parts, relationship, PH address, itemized goods.
+      boc: bx.boc || null,
+      total_value_php: bx.total_value_php != null ? +bx.total_value_php : null,
       region: null, status: 'CREATED', status_updated_at: nowIso,
       container_id: null, trucking_assignment_id: null,
       created_at: nowIso

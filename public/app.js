@@ -1,4 +1,4 @@
-/* VFIC Box Operations — staff single-page app (demo) */
+﻿/* VFIC Box Operations â€” staff single-page app (demo) */
 let ME = null;
 let scanner = null;
 
@@ -31,11 +31,11 @@ const FAILURE_REASONS = { UNREACHABLE: 'Receiver unreachable by phone', ADDRESS_
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function fmtDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'â€”';
   return new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
 }
 function fmtDay(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'â€”';
   return new Date(iso).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' });
 }
 function ageDays(iso) { return iso ? Math.floor((Date.now() - new Date(iso)) / 86400000) : 0; }
@@ -44,7 +44,7 @@ function badge(status) {
   return `<span class="badge ${cls}">${esc(STATUS_LABELS[status] || String(status).replace(/_/g, ' '))}</span>`;
 }
 function payBadge(p) { return `<span class="badge pay-${esc(String(p).toLowerCase())}">${esc(p)}</span>`; }
-function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION_LABELS[r] || r)}</span>` : '<span class="muted">—</span>'; }
+function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION_LABELS[r] || r)}</span>` : '<span class="muted">â€”</span>'; }
 
 async function api(path, opts = {}) {
   if (opts.body && !(opts.body instanceof FormData)) {
@@ -111,24 +111,24 @@ function renderLogin() {
       <div class="login-brandside" style="--hero-img:url('${IMG.hero}')">
         <div class="lb-top">
           <span class="vf-logo-plate">
-            <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:280px">
+            <img class="vf-logo-img" src="/vfic-logo.png" alt="VÃ®ctors Freight International Corporation â€” Chosen to Deliver" style="width:280px">
           </span>
         </div>
         <div>
           <h2>${VI.t('login.subtitle')}</h2>
-          <p>${VI.t('brand.company')} — ${VI.t('brand.tagline')}</p>
+          <p>${VI.t('brand.company')} â€” ${VI.t('brand.tagline')}</p>
           <ul class="lb-points">
-            <li>${VI.t('land.svc.sea.t')} · ${VI.t('land.svc.air.t')} · ${VI.t('service.DOOR_TO_DOOR')}</li>
-            <li>${VI.t('land.hero.ctaTrack')} — ${VI.t('land.stat.tracking')}</li>
+            <li>${VI.t('land.svc.sea.t')} Â· ${VI.t('land.svc.air.t')} Â· ${VI.t('service.DOOR_TO_DOOR')}</li>
+            <li>${VI.t('land.hero.ctaTrack')} â€” ${VI.t('land.stat.tracking')}</li>
             <li>${VI.t('land.contact.head')}: Intramuros, Manila</li>
           </ul>
         </div>
-        <div style="font-size:12px;color:#8aa0bf">© ${new Date().getFullYear()} ${VI.t('brand.company')}</div>
+        <div style="font-size:12px;color:#8aa0bf">Â© ${new Date().getFullYear()} ${VI.t('brand.company')}</div>
       </div>
       <div class="login-formside">
         <div class="login-box card">
           <div style="display:flex;justify-content:center;margin-bottom:10px">
-            <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:290px">
+            <img class="vf-logo-img" src="/vfic-logo.png" alt="VÃ®ctors Freight International Corporation â€” Chosen to Deliver" style="width:290px">
           </div>
           <div style="text-align:center;margin-bottom:12px">${VI.toggleHtml('renderLogin()')}</div>
           <h1 style="font-size:20px;text-align:center;margin:0 0 14px">${VI.t('login.title')}</h1>
@@ -138,11 +138,11 @@ function renderLogin() {
           <div class="error" id="lgErr"></div>
           <div class="demo-creds">
             <b>${VI.t('login.demo')}</b> (${VI.t('login.password_is')} <code>demo1234</code>):<br>
-            admin@vfic.demo · shipper@vfic.demo<br>consignee@vfic.demo · warehouse@vfic.demo
+            admin@vfic.demo Â· shipper@vfic.demo<br>consignee@vfic.demo Â· warehouse@vfic.demo
           </div>
           <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13px">
             <a href="/">${VI.t('login.home')}</a>
-            <a href="/track.html">${VI.t('login.track')} →</a>
+            <a href="/track.html">${VI.t('login.track')} â†’</a>
           </div>
         </div>
       </div>
@@ -261,7 +261,7 @@ function scannerHtml(hint) {
     <div class="scan-panel card">
       <div id="qr-reader"></div>
       <div class="row" style="justify-content:center;margin-top:10px">
-        <button class="secondary small" onclick="startCam()">📷 Start camera</button>
+        <button class="secondary small" onclick="startCam()">ðŸ“· Start camera</button>
       </div>
       <div class="muted" style="margin:8px 0">${esc(hint || 'Scan a box QR label, or type the box number:')}</div>
       <div class="row" style="justify-content:center">
@@ -299,7 +299,7 @@ async function submitManual() {
 }
 async function handleCode(code) {
   if (!scanHandler) return;
-  try { await scanHandler(code); } catch (e) { scanFeedback(`<div class="scan-last warn"><div class="big">✗ ${esc(e.message)}</div></div>`); }
+  try { await scanHandler(code); } catch (e) { scanFeedback(`<div class="scan-last warn"><div class="big">âœ— ${esc(e.message)}</div></div>`); }
 }
 function scanFeedback(html) {
   const el = document.getElementById('scanResult');
@@ -354,13 +354,13 @@ async function pageShipments() {
     <div class="row" style="justify-content:space-between">
       <h1>Shipments</h1>
       <div>
-        ${canIntake() ? `<a href="#/intake-requests"><button class="secondary" ${pending.length ? 'style="outline:2px solid var(--primary)"' : ''}>📥 Online intake requests${pending.length ? ` (${pending.length})` : ''}</button></a>` : ''}
-        ${canIntake() ? '<a href="#/receiving-form-blank"><button class="secondary">🖨 Blank receiving form</button></a>' : ''}
+        ${canIntake() ? `<a href="#/intake-requests"><button class="secondary" ${pending.length ? 'style="outline:2px solid var(--primary)"' : ''}>ðŸ“¥ Online intake requests${pending.length ? ` (${pending.length})` : ''}</button></a>` : ''}
+        ${canIntake() ? '<a href="#/receiving-form-blank"><button class="secondary">ðŸ–¨ Blank receiving form</button></a>' : ''}
         ${canIntake() ? '<a href="#/shipments/new"><button>+ New shipment intake</button></a>' : ''}
       </div>
     </div>
     <div class="card row">
-      <input id="shipQ" placeholder="Search shipment #, sender name, phone…" style="max-width:340px" value="${esc(q.get('q') || '')}">
+      <input id="shipQ" placeholder="Search shipment #, sender name, phoneâ€¦" style="max-width:340px" value="${esc(q.get('q') || '')}">
       <button class="small" onclick="location.hash='#/shipments?q='+encodeURIComponent(shipQ.value)">Search</button>
     </div>
     <div class="card table-scroll">
@@ -370,7 +370,7 @@ async function pageShipments() {
         <td>${esc(s.sender_name)}</td><td>${s.box_count}</td>
         <td>${esc(SERVICE_TYPES[s.service_type] || s.service_type)}</td>
         <td>${esc(s.origin_agent || s.origin_country)}</td>
-        <td>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'}</td>
+        <td>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : 'â€”'}</td>
         <td>${payBadge(s.payment_status)}</td><td>${fmtDay(s.created_at)}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">No shipments</td></tr>'}
       </table>
@@ -406,8 +406,8 @@ let CUSTOMERS = [];
 async function loadCustomers() { CUSTOMERS = await api('/api/customers'); }
 function customerOptions(type, selected) {
   const eligible = CUSTOMERS.filter(c => c.type === type || c.type === 'BOTH');
-  return `<option value="">— select —</option>` + eligible.map(c =>
-    `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.full_name)} · ${esc(c.phone_primary)}${c.city_municipality ? ' · ' + esc(c.city_municipality) : ''}</option>`).join('');
+  return `<option value="">â€” select â€”</option>` + eligible.map(c =>
+    `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.full_name)} Â· ${esc(c.phone_primary)}${c.city_municipality ? ' Â· ' + esc(c.city_municipality) : ''}</option>`).join('');
 }
 
 let boxRowSeq = 0;
@@ -424,12 +424,12 @@ function boxRowHtml() {
         <div><label>Receiver *</label><select id="bxReceiver${n}">${customerOptions('RECEIVER')}</select></div>
         <div><label>Size</label><select id="bxSize${n}">${SIZES.map(s => `<option ${s === 'LARGE' ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
         <div><label>Weight (kg)</label><input id="bxWeight${n}" type="number" min="0" step="0.1"></div>
-        <div><label>L×W×H (cm)</label><div class="row" style="flex-wrap:nowrap;gap:4px">
+        <div><label>LÃ—WÃ—H (cm)</label><div class="row" style="flex-wrap:nowrap;gap:4px">
           <input id="bxL${n}" type="number" placeholder="L"><input id="bxW${n}" type="number" placeholder="W"><input id="bxH${n}" type="number" placeholder="H"></div></div>
       </div>
-      <label>Declared contents (summary)</label><textarea id="bxContents${n}" placeholder="Clothes, canned goods, chocolates…"></textarea>
-      <label>Special instructions</label><input id="bxInstr${n}" placeholder="Fragile / call before delivery / …">
-      <label>Packing list — itemized contents (printed on the Packing List document)</label>
+      <label>Declared contents (summary)</label><textarea id="bxContents${n}" placeholder="Clothes, canned goods, chocolatesâ€¦"></textarea>
+      <label>Special instructions</label><input id="bxInstr${n}" placeholder="Fragile / call before delivery / â€¦">
+      <label>Packing list â€” itemized contents (printed on the Packing List document)</label>
       <div id="items${n}">${itemRowHtml()}</div>
       <button type="button" class="secondary small" onclick="document.getElementById('items${n}').insertAdjacentHTML('beforeend', itemRowHtml())">+ Add item</button>
     </div>`;
@@ -439,7 +439,7 @@ function itemRowHtml() {
     <div class="row itemRow" style="flex-wrap:nowrap;gap:6px">
       <input placeholder="Item description (e.g. canned goods)" class="itemDesc">
       <input placeholder="Qty" class="itemQty" style="max-width:90px">
-      <button type="button" class="secondary small" onclick="this.parentElement.remove()">✕</button>
+      <button type="button" class="secondary small" onclick="this.parentElement.remove()">âœ•</button>
     </div>`;
 }
 function collectItems(itemsContainerId) {
@@ -488,19 +488,19 @@ function pageReceivingFormBlank(extraBoxCount) {
         <label style="margin:0">Additional boxes (rider sheet)</label>
         <input id="extraBoxCount" type="number" min="0" max="19" value="${extra}" style="max-width:70px">
         <button class="secondary small" onclick="pageReceivingFormBlank(+document.getElementById('extraBoxCount').value)">Update</button>
-        <button onclick="window.print()">🖨 Print</button>
+        <button onclick="window.print()">ðŸ–¨ Print</button>
       </div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">
       One Receiving Form per box. Hand this to a sender to fill out by hand, or have them scan the QR code to fill it up online instead.
-      If they have more than one box, print a rider sheet for the additional boxes. Sized to fit legal paper (8.5×13in). Once completed, encode it in <a href="#/shipments/new">New Shipment Intake</a>.
+      If they have more than one box, print a rider sheet for the additional boxes. Sized to fit legal paper (8.5Ã—13in). Once completed, encode it in <a href="#/shipments/new">New Shipment Intake</a>.
     </div>
     <div class="receipt">
       <div class="rc-head">
         <div>
-          <img src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:300px;display:block;margin-bottom:4px">
-          <div class="rc-title">BALIKBAYAN BOX RECEIVING FORM — SENDER COPY</div>
-          <div class="rc-meta">Please print clearly. One box per form — use a rider sheet for additional boxes.<br>Or scan the QR code to fill this up online.</div>
+          <img src="/vfic-logo.png" alt="VÃ®ctors Freight International Corporation â€” Chosen to Deliver" style="width:300px;display:block;margin-bottom:4px">
+          <div class="rc-title">BALIKBAYAN BOX RECEIVING FORM â€” SENDER COPY</div>
+          <div class="rc-meta">Please print clearly. One box per form â€” use a rider sheet for additional boxes.<br>Or scan the QR code to fill this up online.</div>
         </div>
         <div class="rc-qr">
           <img src="/api/intake-form-qr" alt="Scan to fill up online" style="width:85px;height:85px">
@@ -524,8 +524,8 @@ function pageReceivingFormBlank(extraBoxCount) {
       ${blankBoxBlockHtml(1)}
 
       <div class="rc-box" style="margin-top:8px;padding:6px 10px;border-color:var(--red)">
-        <div class="rc-label" style="color:var(--red);margin-bottom:3px">REQUIRED — SENDER'S PASSPORT / GOVERNMENT ID</div>
-        <div class="rc-line" style="padding:0"><span style="font-size:10px">ID on file</span><div style="font-size:11px">☐ Photocopy attached to this form &nbsp; ☐ Soft copy submitted online (QR code above)</div></div>
+        <div class="rc-label" style="color:var(--red);margin-bottom:3px">REQUIRED â€” SENDER'S PASSPORT / GOVERNMENT ID</div>
+        <div class="rc-line" style="padding:0"><span style="font-size:10px">ID on file</span><div style="font-size:11px">â˜ Photocopy attached to this form &nbsp; â˜ Soft copy submitted online (QR code above)</div></div>
         <div class="muted" style="font-size:10px;margin-top:2px">VFIC requires a scanned or photographed copy of the sender's passport or government ID on file before a shipment can be processed.</div>
       </div>
 
@@ -541,7 +541,7 @@ function pageReceivingFormBlank(extraBoxCount) {
     ${Array.from({ length: extra }, (_, i) => `
     <div class="receipt" style="page-break-before:always">
       <div class="rc-title">ADDITIONAL BOX RIDER SHEET <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(box ${i + 2} of ${extra + 1})</span></div>
-      <div class="rc-meta">One box per sheet — attach to the signed Receiving Form for:</div>
+      <div class="rc-meta">One box per sheet â€” attach to the signed Receiving Form for:</div>
       <div style="max-width:420px">${blankLine('Sender full name')}</div>
       <div style="margin-top:10px">${blankBoxBlockHtml(i + 2)}</div>
     </div>`).join('')}`);
@@ -553,7 +553,7 @@ async function createOrMatchCustomer(fields) {
   try {
     return await api('/api/customers', { method: 'POST', body: fields });
   } catch (e) {
-    if (e.status === 409) return e.data.existing; // phone already on file — reuse it, don't duplicate
+    if (e.status === 409) return e.data.existing; // phone already on file â€” reuse it, don't duplicate
     throw e;
   }
 }
@@ -570,13 +570,13 @@ async function pageShipmentNew(intakeId) {
   view(`
     <div class="row" style="justify-content:space-between">
       <h1>New Shipment Intake</h1>
-      <a href="#/receiving-form-blank"><button class="secondary">🖨 Blank receiving form</button></a>
+      <a href="#/receiving-form-blank"><button class="secondary">ðŸ–¨ Blank receiving form</button></a>
     </div>
     <div class="muted" style="margin:-8px 0 12px">Encoding from a filled-out paper form? Have the sender complete a <a href="#/receiving-form-blank">blank receiving form</a> first, then transcribe it below. Or check <a href="#/intake-requests">pending online submissions</a>.</div>
     ${intake ? `<div class="card" style="border-color:var(--primary)">
       <b>Reviewing online submission ${esc(intake.reference_code)}</b> from ${esc(personName(intake.sender))}, submitted ${fmtDate(intake.submitted_at)}.
-      Fields below are pre-filled from what the sender entered — verify weights/sizes and the passport copy, then save.
-      ${intake.passport_file ? `<div><a href="${esc(intake.passport_file)}" target="_blank">View submitted passport/ID scan →</a></div>` : ''}
+      Fields below are pre-filled from what the sender entered â€” verify weights/sizes and the passport copy, then save.
+      ${intake.passport_file ? `<div><a href="${esc(intake.passport_file)}" target="_blank">View submitted passport/ID scan â†’</a></div>` : ''}
     </div>` : ''}
     <div class="card">
       <h2 style="margin-top:0">Sender</h2>
@@ -597,7 +597,7 @@ async function pageShipmentNew(intakeId) {
         <div><label>Receiving form</label><input id="fReceiving" type="file"></div>
         <div><label>Packing list</label><input id="fPacking" type="file"></div>
         <div><label>Passport / ID copy ${intake && intake.passport_file ? '' : '*'}</label><input id="fPassport" type="file">
-          ${intake && intake.passport_file ? '<div class="muted">Already on file from the online submission — only attach a new one to replace it.</div>' : ''}</div>
+          ${intake && intake.passport_file ? '<div class="muted">Already on file from the online submission â€” only attach a new one to replace it.</div>' : ''}</div>
       </div>
     </div>
     <h2>Boxes</h2>
@@ -637,7 +637,7 @@ async function pageShipmentNew(intakeId) {
     document.getElementById('bxReceiver' + n).innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
     document.getElementById('bxSize' + n).value = bx.size_category;
     if (bx.weight_kg) document.getElementById('bxWeight' + n).value = bx.weight_kg;
-    // BOC goods checklist → the encoder's itemized packing list rows
+    // BOC goods checklist â†’ the encoder's itemized packing list rows
     document.getElementById('bxContents' + n).value = (bx.goods || []).map(g => g.category).join(', ');
     document.getElementById('bxInstr' + n).value = bx.special_instructions || '';
     const itemsEl = document.getElementById('items' + n);
@@ -656,7 +656,7 @@ function personName(p) {
   const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
   return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim() + (suffix ? ' ' + suffix : '');
 }
-// PSGC region names → the app's internal delivery-region enum (used for sorting/dispatch).
+// PSGC region names â†’ the app's internal delivery-region enum (used for sorting/dispatch).
 function mapPsgcRegion(name) {
   const n = String(name || '').toLowerCase();
   if (!n) return null;
@@ -681,7 +681,7 @@ function newCustomerFormHtml(prefix) {
       <div><label>Barangay</label><input id="${prefix}Brgy"></div>
       <div><label>City / Municipality</label><input id="${prefix}City"></div>
       <div><label>Province</label><input id="${prefix}Prov"></div>
-      <div><label>Region</label><select id="${prefix}Region"><option value="">—</option>${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select></div>
+      <div><label>Region</label><select id="${prefix}Region"><option value="">â€”</option>${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select></div>
       <div><label>Country</label><input id="${prefix}Country" value="Philippines"></div>
       <div><label>Landmark</label><input id="${prefix}Landmark" placeholder="Critical for remote addresses!"></div>
     </div>
@@ -725,12 +725,18 @@ async function createShipment() {
     const boxes = [...document.querySelectorAll('[data-boxrow]')].map(el => {
       const n = el.dataset.boxrow;
       const $ = id => document.getElementById(id + n);
+      // Carry the matching box's BOC block (recipient name parts, relationship, goods)
+      // from the online booking so the printed Information Sheet can auto-fill.
+      const idx = [...document.querySelectorAll('[data-boxrow]')].indexOf(el);
+      const src = PREFILL_INTAKE && PREFILL_INTAKE.boxes ? PREFILL_INTAKE.boxes[idx] : null;
       return {
         receiver_id: +$('bxReceiver').value,
         size_category: $('bxSize').value,
         weight_kg: $('bxWeight').value, length_cm: $('bxL').value, width_cm: $('bxW').value, height_cm: $('bxH').value,
         declared_contents: $('bxContents').value, special_instructions: $('bxInstr').value,
-        packing_list_items: collectItems('items' + n)
+        packing_list_items: collectItems('items' + n),
+        boc: src ? { receiver: src.receiver, goods: src.goods } : null,
+        total_value_php: src ? src.total_value_php : null
       };
     });
     if (!boxes.length) throw new Error('Add at least one box');
@@ -746,7 +752,15 @@ async function createShipment() {
       body: {
         sender_id: +shSender.value, origin_country: shOrigin.value, origin_agent: shAgent.value,
         service_type: shService.value, shipping_fee_amount: shFee.value || null, currency: shCurrency.value,
-        payment_status: shPaid.value, receiving_form_file, packing_list_file, passport_file, boxes
+        payment_status: shPaid.value, receiving_form_file, packing_list_file, passport_file, boxes,
+        boc: PREFILL_INTAKE ? {
+          availment_type: PREFILL_INTAKE.availment_type,
+          sender_type: PREFILL_INTAKE.sender_type,
+          sender: PREFILL_INTAKE.sender,
+          pickup: PREFILL_INTAKE.pickup,
+          total_value_php: PREFILL_INTAKE.total_value_php,
+          reference_code: PREFILL_INTAKE.reference_code
+        } : null
       }
     });
     if (PREFILL_INTAKE) {
@@ -765,21 +779,21 @@ async function pageShipmentDetail(id) {
     <div class="row" style="justify-content:space-between">
       <h1>${esc(s.shipment_number)}</h1>
       <div>
-        <a href="#/labels/s/${s.id}"><button class="secondary">🖨 Print labels</button></a>
-        <a href="#/receiving-form/${s.id}"><button class="secondary">🖨 Receiving form</button></a>
-        <a href="#/packing-list/${s.id}"><button class="secondary">🖨 Packing list</button></a>
-        ${canIntake() && createdBoxes ? `<button onclick="confirmOriginReceipt(${s.id})">✓ Confirm origin receipt (${createdBoxes})</button>` : ''}
+        <a href="#/labels/s/${s.id}"><button class="secondary">ðŸ–¨ Print labels</button></a>
+        <a href="#/receiving-form/${s.id}"><button class="secondary">ðŸ–¨ Receiving form</button></a>
+        <a href="#/packing-list/${s.id}"><button class="secondary">ðŸ–¨ Packing list</button></a>
+        ${canIntake() && createdBoxes ? `<button onclick="confirmOriginReceipt(${s.id})">âœ“ Confirm origin receipt (${createdBoxes})</button>` : ''}
       </div>
     </div>
     <div class="card form-grid">
       <div><label>Sender</label><a href="#/customers/${s.sender_id}">${esc(s.sender ? s.sender.full_name : '')}</a><div class="muted">${esc(s.sender ? s.sender.phone_primary : '')}</div></div>
       <div><label>Service</label>${esc(SERVICE_TYPES[s.service_type] || s.service_type)}</div>
       <div><label>Origin</label>${esc([s.origin_agent, s.origin_country].filter(Boolean).join(', '))}</div>
-      <div><label>Fee</label>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'} ${payBadge(s.payment_status)}
+      <div><label>Fee</label>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : 'â€”'} ${payBadge(s.payment_status)}
         ${canIntake() ? `<button class="small secondary" onclick="togglePayment(${s.id}, '${s.payment_status === 'PAID' ? 'UNPAID' : 'PAID'}')">Mark ${s.payment_status === 'PAID' ? 'unpaid' : 'paid'}</button>` : ''}</div>
       <div><label>Documents</label>
-        ${s.receiving_form_file ? `<a href="${esc(s.receiving_form_file)}" target="_blank">Receiving form</a> · ` : ''}
-        ${s.packing_list_file ? `<a href="${esc(s.packing_list_file)}" target="_blank">Packing list</a> · ` : ''}
+        ${s.receiving_form_file ? `<a href="${esc(s.receiving_form_file)}" target="_blank">Receiving form</a> Â· ` : ''}
+        ${s.packing_list_file ? `<a href="${esc(s.packing_list_file)}" target="_blank">Packing list</a> Â· ` : ''}
         ${s.passport_file ? `<a href="${esc(s.passport_file)}" target="_blank">Passport/ID</a>` : ''}
         ${!s.receiving_form_file && !s.packing_list_file && !s.passport_file ? '<span class="muted">None uploaded</span>' : ''}
       </div>
@@ -792,7 +806,7 @@ async function pageShipmentDetail(id) {
         <td><a href="#/boxes/${b.id}">${esc(b.box_number)}</a></td>
         <td>${esc(b.receiver_name)}</td><td>${esc(b.receiver_city)}</td>
         <td>${esc(b.size_category)}</td><td>${badge(b.status)}</td>
-        <td><a href="#/labels/b/${b.id}">🖨</a></td>
+        <td><a href="#/labels/b/${b.id}">ðŸ–¨</a></td>
       </tr>`).join('')}
       </table>
     </div>`);
@@ -800,7 +814,7 @@ async function pageShipmentDetail(id) {
 async function confirmOriginReceipt(id) {
   try {
     const r = await api(`/api/shipments/${id}/receive`, { method: 'POST' });
-    flash(`${r.received} box(es) marked Received at origin — sender notified by SMS`);
+    flash(`${r.received} box(es) marked Received at origin â€” sender notified by SMS`);
     route();
   } catch (e) { showErr(e); }
 }
@@ -822,122 +836,26 @@ async function pageLabels(kind, id) {
   }
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Labels — ${esc(title)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
+      <h1>Labels â€” ${esc(title)}</h1>
+      <button onclick="window.print()">ðŸ–¨ Print</button>
     </div>
     <div class="labels-grid">
       ${boxes.map(b => `
         <div class="label-card">
-          <div style="font-weight:800;letter-spacing:.5px">VFIC · VICTORS FREIGHT INTL CORP</div>
+          <div style="font-weight:800;letter-spacing:.5px">VFIC Â· VICTORS FREIGHT INTL CORP</div>
           <div class="tid">${esc(b.box_number)}</div>
           <img src="/api/qr/${esc(b.qr_token)}" alt="QR">
           <div class="muted">Scan to track</div>
           <div class="dest">FROM: ${esc(b.sender_name)}</div>
-          <div class="dest">TO: ${esc(b.receiver_name)} — ${esc(b.receiver_city)}</div>
-          <div>${esc(b.size_category)}${b.weight_kg ? ' · ' + b.weight_kg + ' kg' : ''}</div>
-          ${b.special_instructions ? `<div class="flag">⚠ ${esc(b.special_instructions)}</div>` : ''}
+          <div class="dest">TO: ${esc(b.receiver_name)} â€” ${esc(b.receiver_city)}</div>
+          <div>${esc(b.size_category)}${b.weight_kg ? ' Â· ' + b.weight_kg + ' kg' : ''}</div>
+          ${b.special_instructions ? `<div class="flag">âš  ${esc(b.special_instructions)}</div>` : ''}
           <div class="region-big">${esc(REGION_LABELS[b.region || b.receiver_region] || 'REGION TBD')}</div>
         </div>`).join('')}
     </div>`);
 }
 
-/* ---------- Balikbayan Box Receiving Form (printable intake document) ---------- */
-async function pageReceivingForm(shipmentId) {
-  const s = await api('/api/shipments/' + shipmentId);
-  const sender = s.sender || {};
-  view(`
-    <div class="row no-print" style="justify-content:space-between">
-      <h1>Receiving Form — ${esc(s.shipment_number)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
-    </div>
-    <div class="receipt">
-      <div class="rc-head">
-        <div>
-          <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
-          <div class="rc-title">BALIKBAYAN BOX RECEIVING FORM</div>
-          <div class="rc-meta">
-            Shipment #: <b>${esc(s.shipment_number)}</b><br>
-            Date: ${fmtDate(s.created_at)}<br>
-            Service type: ${esc(SERVICE_TYPES[s.service_type] || s.service_type)}<br>
-            Origin: ${esc([s.origin_agent, s.origin_country].filter(Boolean).join(', ') || '—')}
-          </div>
-        </div>
-        <div class="rc-qr">
-          ${s.boxes[0] ? `<img src="/api/qr/${esc(s.boxes[0].qr_token)}" alt="QR">` : ''}
-          <div class="rc-tid">${esc(s.shipment_number)}</div>
-        </div>
-      </div>
-      <div class="rc-parties">
-        <div class="rc-box">
-          <div class="rc-label">SENDER / SHIPPER</div>
-          <div class="rc-line"><span>Name</span>${esc(sender.full_name || '')}</div>
-          <div class="rc-line"><span>Phone</span>${esc(sender.phone_primary || '')}${sender.phone_alternate ? ' / ' + esc(sender.phone_alternate) : ''}</div>
-          <div class="rc-line"><span>Address</span>${esc([sender.address_line, sender.city_municipality, sender.province, sender.country].filter(Boolean).join(', '))}</div>
-        </div>
-        <div class="rc-box">
-          <div class="rc-label">SHIPMENT SUMMARY</div>
-          <div class="rc-line"><span>Boxes</span>${s.boxes.length}</div>
-          <div class="rc-line"><span>Fee</span>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'}</div>
-          <div class="rc-line"><span>Payment</span>${esc(s.payment_status)}</div>
-        </div>
-      </div>
-      <table class="rc-table">
-        <tr><th>#</th><th>Box #</th><th>Receiver</th><th>City / Region</th><th>Size</th><th>Weight</th><th>Special instructions</th></tr>
-        ${s.boxes.map((b, i) => `<tr>
-          <td>${i + 1}</td><td>${esc(b.box_number)}</td>
-          <td>${esc(b.receiver ? b.receiver.full_name : b.receiver_name || '')}</td>
-          <td>${esc(b.receiver ? b.receiver.city_municipality : b.receiver_city || '')}${b.receiver && b.receiver.region ? ' / ' + esc(REGION_LABELS[b.receiver.region] || b.receiver.region) : ''}</td>
-          <td>${esc(b.size_category)}</td><td>${b.weight_kg ? b.weight_kg + ' kg' : '—'}</td>
-          <td>${esc(b.special_instructions || '—')}</td>
-        </tr>`).join('')}
-      </table>
-      <div class="rc-terms">
-        I/We certify that the contents declared for each box above are true and correct, contain no prohibited, illegal, or dutiable items beyond what is declared,
-        and I authorize Victors Freight International Corporation (VFIC) to transport, consolidate, and deliver the above box(es) under VFIC's standard terms and conditions
-        of carriage. VFIC's liability, if any, is limited to the declared value on file. Please retain this form as your intake receipt.
-      </div>
-      <div class="rc-sign">
-        <div><div class="rc-sigline"></div>Sender signature over printed name</div>
-        <div><div class="rc-sigline"></div>Received by (VFIC agent) over printed name</div>
-      </div>
-    </div>`);
-}
-
-/* ---------- Packing list (itemized, printable) ---------- */
-async function pagePackingList(shipmentId) {
-  const s = await api('/api/shipments/' + shipmentId);
-  view(`
-    <div class="row no-print" style="justify-content:space-between">
-      <h1>Packing List — ${esc(s.shipment_number)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
-    </div>
-    <div class="receipt">
-      <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
-      <div class="rc-title">PACKING LIST</div>
-      <div class="rc-meta">
-        Shipment #: <b>${esc(s.shipment_number)}</b> · Sender: <b>${esc(s.sender ? s.sender.full_name : '')}</b> · Date: ${fmtDate(s.created_at)}
-      </div>
-      ${s.boxes.map(b => {
-        const items = (b.packing_list_items || []).length ? b.packing_list_items : (b.declared_contents ? [{ description: b.declared_contents, qty: '' }] : []);
-        return `
-        <div class="rc-box" style="margin:12px 0">
-          <div class="rc-label">BOX ${esc(b.box_number)} → ${esc(b.receiver ? b.receiver.full_name : b.receiver_name || '')}${b.receiver && b.receiver.city_municipality ? ', ' + esc(b.receiver.city_municipality) : ''}</div>
-          <table class="rc-table">
-            <tr><th>#</th><th>Item description</th><th>Qty</th></tr>
-            ${items.length ? items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.description)}</td><td>${esc(it.qty || '—')}</td></tr>`).join('')
-              : `<tr><td colspan="3" class="muted">No items declared</td></tr>`}
-          </table>
-        </div>`;
-      }).join('')}
-      <div class="rc-terms">
-        I declare that the items listed above accurately describe the contents of each box, and that no prohibited or dutiable items are included beyond what is declared.
-      </div>
-      <div class="rc-sign">
-        <div><div class="rc-sigline"></div>Sender signature over printed name</div>
-        <div><div class="rc-sigline"></div>Verified by (VFIC agent) over printed name</div>
-      </div>
-    </div>`);
-}
+/* Printed BOC forms (Information Sheet p.1 / Packing List p.2) live in boc-forms.js */
 
 /* ---------- Delivery Receipt (blank, travels with the truck for the receiver to sign) ---------- */
 function truckReceiptBlockHtml(box, trip, isLast) {
@@ -950,8 +868,8 @@ function truckReceiptBlockHtml(box, trip, isLast) {
           <div class="rc-title">DELIVERY RECEIPT</div>
           <div class="rc-meta">
             To be signed by the receiver upon delivery<br>
-            Trip: <b>${esc(trip ? trip.trip_number : '—')}</b> · Date: ${fmtDay(trip ? trip.scheduled_date : null)}<br>
-            Driver: <b>${esc(trip ? trip.driver_name : '—')}</b>${trip && trip.driver_contact ? ' (' + esc(trip.driver_contact) + ')' : ''}${trip && trip.plate_number ? ' · Plate ' + esc(trip.plate_number) : ''}
+            Trip: <b>${esc(trip ? trip.trip_number : 'â€”')}</b> Â· Date: ${fmtDay(trip ? trip.scheduled_date : null)}<br>
+            Driver: <b>${esc(trip ? trip.driver_name : 'â€”')}</b>${trip && trip.driver_contact ? ' (' + esc(trip.driver_contact) + ')' : ''}${trip && trip.plate_number ? ' Â· Plate ' + esc(trip.plate_number) : ''}
           </div>
         </div>
         <div class="rc-qr">
@@ -974,9 +892,9 @@ function truckReceiptBlockHtml(box, trip, isLast) {
       </div>
       <div class="rc-details">
         <div class="rc-cell"><span>Box #</span>${esc(box.box_number)}</div>
-        <div class="rc-cell"><span>Size</span>${esc(box.size_category || '—')}</div>
-        <div class="rc-cell"><span>Weight</span>${box.weight_kg ? box.weight_kg + ' kg' : '—'}</div>
-        <div class="rc-cell"><span>Instructions</span>${esc(box.special_instructions || '—')}</div>
+        <div class="rc-cell"><span>Size</span>${esc(box.size_category || 'â€”')}</div>
+        <div class="rc-cell"><span>Weight</span>${box.weight_kg ? box.weight_kg + ' kg' : 'â€”'}</div>
+        <div class="rc-cell"><span>Instructions</span>${esc(box.special_instructions || 'â€”')}</div>
       </div>
       <div class="rc-terms">
         I acknowledge receipt of the balikbayan box listed above, delivered by Victors Freight International Corporation (VFIC),
@@ -987,7 +905,7 @@ function truckReceiptBlockHtml(box, trip, isLast) {
         <div><div class="rc-sigline"></div>Driver signature over printed name</div>
       </div>
       <div class="rc-terms" style="margin-top:8px">
-        <b>If undeliverable</b>, indicate reason: ☐ Unreachable ☐ Address not found ☐ Receiver absent ☐ Refused ☐ Other: ______________________
+        <b>If undeliverable</b>, indicate reason: â˜ Unreachable â˜ Address not found â˜ Receiver absent â˜ Refused â˜ Other: ______________________
       </div>
     </div>`;
 }
@@ -1005,10 +923,10 @@ async function pageTruckReceipt(kind, id) {
   }
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Delivery Receipt${kind === 'trip' ? 's' : ''} — ${esc(title)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
+      <h1>Delivery Receipt${kind === 'trip' ? 's' : ''} â€” ${esc(title)}</h1>
+      <button onclick="window.print()">ðŸ–¨ Print</button>
     </div>
-    <div class="muted no-print" style="margin-bottom:10px">Print and send with the driver — one copy per box, for the receiver to sign on delivery.</div>
+    <div class="muted no-print" style="margin-bottom:10px">Print and send with the driver â€” one copy per box, for the receiver to sign on delivery.</div>
     ${boxes.length ? boxes.map((b, i) => truckReceiptBlockHtml(b, kind === 'trip' ? trip : b.trip, i === boxes.length - 1)).join('')
       : '<div class="card muted">No boxes to print.</div>'}`);
 }
@@ -1019,21 +937,21 @@ async function pageDeliveryReceipt(boxId) {
   const attempt = [...b.attempts].reverse().find(a => a.outcome === 'DELIVERED');
   if (!attempt) {
     view(`<h1>Proof of Delivery</h1><div class="card error">Box ${esc(b.box_number)} has no recorded delivery yet. Record the delivery outcome first.</div>
-      <a href="#/boxes/${b.id}"><button class="secondary">← Back to box</button></a>`);
+      <a href="#/boxes/${b.id}"><button class="secondary">â† Back to box</button></a>`);
     return;
   }
   const r = b.receiver || {};
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Proof of Delivery — ${esc(b.box_number)}</h1>
-      <div><button onclick="window.print()">🖨 Print</button> <a href="#/boxes/${b.id}"><button class="secondary">← Back to box</button></a></div>
+      <h1>Proof of Delivery â€” ${esc(b.box_number)}</h1>
+      <div><button onclick="window.print()">ðŸ–¨ Print</button> <a href="#/boxes/${b.id}"><button class="secondary">â† Back to box</button></a></div>
     </div>
-    <div class="muted no-print" style="margin-bottom:10px">Internal record for VFIC's files — generated after the outcome is recorded. For the document the driver carries and the receiver signs at the door, see <a href="#/truck-receipt/b/${b.id}">Delivery Receipt</a>.</div>
+    <div class="muted no-print" style="margin-bottom:10px">Internal record for VFIC's files â€” generated after the outcome is recorded. For the document the driver carries and the receiver signs at the door, see <a href="#/truck-receipt/b/${b.id}">Delivery Receipt</a>.</div>
     <div class="receipt">
       <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
-      <div class="rc-title">PROOF OF DELIVERY — INTERNAL RECORD</div>
+      <div class="rc-title">PROOF OF DELIVERY â€” INTERNAL RECORD</div>
       <div class="rc-meta">
-        Box #: <b>${esc(b.box_number)}</b> · Delivered: <b>${fmtDate(attempt.attempted_at)}</b>
+        Box #: <b>${esc(b.box_number)}</b> Â· Delivered: <b>${fmtDate(attempt.attempted_at)}</b>
       </div>
       <div class="rc-parties">
         <div class="rc-box">
@@ -1050,7 +968,7 @@ async function pageDeliveryReceipt(boxId) {
         </div>
       </div>
       <div class="rc-line"><span>Received by</span><b>${esc(attempt.received_by_name || '')}</b></div>
-      ${b.trip ? `<div class="rc-line"><span>Driver / trip</span>${esc(b.trip.driver_name)} (${esc(b.trip.driver_contact)}) · ${esc(b.trip.trip_number)}${b.trip.plate_number ? ' · Plate ' + esc(b.trip.plate_number) : ''}</div>` : ''}
+      ${b.trip ? `<div class="rc-line"><span>Driver / trip</span>${esc(b.trip.driver_name)} (${esc(b.trip.driver_contact)}) Â· ${esc(b.trip.trip_number)}${b.trip.plate_number ? ' Â· Plate ' + esc(b.trip.plate_number) : ''}</div>` : ''}
       ${attempt.notes ? `<div class="rc-line"><span>Notes</span>${esc(attempt.notes)}</div>` : ''}
       <div class="rc-label" style="margin-top:14px">REQUIRED PHOTO EVIDENCE</div>
       <div class="rc-photos">
@@ -1079,7 +997,7 @@ async function pageBoxes() {
   view(`
     <h1>Boxes</h1>
     <div class="card row">
-      <input id="bq" placeholder="Search box #, sender, receiver, phone…" style="max-width:280px" value="${esc(q.get('q') || '')}">
+      <input id="bq" placeholder="Search box #, sender, receiver, phoneâ€¦" style="max-width:280px" value="${esc(q.get('q') || '')}">
       <select id="bstatus" style="max-width:210px"><option value="">All statuses</option>
         ${PIPELINE.map(s => `<option value="${s}" ${q.get('status') === s ? 'selected' : ''}>${STATUS_LABELS[s]}</option>`).join('')}</select>
       <select id="bregion" style="max-width:190px"><option value="">All regions</option>
@@ -1120,26 +1038,26 @@ async function pageBoxDetail(id) {
     <div class="row" style="justify-content:space-between">
       <h1>${esc(b.box_number)} ${badge(b.status)}</h1>
       <div>
-        <a href="#/labels/b/${b.id}"><button class="secondary">🖨 Label</button></a>
-        ${['ASSIGNED', 'LOADED_TRUCK', 'OUT_FOR_DELIVERY'].includes(b.status) ? `<a href="#/truck-receipt/b/${b.id}"><button class="secondary">🖨 Delivery receipt (for driver)</button></a>` : ''}
-        ${b.status === 'DELIVERED' ? `<a href="#/delivery-receipt/${b.id}"><button class="secondary">🖨 Proof of delivery</button></a>` : ''}
+        <a href="#/labels/b/${b.id}"><button class="secondary">ðŸ–¨ Label</button></a>
+        ${['ASSIGNED', 'LOADED_TRUCK', 'OUT_FOR_DELIVERY'].includes(b.status) ? `<a href="#/truck-receipt/b/${b.id}"><button class="secondary">ðŸ–¨ Delivery receipt (for driver)</button></a>` : ''}
+        ${b.status === 'DELIVERED' ? `<a href="#/delivery-receipt/${b.id}"><button class="secondary">ðŸ–¨ Proof of delivery</button></a>` : ''}
       </div>
     </div>
     <div class="card form-grid">
       <div><label>Shipment</label><a href="#/shipments/${b.shipment_id}">${esc(b.shipment ? b.shipment.shipment_number : '')}</a> ${b.shipment ? payBadge(b.shipment.payment_status) : ''}</div>
-      <div><label>Sender</label>${b.sender ? `<a href="#/customers/${b.sender.id}">${esc(b.sender.full_name)}</a><div class="muted">${esc(b.sender.phone_primary)}</div>` : '—'}</div>
-      <div><label>Receiver</label>${r.id ? `<a href="#/customers/${r.id}">${esc(r.full_name)}</a><div class="muted">${esc(r.phone_primary)}${r.phone_alternate ? ' / ' + esc(r.phone_alternate) : ''}</div>` : '—'}</div>
+      <div><label>Sender</label>${b.sender ? `<a href="#/customers/${b.sender.id}">${esc(b.sender.full_name)}</a><div class="muted">${esc(b.sender.phone_primary)}</div>` : 'â€”'}</div>
+      <div><label>Receiver</label>${r.id ? `<a href="#/customers/${r.id}">${esc(r.full_name)}</a><div class="muted">${esc(r.phone_primary)}${r.phone_alternate ? ' / ' + esc(r.phone_alternate) : ''}</div>` : 'â€”'}</div>
       <div><label>Address</label><div class="muted">${esc([r.address_line, r.barangay, r.city_municipality, r.province].filter(Boolean).join(', '))}</div>
-        ${r.landmark ? `<div class="muted">📍 ${esc(r.landmark)}</div>` : ''}</div>
+        ${r.landmark ? `<div class="muted">ðŸ“ ${esc(r.landmark)}</div>` : ''}</div>
       <div><label>Region</label>${regionBadge(b.region || r.region)}</div>
-      <div><label>Size / weight</label>${esc(b.size_category)}${b.weight_kg ? ' · ' + b.weight_kg + ' kg' : ''}
-        ${b.length_cm ? `<div class="muted">${b.length_cm}×${b.width_cm}×${b.height_cm} cm</div>` : ''}</div>
-      <div><label>Contents</label><div class="muted">${esc(b.declared_contents || '—')}</div>
-        ${(b.packing_list_items || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:13px;color:var(--muted)">${b.packing_list_items.map(it => `<li>${esc(it.description)}${it.qty ? ' — ' + esc(it.qty) : ''}</li>`).join('')}</ul>` : ''}</div>
-      <div><label>Special instructions</label><div class="muted">${esc(b.special_instructions || '—')}</div></div>
-      <div><label>Container</label>${b.container ? `<a href="#/containers/${b.container.id}">${esc(b.container.container_number)}</a>` : '—'}</div>
-      <div><label>Trip</label>${b.trip ? `<a href="#/trips/${b.trip.id}">${esc(b.trip.trip_number)}</a> (${esc(b.trip.driver_name)})` : '—'}</div>
-      <div><label>Public tracking</label><a href="/track.html?t=${esc(b.qr_token)}" target="_blank">Open tracking page →</a></div>
+      <div><label>Size / weight</label>${esc(b.size_category)}${b.weight_kg ? ' Â· ' + b.weight_kg + ' kg' : ''}
+        ${b.length_cm ? `<div class="muted">${b.length_cm}Ã—${b.width_cm}Ã—${b.height_cm} cm</div>` : ''}</div>
+      <div><label>Contents</label><div class="muted">${esc(b.declared_contents || 'â€”')}</div>
+        ${(b.packing_list_items || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:13px;color:var(--muted)">${b.packing_list_items.map(it => `<li>${esc(it.description)}${it.qty ? ' â€” ' + esc(it.qty) : ''}</li>`).join('')}</ul>` : ''}</div>
+      <div><label>Special instructions</label><div class="muted">${esc(b.special_instructions || 'â€”')}</div></div>
+      <div><label>Container</label>${b.container ? `<a href="#/containers/${b.container.id}">${esc(b.container.container_number)}</a>` : 'â€”'}</div>
+      <div><label>Trip</label>${b.trip ? `<a href="#/trips/${b.trip.id}">${esc(b.trip.trip_number)}</a> (${esc(b.trip.driver_name)})` : 'â€”'}</div>
+      <div><label>Public tracking</label><a href="/track.html?t=${esc(b.qr_token)}" target="_blank">Open tracking page â†’</a></div>
     </div>
 
     <div class="card">
@@ -1147,9 +1065,9 @@ async function pageBoxDetail(id) {
       <div class="inline-actions">
         ${nexts.map(s => s === 'SORTED'
           ? `<select id="sortRegion" style="max-width:190px">${REGIONS.map(rg => `<option value="${rg}" ${rg === receiverRegion ? 'selected' : ''}>${REGION_LABELS[rg]}</option>`).join('')}</select>
-             <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
-          : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
-        ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
+             <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">â†’ Sorted</button>`
+          : `<button onclick="doStatus(${b.id}, '${s}')">â†’ ${STATUS_LABELS[s]}</button>`).join('')}
+        ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">âœ— Cancel box</button>` : ''}
         ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No manual actions available at this status.</span>' : ''}
       </div>
       ${b.status === 'OUT_FOR_DELIVERY' ? podFormHtml(b.id) : ''}
@@ -1161,7 +1079,7 @@ async function pageBoxDetail(id) {
         ${b.events.slice().reverse().map((e, i) => `
           <li class="${i === 0 ? 'current' : ''}">
             <div class="t-status">${esc(STATUS_LABELS[e.to_status] || e.to_status)}</div>
-            <div class="t-meta">${fmtDate(e.created_at)} · ${esc(e.actor)}</div>
+            <div class="t-meta">${fmtDate(e.created_at)} Â· ${esc(e.actor)}</div>
             ${e.note ? `<div class="t-note">${esc(e.note)}</div>` : ''}
           </li>`).join('')}
       </ul>
@@ -1171,7 +1089,7 @@ async function pageBoxDetail(id) {
     <div class="card">
       ${b.attempts.map(a => `
         <div style="border-bottom:1px solid var(--border);padding:8px 0">
-          <b>Attempt ${a.attempt_number}</b> — ${a.outcome === 'DELIVERED' ? badge('DELIVERED') : badge('RETURNED') + ' ' + esc(FAILURE_REASONS[a.failure_reason] || '')}
+          <b>Attempt ${a.attempt_number}</b> â€” ${a.outcome === 'DELIVERED' ? badge('DELIVERED') : badge('RETURNED') + ' ' + esc(FAILURE_REASONS[a.failure_reason] || '')}
           <span class="muted">${fmtDate(a.attempted_at)}</span>
           ${a.received_by_name ? `<div>Received by: <b>${esc(a.received_by_name)}</b></div>` : ''}
           ${a.notes ? `<div class="muted">${esc(a.notes)}</div>` : ''}
@@ -1192,7 +1110,7 @@ async function pageBoxDetail(id) {
 async function doStatus(id, status, note = '', region = null) {
   try {
     await api(`/api/boxes/${id}/status`, { method: 'POST', body: { status, note, region } });
-    flash(`Status → ${STATUS_LABELS[status]}`);
+    flash(`Status â†’ ${STATUS_LABELS[status]}`);
     route();
   } catch (e) { showErr(e); }
 }
@@ -1247,7 +1165,7 @@ async function submitPod(boxId) {
       flash('Delivered! SMS sent to sender and receiver. Print the delivery receipt for your records.');
       location.hash = '#/delivery-receipt/' + boxId;
     } else {
-      flash('Marked failed — box returned to warehouse pool.');
+      flash('Marked failed â€” box returned to warehouse pool.');
       route();
     }
   } catch (e) { showErr(e); }
@@ -1262,7 +1180,7 @@ async function pageContainers() {
     <details class="collapse card"><summary>+ Book new container</summary>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
-        <div><label>Size</label><select id="cnSize"><option value="C40">40 ft (≈250–280 boxes)</option><option value="C20">20 ft (≈150–180 boxes)</option></select></div>
+        <div><label>Size</label><select id="cnSize"><option value="C40">40 ft (â‰ˆ250â€“280 boxes)</option><option value="C20">20 ft (â‰ˆ150â€“180 boxes)</option></select></div>
         <div><label>Shipping line</label><input id="cnLine"></div>
         <div><label>Vessel</label><input id="cnVessel"></div>
         <div><label>Booking #</label><input id="cnBooking"></div>
@@ -1279,8 +1197,8 @@ async function pageContainers() {
         <td><a href="#/containers/${c.id}">${esc(c.container_number)}</a></td>
         <td>${c.size === 'C20' ? "20'" : "40'"}</td>
         <td>${esc([c.shipping_line, c.vessel_name].filter(Boolean).join(' / '))}</td>
-        <td>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' → '))}</td>
-        <td>${c.box_count} / ${c.size === 'C20' ? '150–180' : '250–280'}</td>
+        <td>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' â†’ '))}</td>
+        <td>${c.box_count} / ${c.size === 'C20' ? '150â€“180' : '250â€“280'}</td>
         <td>${fmtDay(c.eta)}</td><td>${badge(c.status)}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="muted">None</td></tr>'}
       </table>
@@ -1305,33 +1223,33 @@ async function pageContainerDetail(id) {
     <div class="row" style="justify-content:space-between">
       <h1>${esc(c.container_number)} ${badge(c.status)}</h1>
       <div>
-        ${canIntake() && ['LOADING', 'BOOKING'].includes(c.status) ? `<button onclick="containerAction(${c.id}, 'depart', 'Container departed — loaded boxes now In Transit')">🚢 Mark departed</button>` : ''}
-        ${c.status === 'IN_TRANSIT' && isAgent() ? `<button onclick="containerAction(${c.id}, 'arrive', 'Container arrived — receivers notified by SMS')">⚓ Mark arrived</button>` : ''}
+        ${canIntake() && ['LOADING', 'BOOKING'].includes(c.status) ? `<button onclick="containerAction(${c.id}, 'depart', 'Container departed â€” loaded boxes now In Transit')">ðŸš¢ Mark departed</button>` : ''}
+        ${c.status === 'IN_TRANSIT' && isAgent() ? `<button onclick="containerAction(${c.id}, 'arrive', 'Container arrived â€” receivers notified by SMS')">âš“ Mark arrived</button>` : ''}
         ${['ARRIVED', 'AT_CUSTOMS'].includes(c.status) && isAgent() ? `
-          <button class="secondary" onclick="setContainerStatus(${c.id}, '${c.status === 'ARRIVED' ? 'AT_CUSTOMS' : 'RELEASED'}')">→ ${c.status === 'ARRIVED' ? 'At customs' : 'Released'}</button>` : ''}
+          <button class="secondary" onclick="setContainerStatus(${c.id}, '${c.status === 'ARRIVED' ? 'AT_CUSTOMS' : 'RELEASED'}')">â†’ ${c.status === 'ARRIVED' ? 'At customs' : 'Released'}</button>` : ''}
       </div>
     </div>
     <div class="card form-grid">
-      <div><label>Size</label>${c.size === 'C20' ? "20 ft" : "40 ft"} — typical ${c.typical_capacity} boxes</div>
+      <div><label>Size</label>${c.size === 'C20' ? "20 ft" : "40 ft"} â€” typical ${c.typical_capacity} boxes</div>
       <div><label>Line / vessel</label>${esc([c.shipping_line, c.vessel_name].filter(Boolean).join(' / '))}</div>
-      <div><label>Booking</label>${esc(c.booking_number || '—')}</div>
-      <div><label>Route</label>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' → '))}</div>
-      <div><label>ETD / ETA</label>${fmtDay(c.etd)} → ${fmtDay(c.eta)}</div>
-      <div><label>Departed / arrived</label>${fmtDay(c.actual_departure)} → ${fmtDay(c.actual_arrival)}</div>
+      <div><label>Booking</label>${esc(c.booking_number || 'â€”')}</div>
+      <div><label>Route</label>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' â†’ '))}</div>
+      <div><label>ETD / ETA</label>${fmtDay(c.etd)} â†’ ${fmtDay(c.eta)}</div>
+      <div><label>Departed / arrived</label>${fmtDay(c.actual_departure)} â†’ ${fmtDay(c.actual_arrival)}</div>
       <div><label>Boxes loaded</label><b>${c.boxes.length}</b> / typical ${c.typical_capacity}</div>
     </div>
 
     ${loadable ? `
     <h2>Load boxes (scan or pick)</h2>
     ${scannerHtml('Scan a box QR to load it into this container')}
-    <div class="card" id="loadPick">Loading…</div>` : ''}
+    <div class="card" id="loadPick">Loadingâ€¦</div>` : ''}
 
     ${strippable ? `
     <h2>Warehouse stripping (scan each box)</h2>
-    ${scannerHtml('Scan each box as it comes off the container — marks it Received at warehouse')}
+    ${scannerHtml('Scan each box as it comes off the container â€” marks it Received at warehouse')}
     <div class="card">
-      <b>Discrepancy — on manifest, not yet scanned (${c.pending_strip.length}):</b>
-      <div class="muted wrap-cell">${c.pending_strip.map(esc).join(', ') || 'None — all boxes scanned ✓'}</div>
+      <b>Discrepancy â€” on manifest, not yet scanned (${c.pending_strip.length}):</b>
+      <div class="muted wrap-cell">${c.pending_strip.map(esc).join(', ') || 'None â€” all boxes scanned âœ“'}</div>
     </div>` : ''}
 
     <h2>Manifest (${c.boxes.length} boxes)</h2>
@@ -1343,14 +1261,14 @@ async function pageContainerDetail(id) {
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No boxes loaded yet</td></tr>'}
       </table>
     </div>
-    <h2>Arrival notice — document bundle</h2>
+    <h2>Arrival notice â€” document bundle</h2>
     <div class="card table-scroll">
       <table><tr><th>Shipment</th><th>Sender</th><th>Packing list</th><th>Passport/ID</th><th>Receiving form</th></tr>
       ${c.documents.map(doc => `<tr>
         <td>${esc(doc.shipment_number)}</td><td>${esc(doc.sender_name)}</td>
-        <td>${doc.packing_list_file ? `<a href="${esc(doc.packing_list_file)}" target="_blank">Download</a>` : '<span class="muted">—</span>'}</td>
-        <td>${doc.passport_file ? `<a href="${esc(doc.passport_file)}" target="_blank">Download</a>` : '<span class="muted">—</span>'}</td>
-        <td>${doc.receiving_form_file ? `<a href="${esc(doc.receiving_form_file)}" target="_blank">Download</a>` : '<span class="muted">—</span>'}</td>
+        <td>${doc.packing_list_file ? `<a href="${esc(doc.packing_list_file)}" target="_blank">Download</a>` : '<span class="muted">â€”</span>'}</td>
+        <td>${doc.passport_file ? `<a href="${esc(doc.passport_file)}" target="_blank">Download</a>` : '<span class="muted">â€”</span>'}</td>
+        <td>${doc.receiving_form_file ? `<a href="${esc(doc.receiving_form_file)}" target="_blank">Download</a>` : '<span class="muted">â€”</span>'}</td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No documents</td></tr>'}
       </table>
     </div>`);
@@ -1359,7 +1277,7 @@ async function pageContainerDetail(id) {
     setScanHandler(async code => {
       const box = await lookupBox(code);
       const r = await api(`/api/containers/${c.id}/load`, { method: 'POST', body: { box_id: box.id } });
-      scanFeedback(`<div class="scan-last"><div class="big">✓ ${esc(r.box.box_number)} loaded</div><div class="scan-count">${r.box_count}</div><div class="muted">boxes in container</div></div>`);
+      scanFeedback(`<div class="scan-last"><div class="big">âœ“ ${esc(r.box.box_number)} loaded</div><div class="scan-count">${r.box_count}</div><div class="muted">boxes in container</div></div>`);
     });
     const all = await api('/api/boxes?status=RECEIVED_ORIGIN');
     document.getElementById('loadPick').innerHTML = `
@@ -1373,7 +1291,7 @@ async function pageContainerDetail(id) {
       const box = await lookupBox(code);
       const r = await api(`/api/containers/${c.id}/strip-scan`, { method: 'POST', body: { box_id: box.id } });
       scanFeedback(`<div class="scan-last ${r.off_manifest ? 'warn' : ''}">
-        <div class="big">${r.off_manifest ? '⚠ NOT ON MANIFEST — ' : '✓ '}${esc(r.box.box_number)} received</div>
+        <div class="big">${r.off_manifest ? 'âš  NOT ON MANIFEST â€” ' : 'âœ“ '}${esc(r.box.box_number)} received</div>
         <div class="scan-count">${r.remaining}</div><div class="muted">still to strip</div></div>`);
     });
   }
@@ -1403,26 +1321,26 @@ async function pageWarehouse() {
   view(`
     <h1>Warehouse</h1>
     <div class="card">
-      <h2 style="margin-top:0">1 · Strip a container</h2>
+      <h2 style="margin-top:0">1 Â· Strip a container</h2>
       ${toStrip.length
-        ? toStrip.map(c => `<a href="#/containers/${c.id}"><button class="secondary">${esc(c.container_number)} · ${esc(c.status)} · ${c.box_count} boxes</button></a>`).join(' ')
+        ? toStrip.map(c => `<a href="#/containers/${c.id}"><button class="secondary">${esc(c.container_number)} Â· ${esc(c.status)} Â· ${c.box_count} boxes</button></a>`).join(' ')
         : '<span class="muted">No containers awaiting stripping. Mark a container arrived first.</span>'}
     </div>
     <div class="card">
-      <h2 style="margin-top:0">2 · Segregate by region</h2>
-      <div class="muted">Scan any received box — its destination region is prefilled from the receiver's address. Or pick a region lane first for bulk sorting.</div>
-      <label>Region lane (optional — forces every scan into this lane)</label>
+      <h2 style="margin-top:0">2 Â· Segregate by region</h2>
+      <div class="muted">Scan any received box â€” its destination region is prefilled from the receiver's address. Or pick a region lane first for bulk sorting.</div>
+      <label>Region lane (optional â€” forces every scan into this lane)</label>
       <select id="laneRegion" style="max-width:260px"><option value="">Auto (use receiver's region)</option>
         ${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select>
     </div>
     ${scannerHtml('Scan a box to mark it Sorted into its region lane')}
-    <div class="card" id="sortPick">Loading…</div>`);
+    <div class="card" id="sortPick">Loadingâ€¦</div>`);
   setScanHandler(async code => {
     const box = await lookupBox(code);
     const lane = document.getElementById('laneRegion').value;
     const region = lane || (box.receiver ? box.receiver.region : null);
     const r = await api(`/api/boxes/${box.id}/status`, { method: 'POST', body: { status: 'SORTED', region } });
-    scanFeedback(`<div class="scan-last"><div class="big">✓ ${esc(r.box_number)}</div>
+    scanFeedback(`<div class="scan-last"><div class="big">âœ“ ${esc(r.box_number)}</div>
       <div class="scan-count">${esc(REGION_LABELS[r.region] || r.region)}</div><div class="muted">sorted into lane</div></div>`);
   });
   const pending = await api('/api/boxes?status=RECEIVED_WAREHOUSE');
@@ -1482,19 +1400,19 @@ async function pageTripDetail(id) {
     <div class="row" style="justify-content:space-between">
       <h1>${esc(t.trip_number)} ${badge(t.status)}</h1>
       <div>
-        <a href="#/manifest/${t.id}"><button class="secondary">🖨 Trip manifest</button></a>
-        ${t.boxes.length ? `<a href="#/truck-receipt/t/${t.id}"><button class="secondary">🖨 Delivery receipts (${t.boxes.length})</button></a>` : ''}
-        ${canDispatch() && loaded.length ? `<button onclick="dispatchTrip(${t.id})">🚚 Dispatch trip (${loaded.length} loaded)</button>` : ''}
+        <a href="#/manifest/${t.id}"><button class="secondary">ðŸ–¨ Trip manifest</button></a>
+        ${t.boxes.length ? `<a href="#/truck-receipt/t/${t.id}"><button class="secondary">ðŸ–¨ Delivery receipts (${t.boxes.length})</button></a>` : ''}
+        ${canDispatch() && loaded.length ? `<button onclick="dispatchTrip(${t.id})">ðŸšš Dispatch trip (${loaded.length} loaded)</button>` : ''}
       </div>
     </div>
     <div class="card form-grid">
       <div><label>Region</label>${regionBadge(t.region)}</div>
-      <div><label>Driver</label>${esc(t.driver_name)} · ${esc(t.driver_contact)}</div>
-      <div><label>Plate / company</label>${esc([t.plate_number, t.trucking_company].filter(Boolean).join(' · '))}</div>
+      <div><label>Driver</label>${esc(t.driver_name)} Â· ${esc(t.driver_contact)}</div>
+      <div><label>Plate / company</label>${esc([t.plate_number, t.trucking_company].filter(Boolean).join(' Â· '))}</div>
       <div><label>Scheduled</label>${fmtDay(t.scheduled_date)}</div>
     </div>
 
-    ${canAssign ? `<h2>Assign boxes (${REGION_LABELS[t.region]})</h2><div class="card" id="assignList">Loading…</div>` : ''}
+    ${canAssign ? `<h2>Assign boxes (${REGION_LABELS[t.region]})</h2><div class="card" id="assignList">Loadingâ€¦</div>` : ''}
 
     ${canAssign && assigned.length ? `
     <h2>Load-out scan (${assigned.length} to load)</h2>
@@ -1528,13 +1446,13 @@ async function pageTripDetail(id) {
         <td>${esc(b.box_number)}</td><td>${esc(b.receiver_name)}</td><td>${esc(b.receiver_city)}</td><td>${badge(b.status)}</td></tr>`).join('')}
       </table></div>
       <button onclick="assignChecked(${t.id})">Assign selected to trip</button>
-      <span class="muted">RETURNED boxes shown first — assigning them is the one-click re-dispatch.</span>`
+      <span class="muted">RETURNED boxes shown first â€” assigning them is the one-click re-dispatch.</span>`
       : '<span class="muted">No sorted or returned boxes for this region.</span>';
     if (assigned.length) {
       setScanHandler(async code => {
         const box = await lookupBox(code);
         const r = await api(`/api/trips/${t.id}/load-scan`, { method: 'POST', body: { box_id: box.id } });
-        scanFeedback(`<div class="scan-last"><div class="big">✓ ${esc(r.box.box_number)} on truck</div>
+        scanFeedback(`<div class="scan-last"><div class="big">âœ“ ${esc(r.box.box_number)} on truck</div>
           <div class="scan-count">${r.remaining}</div><div class="muted">still to load</div></div>`);
       });
     }
@@ -1552,7 +1470,7 @@ async function assignChecked(tripId) {
 async function tripLoadBox(tripId, boxId) {
   try {
     const r = await api(`/api/trips/${tripId}/load-scan`, { method: 'POST', body: { box_id: boxId } });
-    flash(`${r.box.box_number} loaded — ${r.remaining} remaining`);
+    flash(`${r.box.box_number} loaded â€” ${r.remaining} remaining`);
     route();
   } catch (e) { showErr(e); }
 }
@@ -1562,7 +1480,7 @@ async function tripRemoveBox(tripId, boxId) {
 async function dispatchTrip(id) {
   try {
     const r = await api(`/api/trips/${id}/dispatch`, { method: 'POST' });
-    flash(`Trip dispatched — ${r.dispatched} boxes out for delivery, receivers notified by SMS`);
+    flash(`Trip dispatched â€” ${r.dispatched} boxes out for delivery, receivers notified by SMS`);
     route();
   } catch (e) { showErr(e); }
 }
@@ -1571,14 +1489,14 @@ async function pageManifest(id) {
   const t = await api('/api/trips/' + id);
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Trip manifest</h1><button onclick="window.print()">🖨 Print</button>
+      <h1>Trip manifest</h1><button onclick="window.print()">ðŸ–¨ Print</button>
     </div>
     <div class="manifest">
       <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
-      <div class="rc-title">DELIVERY TRIP MANIFEST — ${esc(t.trip_number)}</div>
+      <div class="rc-title">DELIVERY TRIP MANIFEST â€” ${esc(t.trip_number)}</div>
       <div class="rc-meta">
-        Region: <b>${esc(REGION_LABELS[t.region] || t.region)}</b> · Date: <b>${fmtDay(t.scheduled_date)}</b><br>
-        Driver: <b>${esc(t.driver_name)}</b> (${esc(t.driver_contact)}) · Plate: <b>${esc(t.plate_number)}</b> · ${esc(t.trucking_company)}
+        Region: <b>${esc(REGION_LABELS[t.region] || t.region)}</b> Â· Date: <b>${fmtDay(t.scheduled_date)}</b><br>
+        Driver: <b>${esc(t.driver_name)}</b> (${esc(t.driver_contact)}) Â· Plate: <b>${esc(t.plate_number)}</b> Â· ${esc(t.trucking_company)}
       </div>
       <table class="rc-table" style="margin-top:12px">
         <tr><th>#</th><th>Box</th><th>Receiver</th><th>Phone</th><th>Address & landmark</th><th>Instructions</th><th>Received by / sign</th></tr>
@@ -1587,7 +1505,7 @@ async function pageManifest(id) {
           <td>${esc(b.receiver.full_name || '')}</td>
           <td>${esc(b.receiver.phone_primary || '')}${b.receiver.phone_alternate ? '<br>' + esc(b.receiver.phone_alternate) : ''}</td>
           <td>${esc([b.receiver.address_line, b.receiver.barangay, b.receiver.city_municipality, b.receiver.province].filter(Boolean).join(', '))}
-            ${b.receiver.landmark ? `<br>📍 <i>${esc(b.receiver.landmark)}</i>` : ''}</td>
+            ${b.receiver.landmark ? `<br>ðŸ“ <i>${esc(b.receiver.landmark)}</i>` : ''}</td>
           <td>${esc(b.special_instructions || '')}</td><td style="min-width:110px"></td>
         </tr>`).join('')}
       </table>
@@ -1598,7 +1516,7 @@ async function pageManifest(id) {
 async function pageReturns() {
   const list = await api('/api/returns');
   view(`
-    <h1>Returns Queue <span class="muted">(oldest first — these need action)</span></h1>
+    <h1>Returns Queue <span class="muted">(oldest first â€” these need action)</span></h1>
     <div class="card table-scroll">
       <table><tr><th>Age</th><th>Box #</th><th>Receiver</th><th>Phones</th><th>Region</th><th>Last failure</th><th>Attempts</th><th>Re-dispatch</th></tr>
       ${list.map(b => `<tr>
@@ -1606,17 +1524,17 @@ async function pageReturns() {
         <td><a href="#/boxes/${b.id}">${esc(b.box_number)}</a></td>
         <td>${esc(b.receiver_name)}</td><td>${esc(b.receiver_phone)}</td>
         <td>${regionBadge(b.region || b.receiver_region)}</td>
-        <td>${esc(FAILURE_REASONS[b.last_failure_reason] || '—')}</td>
+        <td>${esc(FAILURE_REASONS[b.last_failure_reason] || 'â€”')}</td>
         <td>${b.attempts_count}</td>
         <td class="inline-actions">
           ${b.candidate_trips.length
-            ? b.candidate_trips.map(t => `<button class="small" onclick="requeueBox(${b.id}, ${t.id}, '${esc(t.trip_number)}')">→ ${esc(t.trip_number)} (${fmtDay(t.scheduled_date)})</button>`).join('')
+            ? b.candidate_trips.map(t => `<button class="small" onclick="requeueBox(${b.id}, ${t.id}, '${esc(t.trip_number)}')">â†’ ${esc(t.trip_number)} (${fmtDay(t.scheduled_date)})</button>`).join('')
             : `<a href="#/trips"><button class="small secondary">Create ${esc(REGION_LABELS[b.region || b.receiver_region] || '')} trip</button></a>`}
         </td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">🎉 No returned boxes</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">ðŸŽ‰ No returned boxes</td></tr>'}
       </table>
     </div>
-    <div class="muted">One click adds the box to a planned trip for its region — the fast re-dispatch flow.</div>`);
+    <div class="muted">One click adds the box to a planned trip for its region â€” the fast re-dispatch flow.</div>`);
 }
 async function requeueBox(boxId, tripId, tripNo) {
   try {
@@ -1633,7 +1551,7 @@ async function pageCustomers() {
   view(`
     <h1>Customers</h1>
     <div class="card row">
-      <input id="custQ" placeholder="Search name, phone, city…" style="max-width:300px" value="${esc(q.get('q') || '')}">
+      <input id="custQ" placeholder="Search name, phone, cityâ€¦" style="max-width:300px" value="${esc(q.get('q') || '')}">
       <button class="small" onclick="location.hash='#/customers?q='+encodeURIComponent(custQ.value)">Search</button>
     </div>
     ${isAgent() ? `<details class="collapse card"><summary>+ New customer</summary>${newCustomerFormHtml('cc')}</details>` : ''}
@@ -1664,7 +1582,7 @@ async function pageCustomerDetail(id) {
         <div><label>Barangay</label><input id="edBrgy" value="${esc(c.barangay)}"></div>
         <div><label>City</label><input id="edCity" value="${esc(c.city_municipality)}"></div>
         <div><label>Province</label><input id="edProv" value="${esc(c.province)}"></div>
-        <div><label>Region</label><select id="edRegion"><option value="">—</option>${REGIONS.map(r => `<option value="${r}" ${c.region === r ? 'selected' : ''}>${REGION_LABELS[r]}</option>`).join('')}</select></div>
+        <div><label>Region</label><select id="edRegion"><option value="">â€”</option>${REGIONS.map(r => `<option value="${r}" ${c.region === r ? 'selected' : ''}>${REGION_LABELS[r]}</option>`).join('')}</select></div>
         <div><label>Landmark</label><input id="edLandmark" value="${esc(c.landmark)}"></div>
         <div><label>Notes</label><input id="edNotes" value="${esc(c.notes)}"></div>
       </div>
@@ -1718,14 +1636,14 @@ async function pageNotifications() {
     </div>`);
 }
 async function retryNotif(id) {
-  try { await api('/api/notifications/retry/' + id, { method: 'POST' }); flash('Re-queued — worker will retry shortly'); route(); } catch (e) { showErr(e); }
+  try { await api('/api/notifications/retry/' + id, { method: 'POST' }); flash('Re-queued â€” worker will retry shortly'); route(); } catch (e) { showErr(e); }
 }
 
 /* ---------- reports ---------- */
 async function pageReports() {
   const reports = [
     ['boxes-per-container', 'Boxes per container'],
-    ['delivery-performance', 'Delivery performance (warehouse → delivered days)'],
+    ['delivery-performance', 'Delivery performance (warehouse â†’ delivered days)'],
     ['failed-reasons', 'Failed delivery reasons'],
     ['unpaid-shipments', 'Unpaid shipments']
   ];
@@ -1735,7 +1653,7 @@ async function pageReports() {
     ${reports.map(([key, label], i) => {
       const rows = data[i];
       const cols = rows.length ? Object.keys(rows[0]) : [];
-      return `<h2>${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">⬇ CSV</button></a></h2>
+      return `<h2>${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">â¬‡ CSV</button></a></h2>
       <div class="card table-scroll">
         <table><tr>${cols.map(cl => `<th>${esc(cl.replace(/_/g, ' '))}</th>`).join('')}</tr>
         ${rows.map(rw => `<tr>${cols.map(cl => `<td>${esc(String(rw[cl] == null ? '' : rw[cl]).match(/^\d{4}-\d{2}-\d{2}T/) ? fmtDay(rw[cl]) : rw[cl])}</td>`).join('')}</tr>`).join('') || `<tr><td class="muted">No data</td></tr>`}
@@ -1753,7 +1671,7 @@ async function pageAdmin() {
     <div class="card">
       <div class="muted">Placeholders: ${tpl.placeholders.map(p => `<code>{${p}}</code>`).join(' ')}</div>
       ${Object.entries(tpl.templates).map(([key, t]) => `
-        <label>${esc(key)} → ${esc(t.recipients.join(' + '))}</label>
+        <label>${esc(key)} â†’ ${esc(t.recipients.join(' + '))}</label>
         <div class="row" style="flex-wrap:nowrap">
           <textarea id="tpl_${key}" style="min-height:52px">${esc(t.body)}</textarea>
           <button class="small" onclick="saveTemplate('${key}')">Save</button>
@@ -1773,7 +1691,7 @@ async function pageAdmin() {
       <table><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr>
       ${users.map(u => `<tr>
         <td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td>
-        <td>${u.active ? '✓' : '✗'}</td>
+        <td>${u.active ? 'âœ“' : 'âœ—'}</td>
         <td>${u.id !== ME.id ? `<button class="small secondary" onclick="toggleUser(${u.id}, ${!u.active})">${u.active ? 'Deactivate' : 'Activate'}</button>` : '<span class="muted">you</span>'}</td>
       </tr>`).join('')}
       </table>
