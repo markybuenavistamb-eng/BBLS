@@ -574,7 +574,7 @@ async function pageShipmentNew(intakeId) {
     </div>
     <div class="muted" style="margin:-8px 0 12px">Encoding from a filled-out paper form? Have the sender complete a <a href="#/receiving-form-blank">blank receiving form</a> first, then transcribe it below. Or check <a href="#/intake-requests">pending online submissions</a>.</div>
     ${intake ? `<div class="card" style="border-color:var(--primary)">
-      <b>Reviewing online submission ${esc(intake.reference_code)}</b> from ${esc(intake.sender.full_name)}, submitted ${fmtDate(intake.submitted_at)}.
+      <b>Reviewing online submission ${esc(intake.reference_code)}</b> from ${esc(personName(intake.sender))}, submitted ${fmtDate(intake.submitted_at)}.
       Fields below are pre-filled from what the sender entered — verify weights/sizes and the passport copy, then save.
       ${intake.passport_file ? `<div><a href="${esc(intake.passport_file)}" target="_blank">View submitted passport/ID scan →</a></div>` : ''}
     </div>` : ''}
@@ -611,11 +611,12 @@ async function pageShipmentNew(intakeId) {
   if (!intake) return;
   PREFILL_INTAKE = intake;
 
+  const s = intake.sender || {};
   const senderCustomer = await createOrMatchCustomer({
-    full_name: intake.sender.full_name, type: 'SENDER',
-    phone_primary: intake.sender.phone_primary, phone_alternate: intake.sender.phone_alternate,
-    email: intake.sender.email, address_line: intake.sender.address_line,
-    city_municipality: intake.sender.city_municipality, province: intake.sender.province, country: intake.sender.country
+    full_name: personName(s), type: 'SENDER',
+    phone_primary: s.contact_numbers || '', email: s.email || '',
+    address_line: s.address_abroad || '', country: intake.origin_country || '',
+    city_municipality: intake.origin_agent || ''
   });
   await loadCustomers();
   document.getElementById('shSender').innerHTML = customerOptions('SENDER', senderCustomer.id);
@@ -623,27 +624,50 @@ async function pageShipmentNew(intakeId) {
   const rows = [...document.querySelectorAll('[data-boxrow]')];
   for (let i = 0; i < intake.boxes.length; i++) {
     const bx = intake.boxes[i];
+    const r = bx.receiver || {};
     const n = rows[i].dataset.boxrow;
     const receiverCustomer = await createOrMatchCustomer({
-      full_name: bx.receiver.full_name, type: 'RECEIVER',
-      phone_primary: bx.receiver.phone_primary, phone_alternate: bx.receiver.phone_alternate,
-      address_line: bx.receiver.address_line, barangay: bx.receiver.barangay, city_municipality: bx.receiver.city_municipality,
-      province: bx.receiver.province, region: bx.receiver.region, country: bx.receiver.country, landmark: bx.receiver.landmark
+      full_name: personName(r), type: 'RECEIVER',
+      phone_primary: r.contact_number || '', email: r.email || '',
+      address_line: r.street_address || '', barangay: r.barangay || '',
+      city_municipality: r.city_municipality || '', province: r.region || '',
+      region: mapPsgcRegion(r.region), country: 'Philippines', landmark: r.landmark || ''
     });
     await loadCustomers();
     document.getElementById('bxReceiver' + n).innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
     document.getElementById('bxSize' + n).value = bx.size_category;
     if (bx.weight_kg) document.getElementById('bxWeight' + n).value = bx.weight_kg;
-    document.getElementById('bxContents' + n).value = bx.declared_contents || '';
+    // BOC goods checklist → the encoder's itemized packing list rows
+    document.getElementById('bxContents' + n).value = (bx.goods || []).map(g => g.category).join(', ');
     document.getElementById('bxInstr' + n).value = bx.special_instructions || '';
     const itemsEl = document.getElementById('items' + n);
-    (bx.packing_list_items || []).forEach((it, idx) => {
+    (bx.goods || []).forEach((g, idx) => {
       if (idx > 0) itemsEl.insertAdjacentHTML('beforeend', itemRowHtml());
       const row = itemsEl.querySelectorAll('.itemRow')[idx];
-      row.querySelector('.itemDesc').value = it.description;
-      row.querySelector('.itemQty').value = it.qty;
+      row.querySelector('.itemDesc').value = g.category;
+      row.querySelector('.itemQty').value = g.qty;
     });
   }
+}
+
+// Display name from BOC name parts (Given Middle Family, Suffix).
+function personName(p) {
+  if (!p) return '';
+  const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
+  return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim() + (suffix ? ' ' + suffix : '');
+}
+// PSGC region names → the app's internal delivery-region enum (used for sorting/dispatch).
+function mapPsgcRegion(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  if (n.includes('national capital') || /\bncr\b/.test(n)) return 'NCR';
+  if (n.includes('calabarzon') || n.includes('iv-a')) return 'CALABARZON';
+  if (n.includes('mimaropa')) return 'MIMAROPA';
+  if (n.includes('ilocos') || n.includes('cagayan') || n.includes('cordillera') || n.includes('central luzon')) return 'NORTH_LUZON';
+  if (n.includes('bicol')) return 'SOUTH_LUZON';
+  if (n.includes('visayas')) return 'VISAYAS';
+  if (n.includes('mindanao') || n.includes('davao') || n.includes('zamboanga') || n.includes('soccsksargen') || n.includes('caraga') || n.includes('bangsamoro')) return 'MINDANAO';
+  return null;
 }
 
 function newCustomerFormHtml(prefix) {

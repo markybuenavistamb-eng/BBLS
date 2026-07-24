@@ -8,6 +8,10 @@ const SM = require('./lib/statuses');
 const notif = require('./lib/notifications');
 const storage = require('./lib/storage');
 const sess = require('./lib/session');
+const BOC = require('./lib/boc');
+
+// Service types where VFIC collects the box from the sender → a pick-up slot is required.
+const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -73,6 +77,13 @@ function sanitizeItems(items) {
     .filter(it => it.description);
 }
 function customerPublic(c) { return c; }
+// Build a display name from BOC name parts (Given Middle Family, Suffix).
+function personName(p) {
+  if (!p) return '';
+  const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
+  return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim()
+    + (suffix ? ` ${suffix}` : '');
+}
 function boxDetail(box) {
   const d = db.get();
   const shipment = d.shipments.find(s => s.id === box.shipment_id) || null;
@@ -332,51 +343,125 @@ app.post('/api/shipments/:id/receive', requireRole('ADMIN', 'SHIPPER_AGENT'), (r
 // New Shipment Intake, which pre-fills from the request and marks it CONVERTED.
 app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport_file'), async (req, res) => {
   const b = req.body || {};
-  if (!b.sender_full_name || !b.sender_phone_primary) return res.status(400).json({ error: 'Sender name and phone are required' });
-  if (!req.file) return res.status(400).json({ error: 'A scanned/soft copy of your passport or government ID is required' });
-  let boxesIn;
-  try { boxesIn = JSON.parse(b.boxes || '[]'); } catch (e) { return res.status(400).json({ error: 'Invalid box data' }); }
-  if (!Array.isArray(boxesIn) || !boxesIn.length) return res.status(400).json({ error: 'At least one box is required' });
-  for (const bx of boxesIn) {
-    if (!bx.receiver_full_name || !bx.receiver_phone_primary || !bx.receiver_address_line || !bx.receiver_city_municipality) {
-      return res.status(400).json({ error: 'Every box needs a receiver name, phone, address, and city' });
+  const bad = (msg) => res.status(400).json({ error: msg });
+  const need = (v, label) => { if (!String(v || '').trim()) throw new Error(`${label} is required`); return String(v).trim(); };
+
+  try {
+    // --- BOC classification ---
+    const availment = need(b.availment_type, 'Type of Availment');
+    if (!BOC.AVAILMENT_TYPES.some(a => a.key === availment)) return bad('Invalid Type of Availment');
+    const senderType = need(b.sender_type, 'Type of Sender');
+    if (!BOC.SENDER_TYPES.some(s => s.key === senderType)) return bad('Invalid Type of Sender');
+
+    // --- A. Sender information (all required; email optional per the BOC form) ---
+    const sender = {
+      business_name: String(b.business_name || '').trim(),
+      family_name: need(b.sender_family_name, 'Sender Family Name'),
+      given_name: need(b.sender_given_name, 'Sender Given Name'),
+      middle_name: need(b.sender_middle_name, 'Sender Middle Name'),
+      suffix: need(b.sender_suffix, 'Sender Suffix'),
+      contact_numbers: need(b.sender_contact_numbers, 'Sender Contact Number/s'),
+      email: String(b.sender_email || '').trim(),
+      address_abroad: need(b.address_abroad, 'Complete Current Address Abroad'),
+      address_ph: need(b.address_ph, 'Complete Address in the Philippines'),
+      passport_number: '', passport_place_issued: '', passport_date_issued: '', passport_expiry: ''
+    };
+    if (BOC.isQFWA(senderType)) { // passport block is "For QFWAs Only" on the form
+      sender.passport_number = need(b.passport_number, 'Philippine Passport Number');
+      sender.passport_place_issued = need(b.passport_place_issued, 'Passport Place Issued');
+      sender.passport_date_issued = need(b.passport_date_issued, 'Passport Date Issued');
+      sender.passport_expiry = need(b.passport_expiry, 'Passport Expiry Date');
     }
+    if (['NQFWA_SOLE_PROP', 'NQFWA_PARTNERSHIP', 'NQFWA_CORPORATION'].includes(senderType)) {
+      sender.business_name = need(b.business_name, 'Business Name');
+    }
+
+    const service_type = SM.SERVICE_TYPES.includes(b.service_type) ? b.service_type : 'DOOR_TO_DOOR';
+    const origin_agent = need(b.origin_agent, 'Sending From');
+    const origin_country = need(b.origin_country, 'Country');
+    const total_value_php = need(b.total_value_php, 'Total Value for this Shipment');
+
+    // --- Pick-up scheduling (only for services where VFIC collects the box) ---
+    let pickup = null;
+    if (PICKUP_SERVICES.includes(service_type)) {
+      let p = {};
+      try { p = JSON.parse(b.pickup || '{}') || {}; } catch (e) { return bad('Invalid pick-up data'); }
+      pickup = {
+        date: need(p.date, 'Pick-up date'),
+        time_window: ['AM', 'PM'].includes(p.time_window) ? p.time_window : 'AM',
+        address: need(p.address || sender.address_abroad, 'Pick-up address'),
+        notes: String(p.notes || '').trim()
+      };
+    }
+
+    if (!req.file) return bad('A scanned/soft copy of your passport or government ID is required');
+
+    // --- B + C: recipient and itemized goods, per box ---
+    let boxesIn;
+    try { boxesIn = JSON.parse(b.boxes || '[]'); } catch (e) { return bad('Invalid box data'); }
+    if (!Array.isArray(boxesIn) || !boxesIn.length) return bad('At least one box is required');
+
+    const boxes = boxesIn.map((bx, i) => {
+      const n = i + 1;
+      const r = bx.receiver || {};
+      const rq = (v, label) => { if (!String(v || '').trim()) throw new Error(`Box ${n}: ${label} is required`); return String(v).trim(); };
+      const phone = BOC.normalizePhMobile(r.contact_number);
+      if (!BOC.isValidPhMobile(phone)) throw new Error(`Box ${n}: receiver contact number must be 11 digits starting with 09`);
+      if (!BOC.RELATIONSHIPS.includes(r.relationship)) throw new Error(`Box ${n}: a valid Relationship to Sender is required`);
+      const goods = Array.isArray(bx.goods)
+        ? bx.goods.filter(g => g && BOC.GOODS_CATEGORIES.includes(g.category) && +g.qty > 0)
+          .map(g => ({ category: g.category, qty: +g.qty }))
+        : [];
+      if (!goods.length) throw new Error(`Box ${n}: at least one itemized good is required`);
+      return {
+        receiver: {
+          family_name: rq(r.family_name, 'Receiver Family Name'),
+          given_name: rq(r.given_name, 'Receiver Given Name'),
+          middle_name: rq(r.middle_name, 'Receiver Middle Name'),
+          suffix: rq(r.suffix, 'Receiver Suffix'),
+          contact_number: phone,
+          email: String(r.email || '').trim(),
+          region: rq(r.region, 'Region'),
+          city_municipality: rq(r.city_municipality, 'City / Municipality'),
+          barangay: rq(r.barangay, 'Barangay'),
+          street_address: rq(r.street_address, 'House No. / Street'),
+          landmark: rq(r.landmark, 'Landmark'),
+          relationship: r.relationship,
+          country: 'Philippines'
+        },
+        size_category: SM.SIZE_CATEGORIES.includes(bx.size_category) ? bx.size_category : 'LARGE',
+        weight_kg: +rq(bx.weight_kg, 'Weight') || 0,
+        total_value_php: +rq(bx.total_value_php, 'Total Value of Contents') || 0,
+        special_instructions: String(bx.special_instructions || '').trim(),
+        goods
+      };
+    });
+
+    const passportKey = await storage.save(req.file.buffer, req.file.originalname, 'intake');
+    const d = db.get();
+    const rec = {
+      id: db.nextId('intake_request'),
+      reference_code: db.nextIntakeRefCode(),
+      status: 'PENDING',
+      submitted_at: new Date().toISOString(),
+      converted_shipment_id: null,
+      availment_type: availment,
+      sender_type: senderType,
+      sender,
+      origin_country, origin_agent, service_type,
+      pickup,
+      total_value_php: +total_value_php || 0,
+      currency: b.currency || 'USD',
+      payment_status: b.payment_status === 'PAID' ? 'PAID' : 'UNPAID',
+      passport_file: '/files/' + passportKey,
+      boxes
+    };
+    d.intake_requests.push(rec);
+    db.persist();
+    res.json({ reference_code: rec.reference_code, submitted_at: rec.submitted_at });
+  } catch (e) {
+    return bad(e.message || 'Invalid submission');
   }
-  const passportKey = await storage.save(req.file.buffer, req.file.originalname, 'intake');
-  const d = db.get();
-  const rec = {
-    id: db.nextId('intake_request'),
-    reference_code: db.nextIntakeRefCode(),
-    status: 'PENDING',
-    submitted_at: new Date().toISOString(),
-    converted_shipment_id: null,
-    sender: {
-      full_name: b.sender_full_name, phone_primary: b.sender_phone_primary, phone_alternate: b.sender_phone_alternate || '',
-      email: b.sender_email || '', address_line: b.sender_address_line || '', city_municipality: b.sender_city || '',
-      province: b.sender_province || '', country: b.sender_country || ''
-    },
-    origin_country: b.origin_country || '', origin_agent: b.origin_agent || '',
-    service_type: SM.SERVICE_TYPES.includes(b.service_type) ? b.service_type : 'DOOR_TO_DOOR',
-    shipping_fee_amount: b.shipping_fee_amount ? +b.shipping_fee_amount : null,
-    currency: b.currency || 'USD',
-    payment_status: b.payment_status === 'PAID' ? 'PAID' : 'UNPAID',
-    passport_file: '/files/' + passportKey,
-    boxes: boxesIn.map(bx => ({
-      receiver: {
-        full_name: bx.receiver_full_name, phone_primary: bx.receiver_phone_primary, phone_alternate: bx.receiver_phone_alternate || '',
-        address_line: bx.receiver_address_line || '', barangay: bx.receiver_barangay || '', city_municipality: bx.receiver_city_municipality || '',
-        province: bx.receiver_province || '', region: SM.REGIONS.includes(bx.receiver_region) ? bx.receiver_region : null,
-        country: 'Philippines', landmark: bx.receiver_landmark || ''
-      },
-      size_category: SM.SIZE_CATEGORIES.includes(bx.size_category) ? bx.size_category : 'LARGE',
-      weight_kg: bx.weight_kg ? +bx.weight_kg : null, length_cm: null, width_cm: null, height_cm: null,
-      declared_contents: bx.declared_contents || '', special_instructions: bx.special_instructions || '',
-      packing_list_items: sanitizeItems(bx.packing_list_items)
-    }))
-  };
-  d.intake_requests.push(rec);
-  db.persist();
-  res.json({ reference_code: rec.reference_code, submitted_at: rec.submitted_at });
 });
 // Staff review queue
 app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
@@ -386,7 +471,8 @@ app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
   res.json(list.map(r => ({
     id: r.id, reference_code: r.reference_code, status: r.status, submitted_at: r.submitted_at,
-    sender_name: r.sender.full_name, sender_phone: r.sender.phone_primary, box_count: r.boxes.length
+    sender_name: personName(r.sender), sender_phone: (r.sender || {}).contact_numbers || '',
+    box_count: r.boxes.length
   })));
 });
 app.get('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
