@@ -598,11 +598,15 @@ app.post('/api/containers', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) =>
   const b = req.body || {};
   if (!b.container_number) return res.status(400).json({ error: 'Container number is required' });
   const c = {
-    id: db.nextId('container'), container_number: b.container_number,
-    size: b.size === 'C20' ? 'C20' : 'C40',
+    id: db.nextId('container'), container_number: String(b.container_number).trim().toUpperCase(),
+    size: SM.CONTAINER_SIZES.includes(b.size) ? b.size : 'C40',
     shipping_line: b.shipping_line || '', vessel_name: b.vessel_name || '', booking_number: b.booking_number || '',
     origin_port: b.origin_port || '', destination_port: b.destination_port || '',
     etd: b.etd || null, eta: b.eta || null, actual_departure: null, actual_arrival: null,
+    // Short code appended to each loaded box's number so you can see, at a glance,
+    // which container a box travelled in (e.g. VF-2026-000013-01/C1).
+    load_code: String(b.load_code || '').trim().toUpperCase() || `C${db.get().containers.length + 1}`,
+    load_plan_notes: '',
     status: 'BOOKING', created_at: new Date().toISOString()
   };
   db.get().containers.push(c);
@@ -621,10 +625,13 @@ app.get('/api/containers/:id', requireAuth, (req, res) => {
     sender_name: (d.customers.find(x => x.id === s.sender_id) || {}).full_name || '',
     packing_list_file: s.packing_list_file, passport_file: s.passport_file, receiving_form_file: s.receiving_form_file
   }));
-  const capacity = c.size === 'C20' ? '150–180' : '250–280';
   // discrepancies: manifest (LOADED on this container) vs scanned at warehouse
   const notScanned = boxes.filter(b => ['LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT'].includes(b.status));
-  res.json({ ...c, boxes, documents, typical_capacity: capacity, pending_strip: notScanned.map(b => b.box_number) });
+  res.json({
+    ...c, boxes, documents,
+    size_label: SM.CONTAINER_SIZE_LABELS[c.size] || c.size,
+    pending_strip: notScanned.map(b => b.container_box_number || b.box_number)
+  });
 });
 app.put('/api/containers/:id', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
   const c = db.get().containers.find(x => x.id === +req.params.id);
@@ -648,6 +655,11 @@ app.post('/api/containers/:id/load', requireRole('ADMIN', 'SHIPPER_AGENT'), (req
   const err = changeBoxStatus(box, 'LOADED_CONTAINER', req.user, `Loaded into ${c.container_number}`);
   if (err) return res.status(400).json({ error: err });
   box.container_id = c.id;
+  // Stamp the container's load code onto the box number so the box is traceable to the
+  // container it shipped in, and record its load sequence for the load plan.
+  box.container_load_code = c.load_code;
+  box.container_box_number = `${box.box_number}/${c.load_code}`;
+  box.load_sequence = d.boxes.filter(b => b.container_id === c.id).length;
   if (c.status === 'BOOKING') c.status = 'LOADING';
   db.persist();
   res.json({ box: boxRow(box), box_count: d.boxes.filter(b => b.container_id === c.id).length });
@@ -691,6 +703,48 @@ app.post('/api/containers/:id/strip-scan', requireRole(...PH_SIDE), (req, res) =
   if (!remaining && ['ARRIVED', 'AT_CUSTOMS', 'RELEASED'].includes(c.status)) c.status = 'STRIPPED';
   db.persist();
   res.json({ box: boxRow(box), off_manifest: offManifest, remaining });
+});
+
+// ---------- load plan (consignee agent decides discharge order / grouping) ----------
+// Groups the container's boxes by destination region so the PH-side agent can plan the
+// strip + regional dispatch before the vessel arrives.
+app.get('/api/containers/:id/load-plan', requireAuth, (req, res) => {
+  const d = db.get();
+  const c = d.containers.find(x => x.id === +req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const boxes = d.boxes.filter(b => b.container_id === c.id).map(boxRow);
+  const groups = {};
+  for (const b of boxes) {
+    const key = b.region || b.receiver_region || 'UNASSIGNED';
+    (groups[key] = groups[key] || []).push(b);
+  }
+  const byRegion = Object.entries(groups)
+    .map(([region, list]) => ({
+      region,
+      box_count: list.length,
+      total_weight_kg: +list.reduce((sum, b) => sum + (b.weight_kg || 0), 0).toFixed(1),
+      boxes: list.sort((a, b) => (a.load_sequence || 0) - (b.load_sequence || 0))
+    }))
+    .sort((a, b) => b.box_count - a.box_count);
+  res.json({
+    container_number: c.container_number,
+    load_code: c.load_code,
+    size_label: SM.CONTAINER_SIZE_LABELS[c.size] || c.size,
+    status: c.status,
+    vessel_name: c.vessel_name, eta: c.eta,
+    load_plan_notes: c.load_plan_notes || '',
+    total_boxes: boxes.length,
+    total_weight_kg: +boxes.reduce((s, b) => s + (b.weight_kg || 0), 0).toFixed(1),
+    by_region: byRegion
+  });
+});
+// Consignee agent records the discharge/dispatch plan for this container.
+app.put('/api/containers/:id/load-plan', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+  const c = db.get().containers.find(x => x.id === +req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  c.load_plan_notes = String((req.body || {}).load_plan_notes || '').trim();
+  db.persist();
+  res.json({ ok: true, load_plan_notes: c.load_plan_notes });
 });
 
 // ---------- trucking trips ----------
@@ -962,11 +1016,45 @@ app.get('/api/reports/:name', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_A
   switch (req.params.name) {
     case 'boxes-per-container':
       rows = d.containers.map(c => ({
-        container: c.container_number, size: c.size, status: c.status,
+        container: c.container_number, size: SM.CONTAINER_SIZE_LABELS[c.size] || c.size,
+        load_code: c.load_code || '', status: c.status,
         boxes: d.boxes.filter(b => b.container_id === c.id).length,
         eta: c.eta || '', arrived: c.actual_arrival || ''
       }));
       break;
+    // Box movement: where each box was loaded, its container, and the timestamp of every
+    // milestone it has passed through.
+    case 'box-movement': {
+      const MILESTONES = ['RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
+        'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+      const q = String(req.query.container || '').toLowerCase();
+      let boxes = d.boxes.slice();
+      if (q) {
+        boxes = boxes.filter(b => {
+          const c = d.containers.find(x => x.id === b.container_id);
+          return c && (String(c.container_number).toLowerCase().includes(q) || String(c.load_code || '').toLowerCase() === q);
+        });
+      }
+      rows = boxes.map(b => {
+        const c = d.containers.find(x => x.id === b.container_id) || {};
+        const ev = d.status_events.filter(e => e.box_id === b.id);
+        const at = (st) => { const e = ev.find(x => x.to_status === st); return e ? e.created_at : ''; };
+        const receiver = d.customers.find(x => x.id === b.receiver_id) || {};
+        const row = {
+          box_number: b.container_box_number || b.box_number,
+          container: c.container_number || '(not loaded)',
+          load_code: c.load_code || '',
+          loaded_from: c.origin_port || '',
+          discharged_at: c.destination_port || '',
+          current_status: b.status,
+          region: b.region || receiver.region || '',
+          receiver: receiver.full_name || ''
+        };
+        for (const m of MILESTONES) row[m.toLowerCase()] = at(m);
+        return row;
+      }).sort((a, b) => String(a.container).localeCompare(String(b.container)) || String(a.box_number).localeCompare(String(b.box_number)));
+      break;
+    }
     case 'delivery-performance': {
       rows = d.boxes.filter(b => b.status === 'DELIVERED').map(b => {
         const ev = d.status_events.filter(e => e.box_id === b.id);

@@ -20,6 +20,7 @@ const NEXT_STATUS = {
   SORTED: ['ASSIGNED'], ASSIGNED: ['LOADED_TRUCK', 'SORTED'], LOADED_TRUCK: ['OUT_FOR_DELIVERY'],
   OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'], RETURNED: ['ASSIGNED'], DELIVERED: [], CANCELLED: []
 };
+const CONTAINER_SIZE_LABELS = { C20: '20 ft', C40: '40 ft', C40HQ: '40 ft HQ' };
 const REGIONS = ['NCR', 'NORTH_LUZON', 'SOUTH_LUZON', 'CALABARZON', 'MIMAROPA', 'VISAYAS', 'MINDANAO'];
 const REGION_LABELS = { NCR: 'NCR / Metro Manila', NORTH_LUZON: 'North Luzon', SOUTH_LUZON: 'South Luzon', CALABARZON: 'CALABARZON', MIMAROPA: 'MIMAROPA', VISAYAS: 'Visayas', MINDANAO: 'Mindanao' };
 const SIZES = ['SMALL', 'MEDIUM', 'LARGE', 'JUMBO', 'CUSTOM'];
@@ -232,6 +233,7 @@ async function route() {
     if (p[0] === 'delivery-receipt') return pageDeliveryReceipt(+p[1]);
     if (p[0] === 'boxes' && p[1]) return pageBoxDetail(+p[1]);
     if (p[0] === 'boxes') return pageBoxes();
+    if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
     if (p[0] === 'containers' && p[1]) return pageContainerDetail(+p[1]);
     if (p[0] === 'containers') return pageContainers();
     if (p[0] === 'warehouse') return pageWarehouse();
@@ -1180,7 +1182,12 @@ async function pageContainers() {
     <details class="collapse card"><summary>+ Book new container</summary>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
-        <div><label>Size</label><select id="cnSize"><option value="C40">40 ft (â‰ˆ250â€“280 boxes)</option><option value="C20">20 ft (â‰ˆ150â€“180 boxes)</option></select></div>
+        <div><label>Size</label><select id="cnSize">
+          <option value="C40">40 ft</option>
+          <option value="C40HQ">40 ft HQ</option>
+          <option value="C20">20 ft</option>
+        </select></div>
+        <div><label>Load code <span class="muted">(box no. suffix)</span></label><input id="cnLoadCode" placeholder="e.g. C1" maxlength="6"></div>
         <div><label>Shipping line</label><input id="cnLine"></div>
         <div><label>Vessel</label><input id="cnVessel"></div>
         <div><label>Booking #</label><input id="cnBooking"></div>
@@ -1192,15 +1199,16 @@ async function pageContainers() {
       <button onclick="createContainer()">Book container</button>
     </details>` : ''}
     <div class="card table-scroll">
-      <table><tr><th>Container</th><th>Size</th><th>Line / vessel</th><th>Route</th><th>Boxes</th><th>ETA</th><th>Status</th></tr>
+      <table><tr><th>Container</th><th>Size</th><th>Load code</th><th>Line / vessel</th><th>Route</th><th>Boxes</th><th>ETA</th><th>Status</th></tr>
       ${list.map(c => `<tr>
         <td><a href="#/containers/${c.id}">${esc(c.container_number)}</a></td>
-        <td>${c.size === 'C20' ? "20'" : "40'"}</td>
+        <td>${esc(CONTAINER_SIZE_LABELS[c.size] || c.size)}</td>
+        <td>${c.load_code ? `<span class="badge st-created">${esc(c.load_code)}</span>` : '<span class="muted">—</span>'}</td>
         <td>${esc([c.shipping_line, c.vessel_name].filter(Boolean).join(' / '))}</td>
-        <td>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' â†’ '))}</td>
-        <td>${c.box_count} / ${c.size === 'C20' ? '150â€“180' : '250â€“280'}</td>
+        <td>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' → '))}</td>
+        <td>${c.box_count}</td>
         <td>${fmtDay(c.eta)}</td><td>${badge(c.status)}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">None</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">None</td></tr>'}
       </table>
     </div>`);
 }
@@ -1208,7 +1216,7 @@ async function createContainer() {
   try {
     const c = await api('/api/containers', {
       method: 'POST',
-      body: { container_number: cnNumber.value, size: cnSize.value, shipping_line: cnLine.value, vessel_name: cnVessel.value, booking_number: cnBooking.value, origin_port: cnOrigin.value, destination_port: cnDest.value, etd: cnEtd.value || null, eta: cnEta.value || null }
+      body: { container_number: cnNumber.value, size: cnSize.value, load_code: cnLoadCode.value, shipping_line: cnLine.value, vessel_name: cnVessel.value, booking_number: cnBooking.value, origin_port: cnOrigin.value, destination_port: cnDest.value, etd: cnEtd.value || null, eta: cnEta.value || null }
     });
     flash(`Container ${c.container_number} booked`);
     location.hash = '#/containers/' + c.id;
@@ -1230,14 +1238,18 @@ async function pageContainerDetail(id) {
       </div>
     </div>
     <div class="card form-grid">
-      <div><label>Size</label>${c.size === 'C20' ? "20 ft" : "40 ft"} â€” typical ${c.typical_capacity} boxes</div>
+      <div><label>Size</label>${esc(c.size_label || CONTAINER_SIZE_LABELS[c.size] || c.size)}</div>
+      <div><label>Load code</label>${c.load_code ? `<span class="badge st-created">${esc(c.load_code)}</span> <span class="muted">appended to box numbers</span>` : '—'}</div>
       <div><label>Line / vessel</label>${esc([c.shipping_line, c.vessel_name].filter(Boolean).join(' / '))}</div>
-      <div><label>Booking</label>${esc(c.booking_number || 'â€”')}</div>
-      <div><label>Route</label>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' â†’ '))}</div>
-      <div><label>ETD / ETA</label>${fmtDay(c.etd)} â†’ ${fmtDay(c.eta)}</div>
-      <div><label>Departed / arrived</label>${fmtDay(c.actual_departure)} â†’ ${fmtDay(c.actual_arrival)}</div>
-      <div><label>Boxes loaded</label><b>${c.boxes.length}</b> / typical ${c.typical_capacity}</div>
+      <div><label>Booking</label>${esc(c.booking_number || '—')}</div>
+      <div><label>Route</label>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' → '))}</div>
+      <div><label>ETD / ETA</label>${fmtDay(c.etd)} → ${fmtDay(c.eta)}</div>
+      <div><label>Departed / arrived</label>${fmtDay(c.actual_departure)} → ${fmtDay(c.actual_arrival)}</div>
+      <div><label>Boxes loaded</label><b>${c.boxes.length}</b></div>
     </div>
+
+    <h2>Load plan &amp; manifest</h2>
+    <div class="card" id="loadPlan">Loading…</div>
 
     ${loadable ? `
     <h2>Load boxes (scan or pick)</h2>
@@ -1273,6 +1285,8 @@ async function pageContainerDetail(id) {
       </table>
     </div>`);
 
+  renderLoadPlan(c.id);
+
   if (loadable) {
     setScanHandler(async code => {
       const box = await lookupBox(code);
@@ -1296,6 +1310,90 @@ async function pageContainerDetail(id) {
     });
   }
 }
+// Printable container manifest, grouped by destination region (for the consignee agent).
+async function pageContainerManifest(containerId) {
+  const [c, p] = await Promise.all([
+    api('/api/containers/' + containerId),
+    api(`/api/containers/${containerId}/load-plan`)
+  ]);
+  view(`
+    <div class="row no-print" style="justify-content:space-between">
+      <h1>Container Manifest — ${esc(c.container_number)}</h1>
+      <button onclick="window.print()">🖨 Print</button>
+    </div>
+    <div class="manifest">
+      <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
+      <div class="rc-title">CONTAINER LOAD MANIFEST — ${esc(c.container_number)}</div>
+      <div class="rc-meta">
+        Size: <b>${esc(p.size_label)}</b> · Load code: <b>${esc(p.load_code || '—')}</b> ·
+        Vessel: <b>${esc(c.vessel_name || '—')}</b> · Booking: <b>${esc(c.booking_number || '—')}</b><br>
+        Route: <b>${esc([c.origin_port, c.destination_port].filter(Boolean).join(' → '))}</b> ·
+        ETD ${fmtDay(c.etd)} → ETA ${fmtDay(c.eta)} · Status: <b>${esc(c.status)}</b><br>
+        Total: <b>${p.total_boxes}</b> box(es), <b>${p.total_weight_kg} kg</b>
+      </div>
+      ${p.load_plan_notes ? `<div class="rc-terms" style="margin:8px 0"><b>Load / discharge plan:</b> ${esc(p.load_plan_notes)}</div>` : ''}
+      ${p.by_region.map(g => `
+        <div class="rc-label" style="margin-top:12px">${esc(g.region === 'UNASSIGNED' ? 'NOT YET SORTED' : (REGION_LABELS[g.region] || g.region))} — ${g.box_count} box(es), ${g.total_weight_kg} kg</div>
+        <table class="rc-table">
+          <tr><th>#</th><th>Box number</th><th>Receiver</th><th>City</th><th>Size</th><th>Weight</th><th>Status</th></tr>
+          ${g.boxes.map((b, i) => `<tr>
+            <td>${i + 1}</td>
+            <td><b>${esc(b.container_box_number || b.box_number)}</b></td>
+            <td>${esc(b.receiver_name || '')}</td>
+            <td>${esc(b.receiver_city || '')}</td>
+            <td>${esc(b.size_category || '')}</td>
+            <td>${b.weight_kg ? b.weight_kg + ' kg' : '—'}</td>
+            <td>${esc(STATUS_LABELS[b.status] || b.status)}</td>
+          </tr>`).join('')}
+        </table>`).join('') || '<div class="muted">No boxes loaded.</div>'}
+      <div class="rc-sign" style="margin-top:20px">
+        <div><div class="rc-sigline"></div>Loaded/verified by (Shipper agent)</div>
+        <div><div class="rc-sigline"></div>Received/stripped by (Consignee agent)</div>
+      </div>
+    </div>`);
+}
+
+// Load plan: boxes grouped by destination region so the consignee agent can plan the
+// strip and regional dispatch before arrival.
+async function renderLoadPlan(containerId) {
+  const el = document.getElementById('loadPlan');
+  if (!el) return;
+  try {
+    const p = await api(`/api/containers/${containerId}/load-plan`);
+    el.innerHTML = `
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="muted">
+          <b>${p.total_boxes}</b> box(es) · <b>${p.total_weight_kg} kg</b> total · ${esc(p.size_label)}
+          ${p.load_code ? ` · load code <span class="badge st-created">${esc(p.load_code)}</span>` : ''}
+        </div>
+        <a href="#/container-manifest/${containerId}"><button class="secondary small">🖨 Print manifest</button></a>
+      </div>
+      <div class="table-scroll" style="margin-top:8px">
+        <table><tr><th>Destination region</th><th>Boxes</th><th>Weight</th><th>Box numbers</th></tr>
+        ${p.by_region.map(g => `<tr>
+          <td>${g.region === 'UNASSIGNED' ? '<span class="muted">Not yet sorted</span>' : regionBadge(g.region)}</td>
+          <td><b>${g.box_count}</b></td>
+          <td>${g.total_weight_kg} kg</td>
+          <td class="wrap-cell" style="max-width:420px">${g.boxes.map(b => esc(b.container_box_number || b.box_number)).join(', ')}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="muted">No boxes loaded yet</td></tr>'}
+        </table>
+      </div>
+      ${canDispatch() ? `
+        <label style="margin-top:10px">Load / discharge plan notes <span class="muted">(consignee agent)</span></label>
+        <textarea id="lpNotes" placeholder="e.g. Strip NCR boxes first, stage CALABARZON for Tuesday trip…">${esc(p.load_plan_notes || '')}</textarea>
+        <button class="small" onclick="saveLoadPlan(${containerId})">Save plan</button>`
+        : (p.load_plan_notes ? `<div class="muted" style="margin-top:8px"><b>Plan:</b> ${esc(p.load_plan_notes)}</div>` : '')}`;
+  } catch (e) {
+    el.innerHTML = `<div class="muted">Could not load plan: ${esc(e.message)}</div>`;
+  }
+}
+async function saveLoadPlan(containerId) {
+  try {
+    await api(`/api/containers/${containerId}/load-plan`, { method: 'PUT', body: { load_plan_notes: document.getElementById('lpNotes').value } });
+    flash('Load plan saved');
+  } catch (e) { showErr(e); }
+}
+
 async function loadBoxToContainer(cid, boxId) {
   try {
     const r = await api(`/api/containers/${cid}/load`, { method: 'POST', body: { box_id: boxId } });
@@ -1643,7 +1741,8 @@ async function retryNotif(id) {
 async function pageReports() {
   const reports = [
     ['boxes-per-container', 'Boxes per container'],
-    ['delivery-performance', 'Delivery performance (warehouse â†’ delivered days)'],
+    ['box-movement', 'Box movement — status per container, from where it was loaded'],
+    ['delivery-performance', 'Delivery performance (warehouse → delivered days)'],
     ['failed-reasons', 'Failed delivery reasons'],
     ['unpaid-shipments', 'Unpaid shipments']
   ];
