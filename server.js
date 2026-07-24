@@ -9,6 +9,7 @@ const notif = require('./lib/notifications');
 const storage = require('./lib/storage');
 const sess = require('./lib/session');
 const BOC = require('./lib/boc');
+const BOXSIZE = require('./lib/boxsizes');
 
 // Service types where VFIC collects the box from the sender → a pick-up slot is required.
 const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
@@ -344,6 +345,17 @@ app.post('/api/shipments/:id/receive', requireRole('ADMIN', 'SHIPPER_AGENT'), (r
   res.json({ ok: true, received: boxes.length });
 });
 
+// ---------- box sizes (public: booking form + staff app share this single source of truth) ----------
+app.get('/api/box-sizes', (req, res) => {
+  const d = db.get();
+  res.json({
+    sizes: BOXSIZE.BOX_SIZES,
+    boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
+    excess_charge_per_kg: d.settings.excessWeightChargePerKg != null ? d.settings.excessWeightChargePerKg : null,
+    excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP'
+  });
+});
+
 // ---------- online intake requests (public self-service fill-up, reviewed & encoded by staff) ----------
 // Public submission: no login. Sender fills their own info + box(es) + uploads a passport/ID scan.
 // This does NOT create a shipment/customer directly — an agent reviews it and encodes it via
@@ -420,6 +432,9 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
           .map(g => ({ category: g.category, qty: +g.qty }))
         : [];
       if (!goods.length) throw new Error(`Box ${n}: at least one itemized good is required`);
+      const sizeKey = SM.SIZE_CATEGORIES.includes(bx.size_category) ? bx.size_category : 'LARGE';
+      const sizeInfo = BOXSIZE.bySize(sizeKey);
+      const weight = +rq(bx.weight_kg, 'Weight') || 0;
       return {
         receiver: {
           family_name: rq(r.family_name, 'Receiver Family Name'),
@@ -436,8 +451,10 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
           relationship: r.relationship,
           country: 'Philippines'
         },
-        size_category: SM.SIZE_CATEGORIES.includes(bx.size_category) ? bx.size_category : 'LARGE',
-        weight_kg: +rq(bx.weight_kg, 'Weight') || 0,
+        size_category: sizeKey,
+        weight_kg: weight,
+        standard_weight_kg: sizeInfo ? sizeInfo.standard_weight_kg : null,
+        excess_weight_kg: BOXSIZE.excessWeightKg(sizeKey, weight),
         total_value_php: +rq(bx.total_value_php, 'Total Value of Contents') || 0,
         special_instructions: String(bx.special_instructions || '').trim(),
         goods
@@ -868,6 +885,23 @@ app.put('/api/templates/:key', requireRole('ADMIN'), (req, res) => {
   d.settings.smsTemplates[req.params.key] = { recipients: notif.DEFAULT_TEMPLATES[req.params.key].recipients, body };
   db.persist();
   res.json(d.settings.smsTemplates[req.params.key]);
+});
+
+// ---------- rate settings (admin) ----------
+app.put('/api/settings/rates', requireRole('ADMIN'), (req, res) => {
+  const d = db.get();
+  const { excessWeightChargePerKg, excessWeightChargeCurrency } = req.body || {};
+  if (excessWeightChargePerKg !== undefined) {
+    const v = excessWeightChargePerKg === null || excessWeightChargePerKg === '' ? null : +excessWeightChargePerKg;
+    if (v !== null && (isNaN(v) || v < 0)) return res.status(400).json({ error: 'Excess charge must be a positive number' });
+    d.settings.excessWeightChargePerKg = v;
+  }
+  if (excessWeightChargeCurrency) d.settings.excessWeightChargeCurrency = String(excessWeightChargeCurrency).toUpperCase();
+  db.persist();
+  res.json({
+    excessWeightChargePerKg: d.settings.excessWeightChargePerKg,
+    excessWeightChargeCurrency: d.settings.excessWeightChargeCurrency || 'PHP'
+  });
 });
 
 // ---------- users (admin) ----------

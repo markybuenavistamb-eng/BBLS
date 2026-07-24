@@ -3,7 +3,60 @@
    Official BOC field labels are kept in English (they are legal form labels);
    surrounding chrome still uses the EN/TL toggle. */
 
-const SIZES = ['SMALL', 'MEDIUM', 'LARGE', 'XL', 'JUMBO'];
+// Box-size catalogue (dimensions + weight allowance) is fetched from the server so the
+// booking form, staff app and printed forms all use one source of truth.
+let BOX_SIZES = [];
+let EXCESS_RATE = null;
+let EXCESS_CCY = 'PHP';
+let BOC_MAX_CBM = 0.20;
+
+async function loadBoxSizes() {
+  try {
+    const r = await fetch('/api/box-sizes');
+    const d = await r.json();
+    BOX_SIZES = d.sizes || [];
+    EXCESS_RATE = d.excess_charge_per_kg;
+    EXCESS_CCY = d.excess_charge_currency || 'PHP';
+    BOC_MAX_CBM = d.boc_max_cbm || 0.20;
+  } catch (e) { BOX_SIZES = []; }
+}
+const sizeInfo = (key) => BOX_SIZES.find(s => s.key === key) || null;
+
+function sizeOptionsHtml() {
+  if (!BOX_SIZES.length) return '<option value="LARGE">LARGE</option>';
+  return BOX_SIZES.map(s =>
+    `<option value="${s.key}"${s.key === 'LARGE' ? ' selected' : ''}>${esc(s.label)} — ${esc(s.dimensions)} (${s.cubic_feet} cu ft), up to ${s.standard_weight_kg} kg</option>`
+  ).join('');
+}
+
+// Show the selected size's spec, and warn when the declared weight exceeds its allowance
+// or when the box is too large to avail of the Balikbayan Box privilege (BOC 0.20 cbm cap).
+function onSizeChange(n) {
+  const sel = document.getElementById('bSize' + n);
+  const hint = document.getElementById('sizeHint' + n);
+  const warn = document.getElementById('excess' + n);
+  if (!sel || !hint || !warn) return;
+  const s = sizeInfo(sel.value);
+  if (!s) { hint.textContent = ''; warn.style.display = 'none'; return; }
+
+  hint.textContent = `${s.dimensions} · ${s.cubic_feet} cu ft (${s.cbm} cbm) · includes up to ${s.standard_weight_kg} kg`;
+
+  const w = parseFloat((document.getElementById('bWeight' + n) || {}).value) || 0;
+  const over = Math.max(0, +(w - s.standard_weight_kg).toFixed(2));
+  const msgs = [];
+  if (over > 0) {
+    msgs.push(`<b>Overweight by ${over} kg.</b> This ${s.label} box includes up to ${s.standard_weight_kg} kg — ` +
+      (EXCESS_RATE != null
+        ? `an excess charge of ${EXCESS_CCY} ${EXCESS_RATE}/kg applies (≈ ${EXCESS_CCY} ${(over * EXCESS_RATE).toFixed(2)}).`
+        : `an additional charge will apply.`));
+  }
+  if (s.exceeds_boc_cbm) {
+    msgs.push(`<b>Customs note:</b> a ${s.label} box is ${s.cbm} cbm, which is over the ${BOC_MAX_CBM} cbm limit ` +
+      `for the Balikbayan Box privilege. It can still ship, but it may not qualify for tax/duty-free treatment.`);
+  }
+  warn.innerHTML = msgs.join('<br>');
+  warn.style.display = msgs.length ? '' : 'none';
+}
 const SERVICE_KEYS = ['DOOR_TO_DOOR', 'PORT_TO_PORT', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
 // Service types that involve VFIC collecting the box from the sender → need a pick-up slot.
 const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
@@ -107,12 +160,14 @@ function boxBlockHtml() {
     </select>
 
     <div class="form-grid" style="margin-top:10px">
-      <div><label>Box Size *</label><select id="bSize${n}" required>
-        ${SIZES.map(s => `<option value="${s}"${s === 'LARGE' ? ' selected' : ''}>${s}</option>`).join('')}
-      </select></div>
-      <div><label>Approx. Weight (kg) *</label><input id="bWeight${n}" type="number" min="0" step="0.1" required></div>
+      <div><label>Box Size *</label><select id="bSize${n}" required onchange="onSizeChange(${n})">
+        ${sizeOptionsHtml()}
+      </select>
+      <div class="muted size-hint" id="sizeHint${n}"></div></div>
+      <div><label>Approx. Weight (kg) *</label><input id="bWeight${n}" type="number" min="0" step="0.1" required oninput="onSizeChange(${n})"></div>
       <div><label>Total Value of Contents (Php) *</label><input id="bValue${n}" type="number" min="0" step="0.01" required></div>
     </div>
+    <div class="excess-warn" id="excess${n}" style="display:none"></div>
     <label>Special Instructions</label><input id="bInstr${n}">
 
     <div class="rc-label" style="margin-top:14px">C. ITEMIZED DESCRIPTION OF GOODS *</div>
@@ -143,6 +198,7 @@ async function addBox() {
   document.getElementById('boxes').insertAdjacentHTML('beforeend', boxBlockHtml());
   const n = boxSeq;
   renumberBoxes();
+  onSizeChange(n);
   if (window.PSGC) {
     await PSGC.mountCascade({
       region: 'rRegion' + n, city: 'rCity' + n, barangay: 'rBrgy' + n,
@@ -410,4 +466,4 @@ function renderConfirmation(refCode) {
 
 if (window.VI) VI.onChange(() => { if (submitted) renderConfirmation(); else renderForm(); });
 mountToggle();
-renderForm();
+loadBoxSizes().then(renderForm);
