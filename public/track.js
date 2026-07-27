@@ -52,11 +52,27 @@ async function lookup() {
 
 function render(d) {
   LAST = d;
-  const timeline = d.events.slice().reverse().map((h, i) => `
-    <li class="${i === 0 ? 'current' : ''}">
-      <div class="t-status">${esc(VI.t('pub.' + h.status, h.label))}</div>
-      <div class="t-meta">${fmtDate(h.at)}</div>
-    </li>`).join('');
+
+  // Primary: the full expected journey — completed steps solid + timestamped, the current step
+  // highlighted, upcoming steps hollow/greyed. Includes the overseas hub → region delivery legs.
+  const jLabel = (step) => {
+    const t = VI.t('journey.' + step.key, '');
+    return t ? t.replace('{region}', d.region_label || '') : step.label;
+  };
+  const journey = (d.journey || []).map(step => {
+    const cls = step.done ? (step.current ? 'j-current' : 'j-done') : 'j-upcoming';
+    return `
+      <li class="j-step ${cls}">
+        <div class="j-label">${esc(jLabel(step))}</div>
+        ${step.detail ? `<div class="j-detail">${esc(step.detail)}</div>` : ''}
+        ${step.at ? `<div class="t-meta">${fmtDate(step.at)}</div>` : (step.done ? '' : `<div class="t-meta j-pending">${esc(VI.t('track.pending'))}</div>`)}
+      </li>`;
+  }).join('');
+
+  // Secondary: the raw status log (collapsible), for full detail.
+  const log = d.events.slice().reverse().map(h => `
+    <li><div class="t-status">${esc(VI.t('pub.' + h.status, h.label))}</div>
+      <div class="t-meta">${fmtDate(h.at)}</div></li>`).join('');
 
   resultEl.innerHTML = `
     <div class="card">
@@ -66,9 +82,14 @@ function render(d) {
       <p class="muted" style="margin:8px 0 2px">${esc(VI.t('track.for'))} ${esc(d.receiver_first_name)}${d.receiver_city ? ' · ' + esc(d.receiver_city) : ''}</p>
       ${d.eta_text ? `<p class="muted" style="margin:4px 0"><strong>${esc(d.eta_text)}</strong></p>` : ''}
     </div>
+    ${d.return_note ? `<div class="card" style="border-left:5px solid var(--primary);background:#fff7ed">${esc(d.return_note)}</div>` : ''}
     <div class="card">
       <h2 style="margin-top:0">${esc(VI.t('track.timeline'))}</h2>
-      <ul class="timeline">${timeline}</ul>
+      <ul class="journey-timeline">${journey}</ul>
+      <details class="collapse" style="margin-top:10px">
+        <summary>${esc(VI.t('track.detailedLog'))}</summary>
+        <ul class="timeline" style="margin-top:8px">${log}</ul>
+      </details>
     </div>
     <div class="card muted">
       ${esc(VI.t('track.help'))} <strong>${esc(d.support.phone)}</strong> · <a href="mailto:${esc(d.support.email)}">${esc(d.support.email)}</a>.

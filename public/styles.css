@@ -497,6 +497,29 @@ a.tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(75,81,88
 a.vf-logo-plate:hover { background: #fff; }
 
 .hidden { display: none !important; }
+
+/* Public tracking — expected-journey progress timeline (done / current / upcoming) */
+.journey-timeline { list-style: none; margin: 0; padding: 0; }
+.journey-timeline .j-step { position: relative; padding: 0 0 18px 30px; border-left: 2px solid var(--border); margin-left: 9px; }
+.journey-timeline .j-step:last-child { border-left-color: transparent; }
+.journey-timeline .j-step::before {
+  content: ""; position: absolute; left: -9px; top: 1px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--border); box-sizing: border-box;
+}
+.journey-timeline .j-done::before { background: var(--brand-green, #1B7A35); border-color: var(--brand-green, #1B7A35); }
+.journey-timeline .j-done::after {
+  content: "\2713"; position: absolute; left: -6px; top: -1px; color: #fff; font-size: 11px; font-weight: 800;
+}
+.journey-timeline .j-current::before {
+  background: var(--primary); border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(240,83,28,.2); animation: jpulse 1.6s infinite;
+}
+.journey-timeline .j-current::after { content: ""; }
+@keyframes jpulse { 0%,100% { box-shadow: 0 0 0 4px rgba(240,83,28,.20); } 50% { box-shadow: 0 0 0 7px rgba(240,83,28,.08); } }
+.journey-timeline .j-label { font-weight: 700; color: var(--text); }
+.journey-timeline .j-upcoming .j-label { color: var(--muted); font-weight: 500; }
+.journey-timeline .j-detail { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.journey-timeline .j-pending { font-style: italic; opacity: .8; }
 .bm-timeline td { background: #f8fafc; }
 .bm-timeline:hover td { background: #f8fafc; }
 

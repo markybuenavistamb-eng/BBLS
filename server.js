@@ -1126,6 +1126,74 @@ function rateLimit(req, res, next) {
   if (entry.count > 30) return res.status(429).json({ error: 'Too many requests — please wait a minute.' });
   next();
 }
+const PUB_REGION_LABELS = {
+  NCR: 'NCR / Metro Manila', NORTH_LUZON: 'North Luzon', SOUTH_LUZON: 'South Luzon',
+  CALABARZON: 'CALABARZON', MIMAROPA: 'MIMAROPA', VISAYAS: 'Visayas', MINDANAO: 'Mindanao'
+};
+function regionLabelPub(r) { return PUB_REGION_LABELS[r] || r || 'your region'; }
+function fmtPHDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' }) : '';
+}
+
+// Build the full expected journey for the public tracker: every milestone the box will pass,
+// each marked done (with timestamp) or upcoming. Includes the overseas last-mile legs:
+// central Manila hub → destination-region hub → out for delivery in that region.
+function buildJourney(box) {
+  const d = db.get();
+  const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
+  const container = d.containers.find(c => c.id === box.container_id) || null;
+  const trip = box.trucking_assignment_id ? d.trips.find(t => t.id === box.trucking_assignment_id) : null;
+  const region = box.region || receiver.region || null;
+  const regionLbl = regionLabelPub(region);
+  const ev = d.status_events.filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const at = (status) => { const e = ev.find(x => x.to_status === status); return e ? e.created_at : null; };
+  const reached = (status) => ev.some(e => e.to_status === status);
+  const returned = box.status === 'RETURNED';
+  const cancelled = box.status === 'CANCELLED';
+
+  // Each step: reached by any of `on` statuses → done, timestamp from the first matching event.
+  const steps = [
+    { key: 'CREATED', on: ['CREATED'], label: 'Booking registered',
+      detail: 'Your box is registered in our system.' },
+    { key: 'RECEIVED_ORIGIN', on: ['RECEIVED_ORIGIN'], label: 'Received at origin',
+      detail: 'We received your box at our origin branch.' },
+    { key: 'LOADED_CONTAINER', on: ['LOADED_CONTAINER'], label: 'Loaded into container',
+      detail: container ? `Container ${container.container_number}.` : 'Loaded for shipping.' },
+    { key: 'IN_TRANSIT', on: ['IN_TRANSIT'], label: 'On the way to the Philippines',
+      detail: container && container.vessel_name ? `Vessel ${container.vessel_name}.` : 'Shipped by sea to the Philippines.' },
+    { key: 'ARRIVED_PORT', on: ['ARRIVED_PORT'], label: 'Arrived in the Philippines',
+      detail: container && container.destination_port ? `Port of ${container.destination_port}.` : 'Arrived at the Philippine port.' },
+    { key: 'RECEIVED_WAREHOUSE', on: ['RECEIVED_WAREHOUSE'], label: 'Received at VFIC warehouse',
+      detail: 'Unloaded and received at our central (Manila) warehouse.' },
+    { key: 'SORTED', on: ['SORTED'], label: `Sorted for ${regionLbl}`,
+      detail: 'Segregated by destination region for delivery.' },
+    // --- overseas last-mile: hub → region ---
+    { key: 'FORWARDED_REGION', on: ['ASSIGNED', 'LOADED_TRUCK'], label: `Forwarded to ${regionLbl}`,
+      detail: `Dispatched from the central hub to the ${regionLbl} delivery hub.` },
+    { key: 'OUT_FOR_DELIVERY', on: ['OUT_FOR_DELIVERY'], label: `Out for delivery in ${regionLbl}`,
+      detail: trip && trip.driver_name ? `Driver: ${trip.driver_name}${trip.driver_contact ? ' · ' + trip.driver_contact : ''}.` : 'On the delivery vehicle today.' },
+    { key: 'DELIVERED', on: ['DELIVERED'], label: 'Delivered',
+      detail: 'Delivered to the receiver. Salamat po for choosing VFIC!' }
+  ];
+
+  const journey = steps.map(s => {
+    const ts = s.on.map(at).find(Boolean) || null;
+    return { key: s.key, label: s.label, detail: s.detail, at: ts, done: s.on.some(reached) };
+  });
+  // Mark the current (latest completed) step and, if returned, add a branch note.
+  let currentIdx = -1;
+  journey.forEach((j, i) => { if (j.done) currentIdx = i; });
+  journey.forEach((j, i) => { j.current = i === currentIdx && !cancelled; });
+
+  return {
+    region, regionLbl, journey,
+    returned, cancelled,
+    returnNote: returned
+      ? 'A delivery attempt was made but was unsuccessful. Your box is safely back at the hub and will be rescheduled — please contact us to confirm your details.'
+      : null
+  };
+}
+
 function publicTrackingPayload(box) {
   const d = db.get();
   const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
@@ -1135,8 +1203,9 @@ function publicTrackingPayload(box) {
     .map(e => ({ status: e.to_status, label: SM.FRIENDLY[e.to_status] || e.to_status, at: e.created_at }));
   let etaText = null;
   if (['IN_TRANSIT', 'LOADED_CONTAINER'].includes(box.status) && container && container.eta) {
-    etaText = `Vessel ETA Manila: ${new Date(container.eta).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' })}`;
+    etaText = `Vessel ETA Manila: ${fmtPHDate(container.eta)}`;
   }
+  const j = buildJourney(box);
   return {
     box_number: box.box_number,
     status: box.status,
@@ -1144,7 +1213,12 @@ function publicTrackingPayload(box) {
     status_updated_at: box.status_updated_at,
     receiver_first_name: (receiver.full_name || '').split(' ')[0],
     receiver_city: receiver.city_municipality || '',
+    region_label: j.regionLbl,
     eta_text: etaText,
+    journey: j.journey,
+    returned: j.returned,
+    cancelled: j.cancelled,
+    return_note: j.returnNote,
     events,
     support: { phone: db.get().settings.supportPhone, email: db.get().settings.supportEmail }
   };
