@@ -44,20 +44,13 @@ function bocHeader(s, box, boxNo, boxTotal, pageLabel) {
   return `
   <div class="boc-hdr">
     <div class="boc-hdr-left">
-      <div class="boc-gov">
-        <div class="boc-seal">★</div>
-        <div>
-          <div style="font-size:9px;letter-spacing:.3px">THE REPUBLIC OF THE PHILIPPINES</div>
-          <div style="font-size:10px;font-weight:700">DEPARTMENT OF FINANCE</div>
-          <div style="font-size:15px;font-weight:800;letter-spacing:.5px">BUREAU OF CUSTOMS</div>
-        </div>
-      </div>
+      <img src="/vfic-logo.png" alt="Victors Freight International Corporation — Chosen to Deliver" class="boc-hdr-logo">
     </div>
     <div class="boc-hdr-right">
       <div class="boc-title">${esc(pageLabel)}</div>
       <div class="boc-sub">for Consolidated Shipments of "Balikbayan Boxes"</div>
       <div class="boc-sub">Revised BOC Form No. BB-IS-001</div>
-      <div class="boc-consolidator">
+      <div class="boc-consolidator boc-consolidator-lg">
         <div class="boc-consolidator-note">To be filled out by the consolidator</div>
         <div class="boc-line-row"><b>MBL/MAWB Number:</b>${line(s.mbl_mawb_number)}</div>
         <div class="boc-line-row"><b>Tracking Number:</b>${line(box ? box.box_number : s.shipment_number)}</div>
@@ -181,8 +174,8 @@ function bocPackingList(s, box, boxNo, boxTotal) {
   <div class="boc-page">
     <div class="boc-hdr" style="border-bottom:none;padding-bottom:0">
       <div style="flex:1"></div>
-      <div class="boc-hdr-right" style="flex:0 0 auto">
-        <div class="boc-consolidator">
+      <div class="boc-hdr-right" style="flex:0 0 56%">
+        <div class="boc-consolidator boc-consolidator-lg">
           <div class="boc-consolidator-note">To be filled out by the consolidator</div>
           <div class="boc-line-row"><b>MBL/MAWB Number:</b>${line(s.mbl_mawb_number)}</div>
           <div class="boc-line-row"><b>Tracking Number:</b>${line(box ? box.box_number : '')}</div>

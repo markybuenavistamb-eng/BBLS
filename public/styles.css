@@ -508,7 +508,8 @@ a.vf-logo-plate:hover { background: #fff; }
 }
 .boc-page:last-child { page-break-after: auto; }
 .boc-hdr { display: flex; gap: 12px; border-bottom: 2px solid #1a2a5e; padding-bottom: 6px; margin-bottom: 8px; }
-.boc-hdr-left { flex: 1; }
+.boc-hdr-left { flex: 1; display: flex; align-items: center; }
+.boc-hdr-logo { width: 260px; max-width: 100%; height: auto; }
 .boc-gov { display: flex; align-items: center; gap: 8px; }
 .boc-seal { width: 42px; height: 42px; border-radius: 50%; border: 2px solid #1a2a5e; color: #1a2a5e;
   display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
@@ -519,6 +520,11 @@ a.vf-logo-plate:hover { background: #fff; }
 .boc-consolidator-note { font-size: 7.5px; font-style: italic; text-align: right; }
 .boc-line-row { display: flex; align-items: baseline; gap: 4px; font-size: 9px; }
 .boc-fill { flex: 1; border-bottom: 1px solid #000; min-height: 11px; padding: 0 3px; font-weight: 600; }
+/* Enlarged consolidator box (MBL/MAWB + Tracking No.) — was too small to write in */
+.boc-consolidator-lg { padding: 7px 10px; }
+.boc-consolidator-lg .boc-consolidator-note { font-size: 9px; }
+.boc-consolidator-lg .boc-line-row { font-size: 12px; margin-top: 5px; }
+.boc-consolidator-lg .boc-fill { min-height: 18px; }
 
 .boc-avail { display: flex; gap: 8px; border: 1px solid #000; margin-bottom: 8px; }
 .boc-avail-col { flex: 1; padding: 5px 7px; border-right: 1px solid #000; }
