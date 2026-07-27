@@ -1041,16 +1041,29 @@ app.get('/api/reports/:name', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_A
         const at = (st) => { const e = ev.find(x => x.to_status === st); return e ? e.created_at : ''; };
         const receiver = d.customers.find(x => x.id === b.receiver_id) || {};
         const row = {
+          box_id: b.id,
           box_number: b.container_box_number || b.box_number,
           container: c.container_number || '(not loaded)',
           load_code: c.load_code || '',
           loaded_from: c.origin_port || '',
           discharged_at: c.destination_port || '',
+          vessel: c.vessel_name || '',
           current_status: b.status,
           region: b.region || receiver.region || '',
           receiver: receiver.full_name || ''
         };
         for (const m of MILESTONES) row[m.toLowerCase()] = at(m);
+        // Full status timeline for this box (every recorded transition, in order).
+        row.timeline = ev
+          .slice()
+          .sort((x, y) => x.created_at.localeCompare(y.created_at))
+          .map(e => ({
+            status: e.to_status,
+            label: SM.FRIENDLY[e.to_status] || e.to_status,
+            at: e.created_at,
+            actor: (d.users.find(u => u.id === e.actor_user_id) || {}).name || 'System',
+            note: e.note || ''
+          }));
         return row;
       }).sort((a, b) => String(a.container).localeCompare(String(b.container)) || String(a.box_number).localeCompare(String(b.box_number)));
       break;
@@ -1083,9 +1096,20 @@ app.get('/api/reports/:name', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_A
       return res.status(404).json({ error: 'Unknown report' });
   }
   if (req.query.format === 'csv') {
+    // Flatten the box-movement timeline (array) into one readable column for CSV.
+    let csvRows = rows;
+    if (req.params.name === 'box-movement') {
+      csvRows = rows.map(r => {
+        const { timeline, box_id, ...rest } = r;
+        rest.status_timeline = (timeline || [])
+          .map(e => `${e.label} @ ${new Date(e.at).toISOString().slice(0, 16).replace('T', ' ')}${e.note ? ` (${e.note})` : ''}`)
+          .join(' | ');
+        return rest;
+      });
+    }
     res.type('text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.name}.csv"`);
-    return res.send(toCsv(rows));
+    return res.send(toCsv(csvRows));
   }
   res.json(rows);
 });

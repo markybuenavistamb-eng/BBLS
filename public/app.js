@@ -1741,7 +1741,6 @@ async function retryNotif(id) {
 async function pageReports() {
   const reports = [
     ['boxes-per-container', 'Boxes per container'],
-    ['box-movement', 'Box movement — status per container, from where it was loaded'],
     ['delivery-performance', 'Delivery performance (warehouse → delivered days)'],
     ['failed-reasons', 'Failed delivery reasons'],
     ['unpaid-shipments', 'Unpaid shipments']
@@ -1749,16 +1748,60 @@ async function pageReports() {
   const data = await Promise.all(reports.map(([k]) => api('/api/reports/' + k)));
   view(`
     <h1>Reports</h1>
+    <div id="boxMovementSection"></div>
     ${reports.map(([key, label], i) => {
       const rows = data[i];
       const cols = rows.length ? Object.keys(rows[0]) : [];
-      return `<h2>${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">â¬‡ CSV</button></a></h2>
+      return `<h2>${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">⬇ CSV</button></a></h2>
       <div class="card table-scroll">
         <table><tr>${cols.map(cl => `<th>${esc(cl.replace(/_/g, ' '))}</th>`).join('')}</tr>
         ${rows.map(rw => `<tr>${cols.map(cl => `<td>${esc(String(rw[cl] == null ? '' : rw[cl]).match(/^\d{4}-\d{2}-\d{2}T/) ? fmtDay(rw[cl]) : rw[cl])}</td>`).join('')}</tr>`).join('') || `<tr><td class="muted">No data</td></tr>`}
         </table>
       </div>`;
     }).join('')}`);
+  renderBoxMovement((hashQuery().get('container') || ''));
+}
+
+// Box movement: each box's container of loading + its full status timeline (expandable).
+async function renderBoxMovement(filter) {
+  const el = document.getElementById('boxMovementSection');
+  if (!el) return;
+  const rows = await api('/api/reports/box-movement' + (filter ? '?container=' + encodeURIComponent(filter) : ''));
+  el.innerHTML = `
+    <h2>Box movement — status timeline per box
+      <a href="/api/reports/box-movement${filter ? '?container=' + encodeURIComponent(filter) + '&' : '?'}format=csv" download><button class="small secondary">⬇ CSV</button></a>
+    </h2>
+    <div class="card row">
+      <input id="bmFilter" placeholder="Filter by container no. or load code (e.g. C1)" style="max-width:320px" value="${esc(filter)}">
+      <button class="small" onclick="renderBoxMovement(document.getElementById('bmFilter').value.trim())">Filter</button>
+      ${filter ? `<button class="small secondary" onclick="renderBoxMovement('')">Clear</button>` : ''}
+      <span class="muted">${rows.length} box(es)</span>
+    </div>
+    <div class="card table-scroll">
+      <table>
+        <tr><th></th><th>Box #</th><th>Container</th><th>Loaded from</th><th>Current status</th><th>Region</th><th>Receiver</th></tr>
+        ${rows.map((r, i) => `
+          <tr>
+            <td><button class="small secondary" onclick="document.getElementById('bmtl${i}').classList.toggle('hidden')">Timeline</button></td>
+            <td><a href="#/boxes/${r.box_id}">${esc(r.box_number)}</a></td>
+            <td>${esc(r.container)}${r.load_code ? ` <span class="badge st-created">${esc(r.load_code)}</span>` : ''}</td>
+            <td>${esc(r.loaded_from || '—')}${r.vessel ? '<br><span class="muted">' + esc(r.vessel) + '</span>' : ''}</td>
+            <td>${badge(r.current_status)}</td>
+            <td>${r.region ? regionBadge(r.region) : '<span class="muted">—</span>'}</td>
+            <td>${esc(r.receiver || '')}</td>
+          </tr>
+          <tr id="bmtl${i}" class="hidden bm-timeline"><td colspan="7">
+            <ul class="timeline" style="margin:6px 0">
+              ${(r.timeline || []).map((e, j) => `
+                <li class="${j === r.timeline.length - 1 ? 'current' : ''}">
+                  <div class="t-status">${esc(e.label)}</div>
+                  <div class="t-meta">${fmtDate(e.at)} · ${esc(e.actor)}</div>
+                  ${e.note ? `<div class="t-note">${esc(e.note)}</div>` : ''}
+                </li>`).join('') || '<li class="muted">No status events</li>'}
+            </ul>
+          </td></tr>`).join('') || '<tr><td colspan="7" class="muted">No boxes match</td></tr>'}
+      </table>
+    </div>`;
 }
 
 /* ---------- admin ---------- */

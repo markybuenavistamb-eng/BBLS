@@ -496,6 +496,10 @@ a.tile:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(75,81,88
 }
 a.vf-logo-plate:hover { background: #fff; }
 
+.hidden { display: none !important; }
+.bm-timeline td { background: #f8fafc; }
+.bm-timeline:hover td { background: #f8fafc; }
+
 /* ---------- Printed BOC Form BB-IS-001 (Information Sheet p.1 / Packing List p.2) ---------- */
 .boc-page {
   background: #fff; color: #000; border: 1px solid #000; padding: 12px 14px;
