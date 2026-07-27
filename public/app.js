@@ -450,104 +450,7 @@ function collectItems(itemsContainerId) {
     .filter(it => it.description);
 }
 
-/* ---------- Blank Receiving Form (paper form for the sender to fill out before encoding) ---------- */
-// Compact variants below are scoped to THIS form only via inline styles (blankLine/pairRow/
-// blankBoxBlockHtml aren't used elsewhere) so the shared .rc-line/.rc-box/.rc-table/.label-card
-// classes used by other printable documents are left untouched.
-function blankLine(label) {
-  return `<div class="rc-line" style="padding:0"><span style="font-size:10px">${esc(label)}</span><div style="flex:1;border-bottom:1px solid #000;min-height:12px;line-height:12px">&nbsp;</div></div>`;
-}
-function pairRow(labelA, labelB) {
-  return `<div class="row" style="flex-wrap:nowrap;gap:10px;margin:0">
-    <div style="flex:1">${blankLine(labelA)}</div>
-    <div style="flex:1">${blankLine(labelB)}</div>
-  </div>`;
-}
-function blankBoxBlockHtml(n) {
-  return `
-    <div class="label-card" style="text-align:left;padding:8px">
-      <div class="rc-label" style="margin-bottom:3px">BOX ${n} <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(box # assigned by VFIC upon encoding)</span></div>
-      ${pairRow('Receiver name', 'Receiver phone')}
-      ${pairRow('Alt. phone', 'Landmark')}
-      ${blankLine('Address (house/brgy)')}
-      ${pairRow('City/Municipality', 'Province')}
-      ${pairRow('Size (S/M/L/Jumbo)', 'Weight (kg)')}
-      ${blankLine('Special instructions')}
-      <div class="rc-label" style="margin:5px 0 2px">ITEMIZED CONTENTS</div>
-      <table class="rc-table" style="font-size:10px">
-        <tr><th style="width:20px;padding:2px 6px">#</th><th style="padding:2px 6px">Item description</th><th style="width:60px;padding:2px 6px">Qty</th></tr>
-        ${Array.from({ length: 10 }, (_, i) => `<tr><td style="padding:2px 6px">${i + 1}</td><td style="padding:2px 6px">&nbsp;</td><td style="padding:2px 6px">&nbsp;</td></tr>`).join('')}
-      </table>
-    </div>`;
-}
-function pageReceivingFormBlank(extraBoxCount) {
-  const extra = Math.max(0, Math.min(19, extraBoxCount || 0));
-  view(`
-    <style>@page { size: 8.5in 13in; margin: 0.4in; }</style>
-    <div class="row no-print" style="justify-content:space-between">
-      <h1>Blank Receiving Form</h1>
-      <div class="row" style="flex-wrap:nowrap">
-        <label style="margin:0">Additional boxes (rider sheet)</label>
-        <input id="extraBoxCount" type="number" min="0" max="19" value="${extra}" style="max-width:70px">
-        <button class="secondary small" onclick="pageReceivingFormBlank(+document.getElementById('extraBoxCount').value)">Update</button>
-        <button onclick="window.print()">ðŸ–¨ Print</button>
-      </div>
-    </div>
-    <div class="muted no-print" style="margin-bottom:10px">
-      One Receiving Form per box. Hand this to a sender to fill out by hand, or have them scan the QR code to fill it up online instead.
-      If they have more than one box, print a rider sheet for the additional boxes. Sized to fit legal paper (8.5Ã—13in). Once completed, encode it in <a href="#/shipments/new">New Shipment Intake</a>.
-    </div>
-    <div class="receipt">
-      <div class="rc-head">
-        <div>
-          <img src="/vfic-logo.png" alt="VÃ®ctors Freight International Corporation â€” Chosen to Deliver" style="width:300px;display:block;margin-bottom:4px">
-          <div class="rc-title">BALIKBAYAN BOX RECEIVING FORM â€” SENDER COPY</div>
-          <div class="rc-meta">Please print clearly. One box per form â€” use a rider sheet for additional boxes.<br>Or scan the QR code to fill this up online.</div>
-        </div>
-        <div class="rc-qr">
-          <img src="/api/intake-form-qr" alt="Scan to fill up online" style="width:85px;height:85px">
-          <div class="muted" style="font-size:10px">Scan to fill up online</div>
-        </div>
-      </div>
-      <div style="border:1px solid #000;padding:4px 12px;margin:6px 0 8px;max-width:320px">
-        <div class="muted" style="font-size:10px;font-weight:800;letter-spacing:1px">FOR VFIC USE</div>
-        ${blankLine('Shipment #')}
-        ${blankLine("Date rec'd")}
-      </div>
-      <div class="rc-box" style="padding:6px 10px">
-        <div class="rc-label" style="margin-bottom:3px">SENDER / SHIPPER INFORMATION</div>
-        ${pairRow('Full name', 'Phone (primary)')}
-        ${pairRow('Alt phone', 'Country')}
-        ${blankLine('Address')}
-        ${pairRow('City/Municipality', 'Province')}
-      </div>
-
-      <div class="rc-title" style="margin:8px 0 4px">BOX DETAILS</div>
-      ${blankBoxBlockHtml(1)}
-
-      <div class="rc-box" style="margin-top:8px;padding:6px 10px;border-color:var(--red)">
-        <div class="rc-label" style="color:var(--red);margin-bottom:3px">REQUIRED â€” SENDER'S PASSPORT / GOVERNMENT ID</div>
-        <div class="rc-line" style="padding:0"><span style="font-size:10px">ID on file</span><div style="font-size:11px">â˜ Photocopy attached to this form &nbsp; â˜ Soft copy submitted online (QR code above)</div></div>
-        <div class="muted" style="font-size:10px;margin-top:2px">VFIC requires a scanned or photographed copy of the sender's passport or government ID on file before a shipment can be processed.</div>
-      </div>
-
-      <div class="rc-terms" style="margin:8px 0 6px;font-size:10px">
-        I certify that the information and contents described above are true and correct, and I authorize Victors Freight International Corporation (VFIC)
-        to transport, consolidate, and deliver the box described under VFIC's standard terms and conditions of carriage.
-      </div>
-      <div class="rc-sign" style="margin-bottom:0">
-        <div><div class="rc-sigline"></div>Sender signature over printed name & date</div>
-        <div><div class="rc-sigline"></div>Received by (VFIC agent) over printed name & date</div>
-      </div>
-    </div>
-    ${Array.from({ length: extra }, (_, i) => `
-    <div class="receipt" style="page-break-before:always">
-      <div class="rc-title">ADDITIONAL BOX RIDER SHEET <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(box ${i + 2} of ${extra + 1})</span></div>
-      <div class="rc-meta">One box per sheet â€” attach to the signed Receiving Form for:</div>
-      <div style="max-width:420px">${blankLine('Sender full name')}</div>
-      <div style="margin-top:10px">${blankBoxBlockHtml(i + 2)}</div>
-    </div>`).join('')}`);
-}
+/* Blank Receiving Form (BOC BB-IS-001) is rendered by boc-forms.js */
 
 let PREFILL_INTAKE = null; // set when opened via a Pending Intake Request (#/shipments/new?intake=ID)
 
@@ -576,6 +479,7 @@ async function pageShipmentNew(intakeId) {
     </div>
     <div class="muted" style="margin:-8px 0 12px">Encoding from a filled-out paper form? Have the sender complete a <a href="#/receiving-form-blank">blank receiving form</a> first, then transcribe it below. Or check <a href="#/intake-requests">pending online submissions</a>.</div>
     ${intake ? `<div class="card" style="border-color:var(--primary)">
+      ${intakeSubmittedDetailsHtml(intake)}
       <b>Reviewing online submission ${esc(intake.reference_code)}</b> from ${esc(personName(intake.sender))}, submitted ${fmtDate(intake.submitted_at)}.
       Fields below are pre-filled from what the sender entered â€” verify weights/sizes and the passport copy, then save.
       ${intake.passport_file ? `<div><a href="${esc(intake.passport_file)}" target="_blank">View submitted passport/ID scan â†’</a></div>` : ''}
@@ -670,6 +574,61 @@ function mapPsgcRegion(name) {
   if (n.includes('visayas')) return 'VISAYAS';
   if (n.includes('mindanao') || n.includes('davao') || n.includes('zamboanga') || n.includes('soccsksargen') || n.includes('caraga') || n.includes('bangsamoro')) return 'MINDANAO';
   return null;
+}
+
+// Read-only view of everything the sender submitted online, so staff can verify the
+// encoded shipment matches the submission.
+const SENDER_TYPE_LABELS = {
+  QFWA_OFW: 'QFWA - OFW', QFWA_RESIDENT: 'QFWA - Resident Filipino', QFWA_NON_RESIDENT: 'QFWA - Non-Resident Filipino',
+  NQFWA_INDIVIDUAL: 'NQFWA - Individual', NQFWA_SOLE_PROP: 'NQFWA - Sole Prop. (DTI)',
+  NQFWA_PARTNERSHIP: 'NQFWA - Partnership', NQFWA_CORPORATION: 'NQFWA - Corporation'
+};
+const AVAILMENT_LABELS = {
+  BB_1ST: 'Balikbayan Box privilege - 1st Time', BB_2ND: 'Balikbayan Box privilege - 2nd Time',
+  BB_3RD: 'Balikbayan Box privilege - 3rd Time', DE_MINIMIS: 'De Minimis Value', NONE: 'None'
+};
+function intakeSubmittedDetailsHtml(intake) {
+  const s = intake.sender || {};
+  const line = (label, val) => `<div class="rc-line"><span>${esc(label)}</span>${esc(val || '-')}</div>`;
+  const boxes = (intake.boxes || []).map((b, i) => {
+    const r = b.receiver || {};
+    const addr = [r.street_address, r.barangay, r.city_municipality, r.region].filter(Boolean).join(', ');
+    const goods = (b.goods || []).map(g => `${esc(g.category)} x ${g.qty}`).join(', ');
+    return `<div class="rc-box" style="margin-top:8px">
+      <div class="rc-label">BOX ${i + 1} - ${esc(personName(r))}</div>
+      ${line('Contact', r.contact_number)}
+      ${line('Relationship', r.relationship)}
+      ${line('PH address', addr)}
+      ${line('Landmark', r.landmark)}
+      ${line('Size / weight', [b.size_category, b.weight_kg ? b.weight_kg + ' kg' : ''].filter(Boolean).join(' / '))}
+      ${b.excess_weight_kg ? line('Excess weight', b.excess_weight_kg + ' kg over - additional charge applies') : ''}
+      ${line('Declared value', b.total_value_php != null ? 'Php ' + Number(b.total_value_php).toLocaleString() : '')}
+      ${line('Special instructions', b.special_instructions)}
+      <div class="rc-line"><span>Itemized goods</span><span class="wrap-cell">${goods ? esc(goods) : '-'}</span></div>
+    </div>`;
+  }).join('');
+  const p = intake.pickup;
+  return `
+    <details class="collapse" style="margin-top:10px" open>
+      <summary>View full submitted details (as entered by the sender)</summary>
+      <div style="margin-top:8px">
+        <div class="rc-box">
+          <div class="rc-label">A. SENDER - ${esc(AVAILMENT_LABELS[intake.availment_type] || intake.availment_type || '')} / ${esc(SENDER_TYPE_LABELS[intake.sender_type] || intake.sender_type || '')}</div>
+          ${s.business_name ? line('Business name', s.business_name) : ''}
+          ${line('Name', personName(s))}
+          ${line('Contact number/s', s.contact_numbers)}
+          ${line('Email', s.email)}
+          ${s.passport_number ? line('Passport', `${s.passport_number} / issued ${s.passport_date_issued || '-'} at ${s.passport_place_issued || '-'} / expires ${s.passport_expiry || '-'}`) : ''}
+          ${line('Address abroad', s.address_abroad)}
+          ${line('Address in PH', s.address_ph)}
+          ${line('Origin', [intake.origin_agent, intake.origin_country].filter(Boolean).join(', '))}
+          ${line('Service type', SERVICE_TYPES[intake.service_type] || intake.service_type)}
+          ${line('Total shipment value', intake.total_value_php != null ? 'Php ' + Number(intake.total_value_php).toLocaleString() : '')}
+          ${p ? line('Pick-up', `${p.date || ''} (${p.time_window || ''}) - ${p.address || ''}${p.notes ? ' / ' + p.notes : ''}`) : ''}
+        </div>
+        ${boxes}
+      </div>
+    </details>`;
 }
 
 function newCustomerFormHtml(prefix) {

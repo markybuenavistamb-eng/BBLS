@@ -259,6 +259,33 @@ function bocPackingList(s, box, boxNo, boxTotal) {
 }
 
 /* ---------------- routes ---------------- */
+// Blank BOC Form BB-IS-001 (Information Sheet p.1 + Packing List p.2) for a sender to fill by
+// hand. Same official layout as the auto-filled version, just with empty fields/checkboxes.
+function pageReceivingFormBlank(boxCount) {
+  const n = Math.max(1, Math.min(20, boxCount || 1));
+  const emptyS = { boc: null, sender: null, mbl_mawb_number: '', shipment_number: '' };
+  const emptyBox = { boc: null, receiver: null, total_value_php: null, box_number: '' };
+  view(`
+    <style>@page { size: 8.5in 13in; margin: 0.35in; }</style>
+    <div class="row no-print" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <h1 style="margin-bottom:4px">Blank Receiving Form — BOC BB-IS-001</h1>
+        <div class="muted" style="max-width:640px">Official Bureau of Customs Information Sheet (p.1) + Packing List (p.2) — one set per box, for a sender to fill out by hand. Senders can also scan the QR to fill it up online and skip the paperwork.</div>
+      </div>
+      <div style="text-align:center">
+        <img src="/api/intake-form-qr" alt="Scan to fill up online" style="width:96px;height:96px;display:block">
+        <div class="muted" style="font-size:11px">Scan to fill online</div>
+      </div>
+    </div>
+    <div class="row no-print" style="margin:8px 0 12px">
+      <label style="margin:0">Boxes to print</label>
+      <input id="blankCount" type="number" min="1" max="20" value="${n}" style="max-width:80px">
+      <button class="secondary small" onclick="pageReceivingFormBlank(+document.getElementById('blankCount').value)">Update</button>
+      <button onclick="window.print()">🖨 Print</button>
+    </div>
+    ${Array.from({ length: n }, (_, i) => bocInfoSheet(emptyS, emptyBox, i + 1, n) + bocPackingList(emptyS, emptyBox, i + 1, n)).join('')}`);
+}
+
 // One Information Sheet per box (BOC requires 3 copies per box).
 async function pageReceivingForm(shipmentId) {
   const s = await api('/api/shipments/' + shipmentId);
