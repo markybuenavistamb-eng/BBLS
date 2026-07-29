@@ -452,7 +452,7 @@ async function pageBoxOrders() {
     <h1>Box Orders</h1>
     <div class="muted" style="margin-bottom:10px">Customers with no box yet who ordered empty balikbayan box(es) via the public “Order a box” page. Prepare and deliver, or have them pick up at the office.</div>
     <div class="card table-scroll">
-      <table><tr><th>Reference</th><th>Customer</th><th>Boxes ordered</th><th>Fulfilment</th><th>Submitted</th><th>Status</th></tr>
+      <table><tr><th>Reference</th><th>Sender</th><th>Boxes ordered</th><th>Fulfilment</th><th>Submitted</th><th>Status</th></tr>
       ${list.map(o => `<tr>
         <td>${esc(o.reference_code)}</td>
         <td>${esc(o.contact.name)}<div class="muted">${esc(o.contact.phone)}${o.contact.email ? ' · ' + esc(o.contact.email) : ''}</div></td>

@@ -88,15 +88,16 @@ function renderForm() {
 
     <div class="card">
       <div class="rc-label">2 · HOW WOULD YOU LIKE TO GET THEM?</div>
-      <label class="chk"><input type="radio" name="delivery" value="DELIVER_ADDRESS" checked onchange="onDeliveryChange()"> <span>Deliver to my address</span></label>
-      <label class="chk"><input type="radio" name="delivery" value="PICKUP_OFFICE" onchange="onDeliveryChange()"> <span>I will pick up from the VFIC office</span></label>
+      <div class="note-info" style="margin-bottom:8px">The empty box(es) are delivered to the <b>sender</b> — please use the sender's address and contact details below.</div>
+      <label class="chk"><input type="radio" name="delivery" value="DELIVER_ADDRESS" checked onchange="onDeliveryChange()"> <span>Deliver to the sender's address</span></label>
+      <label class="chk"><input type="radio" name="delivery" value="PICKUP_OFFICE" onchange="onDeliveryChange()"> <span>The sender will pick up from the VFIC office</span></label>
 
       <div id="officeWrap" style="display:none;margin-top:8px" class="note-info">
         Pick up at: <b>${esc(OFFICE_ADDRESS)}</b><br>Office hours: Mon–Fri, 8:30 AM – 5:30 PM.
       </div>
 
       <div id="addrWrap" style="margin-top:8px">
-        <label>Complete Delivery Address *</label>
+        <label>Sender's Complete Delivery Address * <span class="muted">(where we deliver the empty box[es])</span></label>
         <div class="form-grid">
           <div><label class="sub">Region *</label><select id="oRegion" required></select></div>
           <div><label class="sub">City / Municipality *</label><select id="oCity" required disabled></select></div>
@@ -112,11 +113,11 @@ function renderForm() {
     </div>
 
     <div class="card">
-      <div class="rc-label">3 · YOUR CONTACT DETAILS</div>
+      <div class="rc-label">3 · SENDER'S CONTACT DETAILS</div>
       <div class="form-grid">
-        <div><label>Full Name *</label><input id="cName" required></div>
-        <div><label>Contact Number * <span class="muted">(11 digits, 09XXXXXXXXX)</span></label><input id="cPhone" inputmode="numeric" maxlength="11" placeholder="09XXXXXXXXX" required></div>
-        <div><label>Email <span class="muted">(if any)</span></label><input id="cEmail" type="email"></div>
+        <div><label>Sender's Full Name *</label><input id="cName" required></div>
+        <div><label>Sender's Contact Number * <span class="muted">(11 digits, 09XXXXXXXXX)</span></label><input id="cPhone" inputmode="numeric" maxlength="11" placeholder="09XXXXXXXXX" required></div>
+        <div><label>Sender's Email <span class="muted">(if any)</span></label><input id="cEmail" type="email"></div>
       </div>
       <label>Notes <span class="muted">(optional)</span></label><input id="cNotes" placeholder="Anything we should know">
       <div class="muted" style="font-size:12px;margin-top:6px"><b>All fields with an asterisk (*) are required.</b></div>
@@ -155,7 +156,7 @@ async function submitOrder() {
       body.postal_code = val('oZip');
       body.landmark = val('oLandmark');
       if (!body.region || !body.city_municipality || !body.barangay || !body.street_address) {
-        throw new Error('Please complete your delivery address (region, city, barangay and street).');
+        throw new Error("Please complete the sender's delivery address (region, city, barangay and street).");
       }
     }
     const res = await fetch('/api/public/box-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

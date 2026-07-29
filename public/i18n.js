@@ -58,7 +58,7 @@
 
       /* landing */
       'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
-      'land.hero.line1': 'Delivering your love, sacrifice,', 'land.hero.line2': 'and blessings home.',
+      'land.hero.line1': 'Delivering your', 'land.hero.line2': 'love, sacrifice, and blessings home.',
       'land.hero.kicker': 'Worldwide to the Philippines · Since day one',
       'land.hero.title': 'Your balikbayan box, safely home.',
       'land.hero.sub': 'Victors Freight International Corporation ships your boxes and personal cargo from anywhere in the world to every corner of the Philippines — door to door, tracked every step of the way.',
@@ -170,7 +170,7 @@
       'dash.inTransit': 'Mga container sa biyahe', 'dash.activeTrips': 'Aktibong biyahe', 'dash.recentSms': 'Kamakailang SMS',
 
       'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
-      'land.hero.line1': 'Inihahatid ang inyong pagmamahal, sakripisyo,', 'land.hero.line2': 'at biyaya pauwi.',
+      'land.hero.line1': 'Inihahatid ang inyong', 'land.hero.line2': 'pagmamahal, sakripisyo, at biyaya pauwi.',
       'land.hero.kicker': 'Buong mundo papuntang Pilipinas · Maaasahan',
       'land.hero.title': 'Ang inyong balikbayan box, ligtas na nakauwi.',
       'land.hero.sub': 'Ipinapadala ng Victors Freight International Corporation ang inyong mga kahon at personal na kargamento mula saanman sa mundo patungo sa bawat sulok ng Pilipinas — mula pintuan hanggang pintuan, may tracking sa bawat hakbang.',
