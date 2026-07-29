@@ -447,7 +447,7 @@ const BOX_ORDER_BADGE = { NEW: 'st-created', PREPARING: 'st-sorted', DISPATCHED:
 function SIZE_LABEL(key) { const m = { MINI: 'Mini', MEDIUM: 'Medium', LARGE: 'Large', XL: 'Extra Large', JUMBO: 'Jumbo' }; return m[key] || key; }
 async function pageBoxOrders() {
   const list = await api('/api/box-orders');
-  const fulfilLabel = { DELIVER_ADDRESS: 'Deliver to address', PICKUP_OFFICE: 'Pick up at office' };
+  const fulfilLabel = { DELIVER_ADDRESS: 'Deliver to address abroad', PICKUP_OFFICE: 'Pick up at branch abroad' };
   view(`
     <h1>Box Orders</h1>
     <div class="muted" style="margin-bottom:10px">Customers with no box yet who ordered empty balikbayan box(es) via the public “Order a box” page. Prepare and deliver, or have them pick up at the office.</div>
@@ -457,7 +457,7 @@ async function pageBoxOrders() {
         <td>${esc(o.reference_code)}</td>
         <td>${esc(o.contact.name)}<div class="muted">${esc(o.contact.phone)}${o.contact.email ? ' · ' + esc(o.contact.email) : ''}</div></td>
         <td>${esc(o.items.map(it => `${it.qty}× ${SIZE_LABEL(it.size)}`).join(', '))} <span class="muted">(${o.total_qty})</span></td>
-        <td>${esc(fulfilLabel[o.delivery_method] || o.delivery_method)}${o.delivery_method === 'DELIVER_ADDRESS' && o.address ? `<div class="muted wrap-cell" style="max-width:260px">${esc([o.address.street_address, o.address.barangay, o.address.city_municipality, o.address.region, o.address.postal_code].filter(Boolean).join(', '))}${o.address.landmark ? ' · 📍 ' + esc(o.address.landmark) : ''}</div>` : ''}${o.notes ? `<div class="muted">“${esc(o.notes)}”</div>` : ''}</td>
+        <td>${esc(fulfilLabel[o.delivery_method] || o.delivery_method)}${o.delivery_method === 'DELIVER_ADDRESS' && o.address ? `<div class="muted wrap-cell" style="max-width:260px">${esc([o.address.street_address, o.address.city, o.address.postal_code, o.address.country].filter(Boolean).join(', '))}${o.address.landmark ? ' · 📍 ' + esc(o.address.landmark) : ''}</div>` : ''}${o.delivery_method === 'PICKUP_OFFICE' && o.pickup_branch ? `<div class="muted">Branch: ${esc(o.pickup_branch)}</div>` : ''}${o.notes ? `<div class="muted">“${esc(o.notes)}”</div>` : ''}</td>
         <td>${fmtDate(o.submitted_at)}</td>
         <td><span class="badge ${BOX_ORDER_BADGE[o.status] || 'st-created'}">${esc(o.status)}</span>
           ${canIntake() ? `<div style="margin-top:4px"><select class="small" onchange="setBoxOrderStatus(${o.id}, this.value)">

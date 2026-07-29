@@ -6,13 +6,16 @@ const gid = (id) => document.getElementById(id);
 const digits = (v) => String(v || '').replace(/\D/g, '');
 const isPhMobile = (v) => /^09\d{9}$/.test(digits(v));
 
-const OFFICE_ADDRESS = 'Rm. 205 Sitio Grande Bldg., 409 A. Soriano Ave., Intramuros, Manila 1002, Philippines';
 let SIZES = [];
+let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
 let submitted = false, LAST_REF = null;
 
 async function loadSizes() {
-  try { const d = await (await fetch('/api/box-sizes')).json(); SIZES = d.sizes || []; }
-  catch (e) { SIZES = []; }
+  try {
+    const d = await (await fetch('/api/box-sizes')).json();
+    SIZES = d.sizes || [];
+    if (Array.isArray(d.origin_countries) && d.origin_countries.length) ORIGIN_COUNTRIES = d.origin_countries;
+  } catch (e) { SIZES = []; }
 }
 
 function mountToggle() { const el = gid('langMount'); if (el && window.VI) el.innerHTML = VI.toggleHtml(); }
@@ -88,27 +91,28 @@ function renderForm() {
 
     <div class="card">
       <div class="rc-label">2 · HOW WOULD YOU LIKE TO GET THEM?</div>
-      <div class="note-info" style="margin-bottom:8px">The empty box(es) are delivered to the <b>sender</b> — please use the sender's address and contact details below.</div>
-      <label class="chk"><input type="radio" name="delivery" value="DELIVER_ADDRESS" checked onchange="onDeliveryChange()"> <span>Deliver to the sender's address</span></label>
-      <label class="chk"><input type="radio" name="delivery" value="PICKUP_OFFICE" onchange="onDeliveryChange()"> <span>The sender will pick up from the VFIC office</span></label>
+      <div class="note-info" style="margin-bottom:8px">The empty box(es) are delivered to the <b>sender abroad</b> — please use the sender's address and contact details below.</div>
+      <datalist id="dlCountries">${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      <label class="chk"><input type="radio" name="delivery" value="DELIVER_ADDRESS" checked onchange="onDeliveryChange()"> <span>Deliver to the sender's address abroad</span></label>
+      <label class="chk"><input type="radio" name="delivery" value="PICKUP_OFFICE" onchange="onDeliveryChange()"> <span>The sender will pick up from a branch office abroad</span></label>
 
-      <div id="officeWrap" style="display:none;margin-top:8px" class="note-info">
-        Pick up at: <b>${esc(OFFICE_ADDRESS)}</b><br>Office hours: Mon–Fri, 8:30 AM – 5:30 PM.
+      <div id="officeWrap" style="display:none;margin-top:8px">
+        <label class="sub">Which branch office abroad? *</label>
+        <input id="oBranch" list="dlCountries" placeholder="Country / city of the branch">
+        <div class="note-info" style="margin-top:6px">Our team will confirm the exact branch office address and pick-up hours for your area.</div>
       </div>
 
       <div id="addrWrap" style="margin-top:8px">
-        <label>Sender's Complete Delivery Address * <span class="muted">(where we deliver the empty box[es])</span></label>
+        <label>Sender's Complete Address Abroad * <span class="muted">(where we deliver the empty box[es])</span></label>
         <div class="form-grid">
-          <div><label class="sub">Region *</label><select id="oRegion" required></select></div>
-          <div><label class="sub">City / Municipality *</label><select id="oCity" required disabled></select></div>
-          <div><label class="sub">Barangay *</label><select id="oBrgy" required disabled></select></div>
+          <div><label class="sub">Country *</label><input id="oCountry" list="dlCountries" required placeholder="Select country…"></div>
+          <div><label class="sub">City / State / Province *</label><input id="oCity" required></div>
+          <div><label class="sub">Postal / ZIP Code</label><input id="oZip" placeholder="e.g. 10110"></div>
         </div>
-        <input type="hidden" id="oRegionName"><input type="hidden" id="oCityName"><input type="hidden" id="oBrgyName">
-        <div class="form-grid">
-          <div><label class="sub">House No. / Street / Subdivision *</label><input id="oStreet"></div>
-          <div><label class="sub">Landmark</label><input id="oLandmark" placeholder="Helps the driver find it"></div>
-          <div><label class="sub">ZIP / Postal Code</label><input id="oZip" inputmode="numeric" maxlength="4" placeholder="e.g. 1002"></div>
-        </div>
+        <label class="sub">Street / Building / Unit / House No. *</label>
+        <input id="oStreet" required>
+        <label class="sub">Landmark / Delivery notes</label>
+        <input id="oLandmark" placeholder="Anything that helps the courier find it">
       </div>
     </div>
 
@@ -116,7 +120,7 @@ function renderForm() {
       <div class="rc-label">3 · SENDER'S CONTACT DETAILS</div>
       <div class="form-grid">
         <div><label>Sender's Full Name *</label><input id="cName" required></div>
-        <div><label>Sender's Contact Number * <span class="muted">(11 digits, 09XXXXXXXXX)</span></label><input id="cPhone" inputmode="numeric" maxlength="11" placeholder="09XXXXXXXXX" required></div>
+        <div><label>Sender's Contact Number Abroad * <span class="muted">(include country code)</span></label><input id="cPhone" placeholder="e.g. +66 62 555 0119" required></div>
         <div><label>Sender's Email <span class="muted">(if any)</span></label><input id="cEmail" type="email"></div>
       </div>
       <label>Notes <span class="muted">(optional)</span></label><input id="cNotes" placeholder="Anything we should know">
@@ -128,9 +132,6 @@ function renderForm() {
 
   onDeliveryChange();
   renderTotal();
-  if (window.PSGC) {
-    PSGC.mountCascade({ region: 'oRegion', city: 'oCity', barangay: 'oBrgy', regionName: 'oRegionName', cityName: 'oCityName', barangayName: 'oBrgyName' });
-  }
 }
 
 const val = (id) => { const e = gid(id); return e ? e.value.trim() : ''; };
@@ -140,24 +141,25 @@ async function submitOrder() {
   try {
     const items = currentItems().map(i => ({ size: i.size, qty: i.qty }));
     if (!items.length) throw new Error('Please choose at least one box size and quantity.');
-    if (!val('cName')) throw new Error('Please enter your full name.');
-    if (!isPhMobile(val('cPhone'))) throw new Error('Contact number must be 11 digits starting with 09 (e.g. 09171234567).');
+    if (!val('cName')) throw new Error("Please enter the sender's full name.");
+    if (digits(val('cPhone')).length < 7) throw new Error('Please enter a valid contact number.');
     const delivery = (document.querySelector('input[name="delivery"]:checked') || {}).value || 'DELIVER_ADDRESS';
     const body = {
       items, delivery_method: delivery,
-      contact_name: val('cName'), contact_phone: digits(val('cPhone')), contact_email: val('cEmail'),
+      contact_name: val('cName'), contact_phone: val('cPhone'), contact_email: val('cEmail'),
       notes: val('cNotes')
     };
     if (delivery === 'DELIVER_ADDRESS') {
-      body.region = val('oRegionName') || val('oRegion');
-      body.city_municipality = val('oCityName') || val('oCity');
-      body.barangay = val('oBrgyName') || val('oBrgy');
+      body.country = val('oCountry');
+      body.city = val('oCity');
       body.street_address = val('oStreet');
       body.postal_code = val('oZip');
       body.landmark = val('oLandmark');
-      if (!body.region || !body.city_municipality || !body.barangay || !body.street_address) {
-        throw new Error("Please complete the sender's delivery address (region, city, barangay and street).");
+      if (!body.country || !body.city || !body.street_address) {
+        throw new Error("Please complete the sender's address abroad (country, city and street).");
       }
+    } else {
+      body.pickup_branch = val('oBranch');
     }
     const res = await fetch('/api/public/box-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();

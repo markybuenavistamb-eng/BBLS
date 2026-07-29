@@ -580,22 +580,21 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
       .map(it => ({ size: it.size, qty: Math.min(999, Math.floor(+it.qty)) }));
     if (!items.length) throw new Error('Please choose at least one box size and quantity');
     const delivery = b.delivery_method === 'PICKUP_OFFICE' ? 'PICKUP_OFFICE' : 'DELIVER_ADDRESS';
-    const contact = {
-      name: need(b.contact_name, 'Name'),
-      phone: BOC.normalizePhMobile(b.contact_phone),
-      email: String(b.contact_email || '').trim()
-    };
-    if (!BOC.isValidPhMobile(contact.phone)) throw new Error('Contact number must be 11 digits starting with 09');
-    let address = null;
+    // The sender ordering boxes is abroad, so accept an international contact number.
+    const phone = String(b.contact_phone || '').trim();
+    if (phone.replace(/\D/g, '').length < 7) throw new Error('A valid contact number is required');
+    const contact = { name: need(b.contact_name, 'Name'), phone, email: String(b.contact_email || '').trim() };
+    let address = null, pickup_branch = null;
     if (delivery === 'DELIVER_ADDRESS') {
       address = {
-        region: need(b.region, 'Region'),
-        city_municipality: need(b.city_municipality, 'City / Municipality'),
-        barangay: need(b.barangay, 'Barangay'),
-        street_address: need(b.street_address, 'House No. / Street'),
+        country: need(b.country, 'Country'),
+        city: need(b.city, 'City / State / Province'),
+        street_address: need(b.street_address, 'Street / Address'),
         postal_code: String(b.postal_code || '').trim(),
         landmark: String(b.landmark || '').trim()
       };
+    } else {
+      pickup_branch = String(b.pickup_branch || '').trim();
     }
     const d = db.get();
     d.box_orders = d.box_orders || [];
@@ -605,7 +604,7 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
       reference_code: db.nextBoxOrderCode(),
       status: 'NEW',
       submitted_at: new Date().toISOString(),
-      items, total_qty, delivery_method: delivery, address, contact,
+      items, total_qty, delivery_method: delivery, address, pickup_branch, contact,
       notes: String(b.notes || '').trim()
     };
     d.box_orders.push(rec);
