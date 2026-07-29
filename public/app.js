@@ -23,8 +23,37 @@ const NEXT_STATUS = {
   OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'], RETURNED: ['ASSIGNED'], DELIVERED: [], CANCELLED: []
 };
 const CONTAINER_SIZE_LABELS = { C20: '20 ft', C40: '40 ft', C40HQ: '40 ft HQ' };
-const REGIONS = ['NCR', 'NORTH_LUZON', 'SOUTH_LUZON', 'CALABARZON', 'MIMAROPA', 'VISAYAS', 'MINDANAO'];
-const REGION_LABELS = { NCR: 'NCR / Metro Manila', NORTH_LUZON: 'North Luzon', SOUTH_LUZON: 'South Luzon', CALABARZON: 'CALABARZON', MIMAROPA: 'MIMAROPA', VISAYAS: 'Visayas', MINDANAO: 'Mindanao' };
+// The 17 official PSGC regions — the single region taxonomy shared by warehouse
+// segregation, trucking dispatch, reports and public tracking (mirrors lib/regions.js).
+const REGION_DEFS = [
+  { code: 'NCR', short: 'Metro Manila (NCR)', label: 'NCR – National Capital Region', island: 'Luzon' },
+  { code: 'CAR', short: 'Cordillera (CAR)', label: 'CAR – Cordillera Administrative Region', island: 'Luzon' },
+  { code: 'R1', short: 'Ilocos Region', label: 'Region I – Ilocos Region', island: 'Luzon' },
+  { code: 'R2', short: 'Cagayan Valley', label: 'Region II – Cagayan Valley', island: 'Luzon' },
+  { code: 'R3', short: 'Central Luzon', label: 'Region III – Central Luzon', island: 'Luzon' },
+  { code: 'R4A', short: 'CALABARZON', label: 'Region IV-A – CALABARZON', island: 'Luzon' },
+  { code: 'MIMAROPA', short: 'MIMAROPA', label: 'MIMAROPA (Region IV-B)', island: 'Luzon' },
+  { code: 'R5', short: 'Bicol Region', label: 'Region V – Bicol Region', island: 'Luzon' },
+  { code: 'R6', short: 'Western Visayas', label: 'Region VI – Western Visayas', island: 'Visayas' },
+  { code: 'R7', short: 'Central Visayas', label: 'Region VII – Central Visayas', island: 'Visayas' },
+  { code: 'R8', short: 'Eastern Visayas', label: 'Region VIII – Eastern Visayas', island: 'Visayas' },
+  { code: 'R9', short: 'Zamboanga Peninsula', label: 'Region IX – Zamboanga Peninsula', island: 'Mindanao' },
+  { code: 'R10', short: 'Northern Mindanao', label: 'Region X – Northern Mindanao', island: 'Mindanao' },
+  { code: 'R11', short: 'Davao Region', label: 'Region XI – Davao Region', island: 'Mindanao' },
+  { code: 'R12', short: 'SOCCSKSARGEN', label: 'Region XII – SOCCSKSARGEN', island: 'Mindanao' },
+  { code: 'R13', short: 'Caraga', label: 'Region XIII – Caraga', island: 'Mindanao' },
+  { code: 'BARMM', short: 'BARMM', label: 'BARMM – Bangsamoro', island: 'Mindanao' }
+];
+const REGIONS = REGION_DEFS.map(r => r.code);
+const REGION_LABELS = Object.fromEntries(REGION_DEFS.map(r => [r.code, r.label]));
+// <option> list grouped by island (Luzon / Visayas / Mindanao) for the sort & dispatch pickers.
+function regionOptions(selected) {
+  return ['Luzon', 'Visayas', 'Mindanao'].map(grp =>
+    `<optgroup label="${grp}">` +
+    REGION_DEFS.filter(r => r.island === grp)
+      .map(r => `<option value="${r.code}"${r.code === selected ? ' selected' : ''}>${esc(r.label)}</option>`).join('') +
+    `</optgroup>`).join('');
+}
 const SIZES = ['SMALL', 'MEDIUM', 'LARGE', 'JUMBO', 'CUSTOM'];
 const SERVICE_TYPES_EN = { DOOR_TO_DOOR: 'Door to Door', PORT_TO_PORT: 'Port to Port', DOOR_TO_PORT: 'Door to Port', DOOR_TO_AIRPORT: 'Door to Airport' };
 const SERVICE_TYPES = new Proxy(SERVICE_TYPES_EN, {
@@ -565,17 +594,30 @@ function personName(p) {
   const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
   return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim() + (suffix ? ' ' + suffix : '');
 }
-// PSGC region names → the app's internal delivery-region enum (used for sorting/dispatch).
+// PSGC region names → the 17-region delivery-region code (used for sorting/dispatch).
 function mapPsgcRegion(name) {
   const n = String(name || '').toLowerCase();
   if (!n) return null;
   if (n.includes('national capital') || /\bncr\b/.test(n)) return 'NCR';
-  if (n.includes('calabarzon') || n.includes('iv-a')) return 'CALABARZON';
-  if (n.includes('mimaropa')) return 'MIMAROPA';
-  if (n.includes('ilocos') || n.includes('cagayan') || n.includes('cordillera') || n.includes('central luzon')) return 'NORTH_LUZON';
-  if (n.includes('bicol')) return 'SOUTH_LUZON';
-  if (n.includes('visayas')) return 'VISAYAS';
-  if (n.includes('mindanao') || n.includes('davao') || n.includes('zamboanga') || n.includes('soccsksargen') || n.includes('caraga') || n.includes('bangsamoro')) return 'MINDANAO';
+  if (n.includes('cordillera') || /\bcar\b/.test(n)) return 'CAR';
+  if (n.includes('ilocos')) return 'R1';
+  if (n.includes('cagayan valley')) return 'R2';
+  if (n.includes('central luzon')) return 'R3';
+  if (n.includes('calabarzon') || n.includes('iv-a') || n.includes('iv a')) return 'R4A';
+  if (n.includes('mimaropa') || n.includes('iv-b')) return 'MIMAROPA';
+  if (n.includes('bicol')) return 'R5';
+  if (n.includes('western visayas')) return 'R6';
+  if (n.includes('central visayas')) return 'R7';
+  if (n.includes('eastern visayas')) return 'R8';
+  if (n.includes('zamboanga')) return 'R9';
+  if (n.includes('northern mindanao')) return 'R10';
+  if (n.includes('davao')) return 'R11';
+  if (n.includes('soccsksargen') || n.includes('cotabato')) return 'R12';
+  if (n.includes('caraga')) return 'R13';
+  if (n.includes('bangsamoro') || n.includes('barmm') || n.includes('muslim mindanao')) return 'BARMM';
+  if (n.includes('visayas')) return 'R7';
+  if (n.includes('mindanao')) return 'R10';
+  if (n.includes('luzon')) return 'R3';
   return null;
 }
 
@@ -645,7 +687,7 @@ function newCustomerFormHtml(prefix) {
       <div><label>Barangay</label><input id="${prefix}Brgy"></div>
       <div><label>City / Municipality</label><input id="${prefix}City"></div>
       <div><label>Province</label><input id="${prefix}Prov"></div>
-      <div><label>Region</label><select id="${prefix}Region"><option value="">—</option>${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select></div>
+      <div><label>Region</label><select id="${prefix}Region"><option value="">—</option>${regionOptions()}</select></div>
       <div><label>Country</label><input id="${prefix}Country" value="Philippines"></div>
       <div><label>Landmark</label><input id="${prefix}Landmark" placeholder="Critical for remote addresses!"></div>
     </div>
@@ -964,8 +1006,8 @@ async function pageBoxes() {
       <input id="bq" placeholder="Search box #, sender, receiver, phone…" style="max-width:280px" value="${esc(q.get('q') || '')}">
       <select id="bstatus" style="max-width:210px"><option value="">All statuses</option>
         ${PIPELINE.map(s => `<option value="${s}" ${q.get('status') === s ? 'selected' : ''}>${STATUS_LABELS[s]}</option>`).join('')}</select>
-      <select id="bregion" style="max-width:190px"><option value="">All regions</option>
-        ${REGIONS.map(r => `<option value="${r}" ${q.get('region') === r ? 'selected' : ''}>${REGION_LABELS[r]}</option>`).join('')}</select>
+      <select id="bregion" style="max-width:210px"><option value="">All regions</option>
+        ${regionOptions(q.get('region'))}</select>
       <button class="small" onclick="boxFilter()">Filter</button>
     </div>
     <div class="card table-scroll">
@@ -1028,7 +1070,7 @@ async function pageBoxDetail(id) {
       <h2 style="margin-top:0">Actions</h2>
       <div class="inline-actions">
         ${nexts.map(s => s === 'SORTED'
-          ? `<select id="sortRegion" style="max-width:190px">${REGIONS.map(rg => `<option value="${rg}" ${rg === receiverRegion ? 'selected' : ''}>${REGION_LABELS[rg]}</option>`).join('')}</select>
+          ? `<select id="sortRegion" style="max-width:220px">${regionOptions(receiverRegion)}</select>
              <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
           : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
         ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
@@ -1423,8 +1465,8 @@ async function pageWarehouse() {
       <h2 style="margin-top:0">2 · Segregate by region</h2>
       <div class="muted">Scan any received box — its destination region is prefilled from the receiver's address. Or pick a region lane first for bulk sorting.</div>
       <label>Region lane (optional — forces every scan into this lane)</label>
-      <select id="laneRegion" style="max-width:260px"><option value="">Auto (use receiver's region)</option>
-        ${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select>
+      <select id="laneRegion" style="max-width:280px"><option value="">Auto (use receiver's region)</option>
+        ${regionOptions()}</select>
     </div>
     ${scannerHtml('Scan a box to mark it Sorted into its region lane')}
     <div class="card" id="sortPick">Loading…</div>`);
@@ -1458,7 +1500,7 @@ async function pageTrips() {
         <div><label>Driver contact</label><input id="tpContact" placeholder="+63 9xx"></div>
         <div><label>Plate number</label><input id="tpPlate"></div>
         <div><label>Trucking co / co-loader</label><input id="tpCompany"></div>
-        <div><label>Region *</label><select id="tpRegion">${REGIONS.map(r => `<option value="${r}">${REGION_LABELS[r]}</option>`).join('')}</select></div>
+        <div><label>Region *</label><select id="tpRegion">${regionOptions()}</select></div>
         <div><label>Scheduled date</label><input id="tpDate" type="date"></div>
       </div>
       <button onclick="createTrip()">Create trip</button>
@@ -1675,7 +1717,7 @@ async function pageCustomerDetail(id) {
         <div><label>Barangay</label><input id="edBrgy" value="${esc(c.barangay)}"></div>
         <div><label>City</label><input id="edCity" value="${esc(c.city_municipality)}"></div>
         <div><label>Province</label><input id="edProv" value="${esc(c.province)}"></div>
-        <div><label>Region</label><select id="edRegion"><option value="">—</option>${REGIONS.map(r => `<option value="${r}" ${c.region === r ? 'selected' : ''}>${REGION_LABELS[r]}</option>`).join('')}</select></div>
+        <div><label>Region</label><select id="edRegion"><option value="">—</option>${regionOptions(c.region)}</select></div>
         <div><label>Landmark</label><input id="edLandmark" value="${esc(c.landmark)}"></div>
         <div><label>Notes</label><input id="edNotes" value="${esc(c.notes)}"></div>
       </div>

@@ -11,6 +11,7 @@ const sess = require('./lib/session');
 const BOC = require('./lib/boc');
 const BOXSIZE = require('./lib/boxsizes');
 const REF = require('./lib/refdata');
+const REGION = require('./lib/regions');
 
 // Service types where VFIC collects the box from the sender → a pick-up slot is required.
 const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
@@ -1239,10 +1240,7 @@ function rateLimit(req, res, next) {
   if (entry.count > 30) return res.status(429).json({ error: 'Too many requests — please wait a minute.' });
   next();
 }
-const PUB_REGION_LABELS = {
-  NCR: 'NCR / Metro Manila', NORTH_LUZON: 'North Luzon', SOUTH_LUZON: 'South Luzon',
-  CALABARZON: 'CALABARZON', MIMAROPA: 'MIMAROPA', VISAYAS: 'Visayas', MINDANAO: 'Mindanao'
-};
+const PUB_REGION_LABELS = REGION.SHORT;
 function regionLabelPub(r) { return PUB_REGION_LABELS[r] || r || 'your region'; }
 function fmtPHDate(iso) {
   return iso ? new Date(iso).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' }) : '';
