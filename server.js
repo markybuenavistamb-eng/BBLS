@@ -1449,9 +1449,17 @@ app.all('/api/cron/process-notifications', async (req, res) => {
 
 // ---------- static ----------
 // Public marketing landing page is the site root; staff SPA lives at /index.html (alias /app).
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
-app.get('/app', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+const noCache = res => res.set('Cache-Control', 'no-cache');
+app.get('/', (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'landing.html')); });
+app.get('/app', (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
+// Serve assets with must-revalidate so a new deploy is picked up immediately (no stale app.js/CSS).
+// ETags still yield cheap 304s when a file is unchanged.
+app.use(express.static(path.join(__dirname, 'public'), {
+  index: false,
+  setHeaders: (res, filePath) => {
+    if (/\.(html|js|css)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
 
 // Local dev only: start the HTTP server + in-process SMS worker. On Vercel the app is imported
 // as a serverless function (api/index.js) and the worker runs via Cron.
