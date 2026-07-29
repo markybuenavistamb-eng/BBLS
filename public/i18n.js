@@ -13,7 +13,7 @@
       'shell.viewSite': 'View public site',
 
       /* nav */
-      'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxes': 'Boxes',
+      'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.warehouse': 'Warehouse', 'nav.trips': 'Trips',
       'nav.returns': 'Returns', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
       'nav.reports': 'Reports', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
@@ -58,7 +58,7 @@
 
       /* landing */
       'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
-      'land.hero.line1': 'We deliver your', 'land.hero.line2': 'Balikbayan Boxes',
+      'land.hero.line1': 'Delivering your love, sacrifice,', 'land.hero.line2': 'and blessings home.',
       'land.hero.kicker': 'Worldwide to the Philippines · Since day one',
       'land.hero.title': 'Your balikbayan box, safely home.',
       'land.hero.sub': 'Victors Freight International Corporation ships your boxes and personal cargo from anywhere in the world to every corner of the Philippines — door to door, tracked every step of the way.',
@@ -74,8 +74,8 @@
       'land.how.2t': 'We consolidate', 'land.how.2d': 'Your box is loaded into a container and shipped to the Philippines.',
       'land.how.3t': 'Arrival & sorting', 'land.how.3d': 'On arrival we strip, sort by region, and schedule delivery.',
       'land.how.4t': 'Delivered home', 'land.how.4d': 'We deliver to the doorstep with photo proof and an SMS to both sender and receiver.',
-      'land.track.title': 'Where is my box?', 'land.track.sub': 'Track any shipment with your box number, or scan the QR code on your label.',
-      'land.track.btn': 'Open box tracking',
+      'land.buy.title': 'What if I don’t have a box?', 'land.buy.sub': 'No box yet? Order one from us — choose your size, and we’ll deliver it to your address or you can pick it up at our office.',
+      'land.buy.btn': 'Order a box',
       'land.send.title': 'Sending a box?', 'land.send.sub': 'Fill out our receiving form online before you drop off — it only takes a few minutes.',
       'land.send.btn': 'Fill out receiving form',
       'land.contact.title': 'Get in touch', 'land.contact.head': 'Head Office',
@@ -132,7 +132,7 @@
       'shell.language': 'Wika',
       'shell.viewSite': 'Tingnan ang public site',
 
-      'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxes': 'Mga Kahon',
+      'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.warehouse': 'Bodega', 'nav.trips': 'Mga Biyahe',
       'nav.returns': 'Mga Naibalik', 'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
       'nav.reports': 'Mga Ulat', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
@@ -170,7 +170,7 @@
       'dash.inTransit': 'Mga container sa biyahe', 'dash.activeTrips': 'Aktibong biyahe', 'dash.recentSms': 'Kamakailang SMS',
 
       'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
-      'land.hero.line1': 'Inihahatid namin ang inyong', 'land.hero.line2': 'Balikbayan Boxes',
+      'land.hero.line1': 'Inihahatid ang inyong pagmamahal, sakripisyo,', 'land.hero.line2': 'at biyaya pauwi.',
       'land.hero.kicker': 'Buong mundo papuntang Pilipinas · Maaasahan',
       'land.hero.title': 'Ang inyong balikbayan box, ligtas na nakauwi.',
       'land.hero.sub': 'Ipinapadala ng Victors Freight International Corporation ang inyong mga kahon at personal na kargamento mula saanman sa mundo patungo sa bawat sulok ng Pilipinas — mula pintuan hanggang pintuan, may tracking sa bawat hakbang.',
@@ -186,8 +186,8 @@
       'land.how.2t': 'Pagsasama-sama', 'land.how.2d': 'Ikakarga ang inyong kahon sa container at ipapadala sa Pilipinas.',
       'land.how.3t': 'Pagdating at pagbukod', 'land.how.3d': 'Pagdating, ibinababa, ibinubukod ayon sa rehiyon, at iniiskedyul para ihatid.',
       'land.how.4t': 'Naihatid pauwi', 'land.how.4d': 'Inihahatid sa pintuan na may larawang patunay at SMS sa nagpadala at tatanggap.',
-      'land.track.title': 'Nasaan ang aking kahon?', 'land.track.sub': 'I-track ang anumang padala gamit ang box number, o i-scan ang QR code sa inyong label.',
-      'land.track.btn': 'Buksan ang tracking',
+      'land.buy.title': 'Paano kung wala akong kahon?', 'land.buy.sub': 'Wala pang kahon? Bumili sa amin — piliin ang laki, at ihahatid namin sa inyong address o maaari ninyong kunin sa aming opisina.',
+      'land.buy.btn': 'Umorder ng kahon',
       'land.send.title': 'Magpapadala ng kahon?', 'land.send.sub': 'Sagutan ang aming receiving form online bago mag-drop off — ilang minuto lang.',
       'land.send.btn': 'Sagutan ang receiving form',
       'land.contact.title': 'Makipag-ugnayan', 'land.contact.head': 'Punong Tanggapan',

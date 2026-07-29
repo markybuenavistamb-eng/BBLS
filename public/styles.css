@@ -613,3 +613,24 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .pub-band .brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: .5px; }
 .pub-band .brand .badge-vf { background: var(--primary); padding: 3px 8px; border-radius: 6px; }
 .pub-band .spacer { flex: 1; }
+
+/* Info note (returning-sender autofill, office pick-up, etc.) */
+.note-info {
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a;
+  border-radius: 10px; padding: 10px 12px; font-size: 13px;
+}
+
+/* Order-a-box catalogue */
+.ob-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.ob-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card); display: flex; flex-direction: column; }
+.ob-pic { display: flex; justify-content: center; align-items: flex-end; padding: 8px 8px 0; background: linear-gradient(180deg, #faf7f2, #fff); min-height: 128px; }
+.ob-body { padding: 10px 12px 12px; }
+.ob-name { font-weight: 800; font-size: 15px; }
+.ob-tag { font-size: 10px; font-weight: 700; background: var(--primary); color: #fff; border-radius: 5px; padding: 1px 6px; vertical-align: middle; }
+.ob-spec { font-size: 12.5px; margin-top: 2px; }
+.ob-qty { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.ob-qty input { width: 62px; text-align: center; }
+.qbtn { width: 34px; height: 34px; border: 1px solid var(--border); background: #f8fafc; border-radius: 8px; font-size: 18px; font-weight: 800; cursor: pointer; line-height: 1; color: var(--primary); }
+.qbtn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.ob-total { margin-top: 12px; font-weight: 600; font-size: 13px; color: var(--muted); }
+.input-locked { background: #f1f5f9; color: var(--muted); }

@@ -13,9 +13,6 @@ const BOXSIZE = require('./lib/boxsizes');
 const REF = require('./lib/refdata');
 const REGION = require('./lib/regions');
 
-// Service types where VFIC collects the box from the sender → a pick-up slot is required.
-const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
-
 const PORT = process.env.PORT || 3000;
 const app = express();
 app.set('trust proxy', true); // behind Vercel's proxy: correct req.protocol/secure + client IP
@@ -307,6 +304,7 @@ app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => 
   if (!Array.isArray(b.boxes) || !b.boxes.length) return res.status(400).json({ error: 'At least one box is required' });
   if (!b.passport_file) return res.status(400).json({ error: 'A scanned/soft copy of the sender\'s passport or government ID is required' });
   if (b.service_type && !SM.SERVICE_TYPES.includes(b.service_type)) return res.status(400).json({ error: 'Invalid service type' });
+  if (b.service_level && !SM.SERVICE_LEVELS.includes(b.service_level)) return res.status(400).json({ error: 'Invalid service level' });
   for (const bx of b.boxes) {
     if (!d.customers.find(c => c.id === +bx.receiver_id)) return res.status(400).json({ error: 'Every box needs a valid receiver' });
     if (bx.size_category && !SM.SIZE_CATEGORIES.includes(bx.size_category)) return res.status(400).json({ error: 'Invalid size category' });
@@ -318,6 +316,8 @@ app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => 
     sender_id: sender.id,
     origin_country: b.origin_country || '', origin_agent: b.origin_agent || '',
     service_type: b.service_type || 'DOOR_TO_DOOR',
+    service_level: SM.SERVICE_LEVELS.includes(b.service_level) ? b.service_level : 'OCEAN_ECONOMY',
+    collection: b.collection === 'DROPOFF' ? 'DROPOFF' : (b.collection === 'PICKUP' ? 'PICKUP' : null),
     receiving_form_file: b.receiving_form_file || null,
     packing_list_file: b.packing_list_file || null,
     passport_file: b.passport_file || null,
@@ -362,7 +362,7 @@ app.put('/api/shipments/:id', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) 
   if (!s) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
   if (b.payment_status && !['PAID', 'UNPAID'].includes(b.payment_status)) return res.status(400).json({ error: 'Invalid payment status' });
-  for (const k of ['origin_country', 'origin_agent', 'service_type', 'receiving_form_file', 'packing_list_file', 'passport_file', 'shipping_fee_amount', 'currency', 'payment_status']) {
+  for (const k of ['origin_country', 'origin_agent', 'service_type', 'service_level', 'collection', 'receiving_form_file', 'packing_list_file', 'passport_file', 'shipping_fee_amount', 'currency', 'payment_status']) {
     if (k in b) s[k] = b[k];
   }
   db.persist();
@@ -387,13 +387,15 @@ app.get('/api/box-sizes', (req, res) => {
     boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
     excess_charge_per_kg: d.settings.excessWeightChargePerKg != null ? d.settings.excessWeightChargePerKg : null,
     excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP',
-    max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 150000
+    max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 150000,
+    service_levels: SM.SERVICE_LEVELS,
+    origin_countries: REF.ORIGIN_COUNTRIES
   });
 });
 
 // Reference lists for the Container booking form (shipping lines, origin/destination ports).
 app.get('/api/refdata', requireAuth, (req, res) => {
-  res.json({ shipping_lines: REF.SHIPPING_LINES, origin_ports: REF.ORIGIN_PORTS, destination_ports: REF.DESTINATION_PORTS });
+  res.json({ shipping_lines: REF.SHIPPING_LINES, origin_ports: REF.ORIGIN_PORTS, origin_countries: REF.ORIGIN_COUNTRIES, destination_ports: REF.DESTINATION_PORTS });
 });
 
 // ---------- online intake requests (public self-service fill-up, reviewed & encoded by staff) ----------
@@ -435,14 +437,15 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
       sender.business_name = need(b.business_name, 'Business Name');
     }
 
-    const service_type = SM.SERVICE_TYPES.includes(b.service_type) ? b.service_type : 'DOOR_TO_DOOR';
+    const service_level = SM.SERVICE_LEVELS.includes(b.service_level) ? b.service_level : 'OCEAN_ECONOMY';
+    const collection = SM.COLLECTION_METHODS.includes(b.collection) ? b.collection : 'PICKUP';
     const origin_agent = need(b.origin_agent, 'Sending From');
     const origin_country = need(b.origin_country, 'Country');
     const total_value_php = need(b.total_value_php, 'Total Value for this Shipment');
 
-    // --- Pick-up scheduling (only for services where VFIC collects the box) ---
+    // --- Pick-up scheduling (only when VFIC collects the box from the sender) ---
     let pickup = null;
-    if (PICKUP_SERVICES.includes(service_type)) {
+    if (collection === 'PICKUP') {
       let p = {};
       try { p = JSON.parse(b.pickup || '{}') || {}; } catch (e) { return bad('Invalid pick-up data'); }
       pickup = {
@@ -521,7 +524,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
       availment_type: availment,
       sender_type: senderType,
       sender,
-      origin_country, origin_agent, service_type,
+      origin_country, origin_agent, service_level, collection,
       pickup,
       total_value_php: +total_value_php || 0,
       currency: b.currency || 'USD',
@@ -562,6 +565,72 @@ app.put('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
   if (status === 'CONVERTED') r.converted_shipment_id = shipment_id || null;
   db.persist();
   res.json(r);
+});
+
+// ---------- box orders (public "buy a box from us" — customer has no box yet) ----------
+// A customer with no box orders empty balikbayan box(es) from VFIC; we deliver to their
+// address or they collect at the office. Staff fulfil it from the Box Orders queue.
+app.post('/api/public/box-orders', rateLimit, (req, res) => {
+  const b = req.body || {};
+  const need = (v, label) => { if (!String(v || '').trim()) throw new Error(`${label} is required`); return String(v).trim(); };
+  try {
+    const validSizes = BOXSIZE.BOX_SIZES.map(s => s.key);
+    const items = (Array.isArray(b.items) ? b.items : [])
+      .filter(it => it && validSizes.includes(it.size) && +it.qty > 0)
+      .map(it => ({ size: it.size, qty: Math.min(999, Math.floor(+it.qty)) }));
+    if (!items.length) throw new Error('Please choose at least one box size and quantity');
+    const delivery = b.delivery_method === 'PICKUP_OFFICE' ? 'PICKUP_OFFICE' : 'DELIVER_ADDRESS';
+    const contact = {
+      name: need(b.contact_name, 'Name'),
+      phone: BOC.normalizePhMobile(b.contact_phone),
+      email: String(b.contact_email || '').trim()
+    };
+    if (!BOC.isValidPhMobile(contact.phone)) throw new Error('Contact number must be 11 digits starting with 09');
+    let address = null;
+    if (delivery === 'DELIVER_ADDRESS') {
+      address = {
+        region: need(b.region, 'Region'),
+        city_municipality: need(b.city_municipality, 'City / Municipality'),
+        barangay: need(b.barangay, 'Barangay'),
+        street_address: need(b.street_address, 'House No. / Street'),
+        postal_code: String(b.postal_code || '').trim(),
+        landmark: String(b.landmark || '').trim()
+      };
+    }
+    const d = db.get();
+    d.box_orders = d.box_orders || [];
+    const total_qty = items.reduce((n, it) => n + it.qty, 0);
+    const rec = {
+      id: db.nextId('box_order'),
+      reference_code: db.nextBoxOrderCode(),
+      status: 'NEW',
+      submitted_at: new Date().toISOString(),
+      items, total_qty, delivery_method: delivery, address, contact,
+      notes: String(b.notes || '').trim()
+    };
+    d.box_orders.push(rec);
+    db.persist();
+    res.json({ reference_code: rec.reference_code, submitted_at: rec.submitted_at });
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'Invalid order' });
+  }
+});
+app.get('/api/box-orders', requireRole(...AGENTS), (req, res) => {
+  const d = db.get();
+  let list = (d.box_orders || []).slice();
+  if (req.query.status) list = list.filter(o => o.status === req.query.status);
+  list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
+  res.json(list);
+});
+app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
+  const d = db.get();
+  const o = (d.box_orders || []).find(x => x.id === +req.params.id);
+  if (!o) return res.status(404).json({ error: 'Not found' });
+  const { status } = req.body || {};
+  if (!['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  o.status = status;
+  db.persist();
+  res.json(o);
 });
 
 // ---------- boxes ----------

@@ -59,6 +59,11 @@ const SERVICE_TYPES_EN = { DOOR_TO_DOOR: 'Door to Door', PORT_TO_PORT: 'Port to 
 const SERVICE_TYPES = new Proxy(SERVICE_TYPES_EN, {
   get: (tgt, k) => (typeof k === 'string' && tgt[k] != null) ? VI.t('service.' + k, tgt[k]) : tgt[k]
 });
+// Service level = freight product chosen at booking.
+const SERVICE_LEVELS = ['OCEAN_ECONOMY', 'OCEAN_PRIORITY', 'EXPRESS_AIR'];
+const SERVICE_LEVEL_LABELS = { OCEAN_ECONOMY: 'Ocean Economy', OCEAN_PRIORITY: 'Ocean Priority', EXPRESS_AIR: 'Express Air' };
+const svcLevelLabel = (s) => SERVICE_LEVEL_LABELS[s && s.service_level] || (s && s.service_level) || (SERVICE_TYPES[s && s.service_type] || (s && s.service_type) || '—');
+const COLLECTION_LABELS = { PICKUP: 'Pick-up from sender', DROPOFF: 'Drop-off at office' };
 const FAILURE_REASONS = { UNREACHABLE: 'Receiver unreachable by phone', ADDRESS_NOT_FOUND: 'Address not found', RECEIVER_ABSENT: 'Receiver absent', REFUSED: 'Delivery refused', OTHER: 'Other' };
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -205,6 +210,7 @@ const NAV = [
   { section: 'nav.section.ops' },
   ['#/dashboard', 'nav.dashboard', 'grid', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
   ['#/shipments', 'nav.shipments', 'package', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
+  ['#/box-orders', 'nav.boxorders', 'box', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
   ['#/boxes', 'nav.boxes', 'box', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
   ['#/containers', 'nav.containers', 'container', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
   ['#/warehouse', 'nav.warehouse', 'warehouse', ['ADMIN', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
@@ -253,6 +259,7 @@ async function route() {
     if (p[0] === 'shipments' && p[1] === 'new') return pageShipmentNew(+(hashQuery().get('intake')) || null);
     if (p[0] === 'receiving-form-blank') return pageReceivingFormBlank(+(hashQuery().get('extra')) || 0);
     if (p[0] === 'intake-requests') return pageIntakeRequests();
+    if (p[0] === 'box-orders') return pageBoxOrders();
     if (p[0] === 'shipments' && p[1]) return pageShipmentDetail(+p[1]);
     if (p[0] === 'shipments') return pageShipments();
     if (p[0] === 'labels' && p[1] === 's') return pageLabels('shipment', +p[2]);
@@ -401,7 +408,7 @@ async function pageShipments() {
       ${list.map(s => `<tr>
         <td><a href="#/shipments/${s.id}">${esc(s.shipment_number)}</a></td>
         <td>${esc(s.sender_name)}</td><td>${s.box_count}</td>
-        <td>${esc(SERVICE_TYPES[s.service_type] || s.service_type)}</td>
+        <td>${esc(svcLevelLabel(s))}</td>
         <td>${esc(s.origin_agent || s.origin_country)}</td>
         <td>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'}</td>
         <td>${payBadge(s.payment_status)}</td><td>${fmtDay(s.created_at)}</td>
@@ -433,6 +440,35 @@ async function pageIntakeRequests() {
 async function dismissIntake(id) {
   if (!confirm('Dismiss this submission? Use this for spam or accidental duplicates.')) return;
   try { await api('/api/intake-requests/' + id, { method: 'PUT', body: { status: 'DISMISSED' } }); route(); } catch (e) { showErr(e); }
+}
+
+const BOX_ORDER_STATUSES = ['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'];
+const BOX_ORDER_BADGE = { NEW: 'st-created', PREPARING: 'st-sorted', DISPATCHED: 'st-out_for_delivery', FULFILLED: 'st-delivered', CANCELLED: 'st-cancelled' };
+function SIZE_LABEL(key) { const m = { MINI: 'Mini', MEDIUM: 'Medium', LARGE: 'Large', XL: 'Extra Large', JUMBO: 'Jumbo' }; return m[key] || key; }
+async function pageBoxOrders() {
+  const list = await api('/api/box-orders');
+  const fulfilLabel = { DELIVER_ADDRESS: 'Deliver to address', PICKUP_OFFICE: 'Pick up at office' };
+  view(`
+    <h1>Box Orders</h1>
+    <div class="muted" style="margin-bottom:10px">Customers with no box yet who ordered empty balikbayan box(es) via the public “Order a box” page. Prepare and deliver, or have them pick up at the office.</div>
+    <div class="card table-scroll">
+      <table><tr><th>Reference</th><th>Customer</th><th>Boxes ordered</th><th>Fulfilment</th><th>Submitted</th><th>Status</th></tr>
+      ${list.map(o => `<tr>
+        <td>${esc(o.reference_code)}</td>
+        <td>${esc(o.contact.name)}<div class="muted">${esc(o.contact.phone)}${o.contact.email ? ' · ' + esc(o.contact.email) : ''}</div></td>
+        <td>${esc(o.items.map(it => `${it.qty}× ${SIZE_LABEL(it.size)}`).join(', '))} <span class="muted">(${o.total_qty})</span></td>
+        <td>${esc(fulfilLabel[o.delivery_method] || o.delivery_method)}${o.delivery_method === 'DELIVER_ADDRESS' && o.address ? `<div class="muted wrap-cell" style="max-width:260px">${esc([o.address.street_address, o.address.barangay, o.address.city_municipality, o.address.region, o.address.postal_code].filter(Boolean).join(', '))}${o.address.landmark ? ' · 📍 ' + esc(o.address.landmark) : ''}</div>` : ''}${o.notes ? `<div class="muted">“${esc(o.notes)}”</div>` : ''}</td>
+        <td>${fmtDate(o.submitted_at)}</td>
+        <td><span class="badge ${BOX_ORDER_BADGE[o.status] || 'st-created'}">${esc(o.status)}</span>
+          ${canIntake() ? `<div style="margin-top:4px"><select class="small" onchange="setBoxOrderStatus(${o.id}, this.value)">
+            ${BOX_ORDER_STATUSES.map(s => `<option value="${s}" ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}
+          </select></div>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">No box orders yet</td></tr>'}
+      </table>
+    </div>`);
+}
+async function setBoxOrderStatus(id, status) {
+  try { await api('/api/box-orders/' + id, { method: 'PUT', body: { status } }); flash('Order → ' + status); route(); } catch (e) { showErr(e); }
 }
 
 let CUSTOMERS = [];
@@ -521,7 +557,7 @@ async function pageShipmentNew(intakeId) {
         <div><label>Sender *</label><select id="shSender">${customerOptions('SENDER')}</select></div>
         <div><label>Origin country</label><input id="shOrigin" value="${intake ? esc(intake.origin_country) : 'USA'}"></div>
         <div><label>Origin branch / agent</label><input id="shAgent" value="${intake ? esc(intake.origin_agent) : ''}"></div>
-        <div><label>Service type</label><select id="shService">${Object.entries(SERVICE_TYPES).map(([k, v]) => `<option value="${k}" ${intake && intake.service_type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label>Service Level</label><select id="shService">${SERVICE_LEVELS.map(k => `<option value="${k}" ${intake && intake.service_level === k ? 'selected' : ''}>${esc(SERVICE_LEVEL_LABELS[k])}</option>`).join('')}</select></div>
       </div>
       <details class="collapse"><summary>+ Create new customer (sender or receiver)</summary>${newCustomerFormHtml('nc')}</details>
       <h2>Fees & documents</h2>
@@ -667,7 +703,8 @@ function intakeSubmittedDetailsHtml(intake) {
           ${line('Address abroad', s.address_abroad)}
           ${line('Address in PH', s.address_ph)}
           ${line('Origin', [intake.origin_agent, intake.origin_country].filter(Boolean).join(', '))}
-          ${line('Service type', SERVICE_TYPES[intake.service_type] || intake.service_type)}
+          ${line('Service level', SERVICE_LEVEL_LABELS[intake.service_level] || intake.service_level)}
+          ${line('Collection', COLLECTION_LABELS[intake.collection] || (intake.pickup ? 'Pick-up from sender' : 'Drop-off at office'))}
           ${line('Total shipment value', intake.total_value_php != null ? 'Php ' + Number(intake.total_value_php).toLocaleString() : '')}
           ${p ? line('Pick-up', `${p.date || ''} (${p.time_window || ''}) - ${p.address || ''}${p.notes ? ' / ' + p.notes : ''}`) : ''}
         </div>
@@ -757,7 +794,7 @@ async function createShipment() {
       method: 'POST',
       body: {
         sender_id: +shSender.value, origin_country: shOrigin.value, origin_agent: shAgent.value,
-        service_type: shService.value, shipping_fee_amount: shFee.value || null, currency: shCurrency.value,
+        service_level: shService.value, collection: (PREFILL_INTAKE && PREFILL_INTAKE.collection) || null, shipping_fee_amount: shFee.value || null, currency: shCurrency.value,
         payment_status: shPaid.value, receiving_form_file, packing_list_file, passport_file, boxes,
         boc: PREFILL_INTAKE ? {
           availment_type: PREFILL_INTAKE.availment_type,
@@ -793,7 +830,7 @@ async function pageShipmentDetail(id) {
     </div>
     <div class="card form-grid">
       <div><label>Sender</label><a href="#/customers/${s.sender_id}">${esc(s.sender ? s.sender.full_name : '')}</a><div class="muted">${esc(s.sender ? s.sender.phone_primary : '')}</div></div>
-      <div><label>Service</label>${esc(SERVICE_TYPES[s.service_type] || s.service_type)}</div>
+      <div><label>Service level</label>${esc(svcLevelLabel(s))}${s.collection ? ` · <span class="muted">${esc(COLLECTION_LABELS[s.collection] || '')}</span>` : ''}</div>
       <div><label>Origin</label>${esc([s.origin_agent, s.origin_country].filter(Boolean).join(', '))}</div>
       <div><label>Fee</label>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'} ${payBadge(s.payment_status)}
         ${canIntake() ? `<button class="small secondary" onclick="togglePayment(${s.id}, '${s.payment_status === 'PAID' ? 'UNPAID' : 'PAID'}')">Mark ${s.payment_status === 'PAID' ? 'unpaid' : 'paid'}</button>` : ''}</div>

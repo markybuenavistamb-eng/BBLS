@@ -10,6 +10,9 @@ let EXCESS_RATE = null;
 let EXCESS_CCY = 'PHP';
 let BOC_MAX_CBM = 0.20;
 let MAX_BOX_VALUE = 150000; // per-box declared-value ceiling (admin-configurable)
+let SERVICE_LEVELS = ['OCEAN_ECONOMY', 'OCEAN_PRIORITY', 'EXPRESS_AIR'];
+const SERVICE_LEVEL_LABELS = { OCEAN_ECONOMY: 'Ocean Economy', OCEAN_PRIORITY: 'Ocean Priority', EXPRESS_AIR: 'Express Air' };
+let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
 
 async function loadBoxSizes() {
   try {
@@ -20,6 +23,8 @@ async function loadBoxSizes() {
     EXCESS_CCY = d.excess_charge_currency || 'PHP';
     BOC_MAX_CBM = d.boc_max_cbm || 0.20;
     if (d.max_box_value_php != null) MAX_BOX_VALUE = d.max_box_value_php;
+    if (Array.isArray(d.service_levels) && d.service_levels.length) SERVICE_LEVELS = d.service_levels;
+    if (Array.isArray(d.origin_countries) && d.origin_countries.length) ORIGIN_COUNTRIES = d.origin_countries;
   } catch (e) { BOX_SIZES = []; }
 }
 const peso = (v) => 'Php ' + Number(v || 0).toLocaleString('en-PH');
@@ -156,9 +161,8 @@ function onPickupSameChange() {
 }
 function syncPickupIfSame() { const cb = gid('puSameAbroad'); if (cb && cb.checked) onPickupSameChange(); }
 
-const SERVICE_KEYS = ['DOOR_TO_DOOR', 'PORT_TO_PORT', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
-// Service types that involve VFIC collecting the box from the sender → need a pick-up slot.
-const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
+// Collection: sender either has VFIC pick up the box, or drops it off at the office.
+function isPickup() { const cb = gid('oDropoff'); return !(cb && cb.checked); }
 
 const AVAILMENT_TYPES = [
   { key: 'BB_1ST', group: 'Balikbayan Box privilege', label: '1st Time' },
@@ -331,6 +335,7 @@ function renderForm() {
         Incomplete or wrong receiver details are the main cause of failed deliveries.
         Additional charges apply for re-delivery caused by incorrect or unreachable contact details.
       </div>
+      <div style="margin-top:6px"><b>All fields with an asterisk (*) are required.</b></div>
     </div>
 
     <div class="card">
@@ -381,15 +386,19 @@ function renderForm() {
 
       <div class="form-grid">
         <div><label>Sending From (branch / city) *</label><input id="oAgent" required></div>
-        <div><label>Country *</label><input id="sCountry" required></div>
-        <div><label>Service Type *</label><select id="oService" required onchange="onServiceChange()">
-          ${SERVICE_KEYS.map(k => `<option value="${k}">${window.VI ? esc(VI.t('service.' + k)) : k}</option>`).join('')}
+        <div><label>Country *</label><input id="sCountry" list="dlCountries" required placeholder="Select country…">
+          <datalist id="dlCountries">${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>
+        <div><label>Service Level *</label><select id="oLevel" required>
+          ${SERVICE_LEVELS.map(k => `<option value="${k}">${esc(SERVICE_LEVEL_LABELS[k] || k)}</option>`).join('')}
         </select></div>
       </div>
 
+      <div class="rc-label" style="margin-top:12px">COLLECTION *</div>
+      <label class="chk" style="margin:2px 0 8px"><input type="checkbox" id="oDropoff" onchange="onCollectionChange()"> <span>I will drop off at the VFIC office (no pick-up needed)</span></label>
+
       <div id="pickupWrap" class="pickup-block">
         <div class="rc-label">PICK-UP SCHEDULE *</div>
-        <div class="muted" style="font-size:12px;margin-bottom:6px">This service includes collection from your address.</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">VFIC will collect the box(es) from your address.</div>
         <div class="form-grid">
           <div><label>Preferred Date *</label><input id="puDate" type="date"></div>
           <div><label>Preferred Time *</label><select id="puTime">
@@ -428,7 +437,7 @@ function renderForm() {
     </div>`;
 
   onSenderTypeChange();
-  onServiceChange();
+  onCollectionChange();
   addBox();
 }
 
@@ -440,11 +449,10 @@ function onSenderTypeChange() {
   if (pp) pp.style.display = isQFWA ? '' : 'none';
   if (biz) biz.style.display = BUSINESS_TYPES.includes(v) ? '' : 'none';
 }
-function onServiceChange() {
-  const sel = document.getElementById('oService');
+function onCollectionChange() {
   const wrap = document.getElementById('pickupWrap');
-  if (!sel || !wrap) return;
-  wrap.style.display = PICKUP_SERVICES.includes(sel.value) ? '' : 'none';
+  if (!wrap) return;
+  wrap.style.display = isPickup() ? '' : 'none';
 }
 
 /* ---------- collect + validate + submit ---------- */
@@ -484,11 +492,12 @@ async function submitIntake() {
     if (BUSINESS_TYPES.includes(senderType)) required.push(['sBiz', 'Business Name']);
     for (const [id, label] of required) if (!val(id)) throw new Error(`${label} is required.`);
 
-    const service = val('oService');
-    const pickup = PICKUP_SERVICES.includes(service)
+    const serviceLevel = val('oLevel');
+    const collection = isPickup() ? 'PICKUP' : 'DROPOFF';
+    const pickup = collection === 'PICKUP'
       ? { date: val('puDate'), time_window: val('puTime'), address: val('puAddress') || val('sAddrAbroad'), notes: val('puNotes') }
       : null;
-    if (pickup && (!pickup.date || !pickup.time_window)) throw new Error('Pick-up date and time are required for this service type.');
+    if (pickup && (!pickup.date || !pickup.time_window)) throw new Error('Pick-up date and time are required, or tick “I will drop off at the VFIC office”.');
 
     const passportInput = document.getElementById('passportFile');
     if (!passportInput.files.length) throw new Error('Please attach a photo or scan of your passport/government ID.');
@@ -559,7 +568,8 @@ async function submitIntake() {
     fd.append('address_ph', val('sAddrPh'));
     fd.append('origin_agent', val('oAgent'));
     fd.append('origin_country', val('sCountry'));
-    fd.append('service_type', service);
+    fd.append('service_level', serviceLevel);
+    fd.append('collection', collection);
     fd.append('total_value_php', val('sTotalValue'));
     fd.append('pickup', JSON.stringify(pickup));
     fd.append('boxes', JSON.stringify(boxes));
