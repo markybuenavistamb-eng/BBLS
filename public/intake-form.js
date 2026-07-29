@@ -9,6 +9,7 @@ let BOX_SIZES = [];
 let EXCESS_RATE = null;
 let EXCESS_CCY = 'PHP';
 let BOC_MAX_CBM = 0.20;
+let MAX_BOX_VALUE = 150000; // per-box declared-value ceiling (admin-configurable)
 
 async function loadBoxSizes() {
   try {
@@ -18,8 +19,10 @@ async function loadBoxSizes() {
     EXCESS_RATE = d.excess_charge_per_kg;
     EXCESS_CCY = d.excess_charge_currency || 'PHP';
     BOC_MAX_CBM = d.boc_max_cbm || 0.20;
+    if (d.max_box_value_php != null) MAX_BOX_VALUE = d.max_box_value_php;
   } catch (e) { BOX_SIZES = []; }
 }
+const peso = (v) => 'Php ' + Number(v || 0).toLocaleString('en-PH');
 const sizeInfo = (key) => BOX_SIZES.find(s => s.key === key) || null;
 
 function sizeOptionsHtml() {
@@ -57,6 +60,102 @@ function onSizeChange(n) {
   warn.innerHTML = msgs.join('<br>');
   warn.style.display = msgs.length ? '' : 'none';
 }
+
+const gid = (id) => document.getElementById(id);
+
+// Warn when a box's declared value exceeds the per-box ceiling.
+function onValueChange(n) {
+  const inp = gid('bValue' + n), warn = gid('valWarn' + n);
+  if (!inp || !warn) return;
+  const v = parseFloat(inp.value) || 0;
+  if (MAX_BOX_VALUE && v > MAX_BOX_VALUE) {
+    warn.innerHTML = `<b>Over the limit.</b> The declared value per box may not exceed ${peso(MAX_BOX_VALUE)}. Please split the contents across boxes.`;
+    warn.style.display = '';
+  } else { warn.style.display = 'none'; }
+}
+
+// Reveal the "please specify" field when the "Others" goods category has a quantity.
+function onOthersChange(n) {
+  const others = document.querySelector(`.goodsQty[data-box="${n}"][data-cat="Others"]`);
+  const wrap = gid('othersWrap' + n);
+  if (!others || !wrap) return;
+  wrap.style.display = (parseInt(others.value, 10) || 0) > 0 ? '' : 'none';
+}
+
+function waitFor(cond, ms = 4000) {
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    (function poll() { (cond() || Date.now() - t0 > ms) ? resolve() : setTimeout(poll, 80); })();
+  });
+}
+// Copy every detail of the first box into box n (same recipient / same contents).
+async function copyFromBox1(n) {
+  const firstEl = document.querySelector('.box-block');
+  if (!firstEl) return;
+  const src = firstEl.dataset.box;
+  if (String(src) === String(n)) { alert('This is Box 1. Add another box, then use “Same as Box 1” on it.'); return; }
+  ['rFam', 'rGiv', 'rMid', 'rSuf', 'rPhone', 'rEmail', 'rStreet', 'rLandmark', 'rZip', 'rRel', 'bSize', 'bWeight', 'bValue', 'bInstr']
+    .forEach(k => { const s = gid(k + src), d = gid(k + n); if (s && d) d.value = s.value; });
+  document.querySelectorAll(`.goodsQty[data-box="${src}"]`).forEach(s => {
+    const idx = s.id.split('_')[1];
+    const d = gid(`g${n}_${idx}`);
+    if (d) d.value = s.value;
+  });
+  const os = gid('othersSpec' + src), od = gid('othersSpec' + n); if (os && od) od.value = os.value;
+  onSizeChange(n); onValueChange(n); onOthersChange(n);
+  await copyAddress(src, n);
+}
+async function copyAddress(src, n) {
+  const rgS = gid('rRegion' + src), rgD = gid('rRegion' + n);
+  if (!rgS || !rgD) return;
+  if (rgD.tagName === 'INPUT') { // offline free-text fallback
+    ['rRegion', 'rCity', 'rBrgy', 'rRegionName', 'rCityName', 'rBrgyName'].forEach(k => { const s = gid(k + src), d = gid(k + n); if (s && d) d.value = s.value; });
+    return;
+  }
+  rgD.value = rgS.value; rgD.dispatchEvent(new Event('change'));
+  const cD = gid('rCity' + n);
+  await waitFor(() => !cD.disabled && cD.options.length > 1);
+  cD.value = gid('rCity' + src).value; cD.dispatchEvent(new Event('change'));
+  const bD = gid('rBrgy' + n);
+  await waitFor(() => !bD.disabled && bD.options.length > 1);
+  bD.value = gid('rBrgy' + src).value; bD.dispatchEvent(new Event('change'));
+}
+
+// ---- returning-sender autofill (kept on this device only; never leaves the browser) ----
+const PROFILE_KEY = 'vfic_sender_profile';
+const PROFILE_FIELDS = ['sBiz', 'sFam', 'sGiv', 'sMid', 'sSuf', 'sPhone', 'sEmail', 'sPassNo', 'sPassPlace', 'sPassIssued', 'sPassExp', 'sAddrAbroad', 'sAddrPh', 'oAgent', 'sCountry'];
+function saveSenderProfile() {
+  try { const p = {}; PROFILE_FIELDS.forEach(f => p[f] = val(f)); localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch (e) {}
+}
+function loadSenderProfile() { try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null'); } catch (e) { return null; } }
+function applySenderProfile(p) {
+  PROFILE_FIELDS.forEach(f => { const el = gid(f); if (el && p[f] != null && p[f] !== '') el.value = p[f]; });
+  onSenderTypeChange();
+}
+function onAvailmentChange() {
+  const v = (document.querySelector('input[name="availment"]:checked') || {}).value || '';
+  const note = gid('availNote');
+  if (!note) return;
+  if (v !== 'BB_2ND' && v !== 'BB_3RD') { note.style.display = 'none'; note.innerHTML = ''; return; }
+  const p = loadSenderProfile();
+  if (p) {
+    applySenderProfile(p);
+    note.innerHTML = '↺ We filled in your sender details from your last booking on this device. Please review and update anything that changed.';
+  } else {
+    note.innerHTML = 'Returning sender? We couldn’t find saved details on this device — please fill in your information below.';
+  }
+  note.style.display = '';
+}
+
+// Pick-up "same as address abroad" toggle.
+function onPickupSameChange() {
+  const cb = gid('puSameAbroad'), ta = gid('puAddress');
+  if (!cb || !ta) return;
+  if (cb.checked) { ta.value = val('sAddrAbroad'); ta.readOnly = true; ta.classList.add('input-locked'); }
+  else { ta.readOnly = false; ta.classList.remove('input-locked'); }
+}
+function syncPickupIfSame() { const cb = gid('puSameAbroad'); if (cb && cb.checked) onPickupSameChange(); }
+
 const SERVICE_KEYS = ['DOOR_TO_DOOR', 'PORT_TO_PORT', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
 // Service types that involve VFIC collecting the box from the sender → need a pick-up slot.
 const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
@@ -117,7 +216,7 @@ function boxBlockHtml() {
     const idx = offset + i;
     return `<div class="goods-row">
       <span>${esc(c)}</span>
-      <input type="number" min="0" step="1" class="goodsQty" data-box="${n}" data-cat="${esc(c)}" id="g${n}_${idx}" aria-label="${esc(c)} quantity">
+      <input type="number" min="0" step="1" class="goodsQty" data-box="${n}" data-cat="${esc(c)}" id="g${n}_${idx}" aria-label="${esc(c)} quantity"${c === 'Others' ? ` oninput="onOthersChange(${n})"` : ''}>
     </div>`;
   }).join('');
 
@@ -125,7 +224,10 @@ function boxBlockHtml() {
   <div class="card box-block" id="box${n}" data-box="${n}">
     <div class="row" style="justify-content:space-between;align-items:center">
       <b>Box <span class="box-index">${n}</span></b>
-      <button type="button" class="secondary small" onclick="removeBox(${n})">Remove</button>
+      <div class="row" style="gap:6px">
+        <button type="button" class="secondary small copy-box1-btn" onclick="copyFromBox1(${n})" style="display:none">⧉ Same as Box 1</button>
+        <button type="button" class="secondary small" onclick="removeBox(${n})">Remove</button>
+      </div>
     </div>
 
     <div class="rc-label" style="margin-top:10px">B. PHILIPPINE-BASED RECIPIENT</div>
@@ -151,6 +253,7 @@ function boxBlockHtml() {
     <div class="form-grid">
       <div><label class="sub">House No. / Street / Subdivision *</label><input id="rStreet${n}" required></div>
       <div><label class="sub">Landmark *</label><input id="rLandmark${n}" placeholder="Helps the driver find it" required></div>
+      <div><label class="sub">ZIP / Postal Code</label><input id="rZip${n}" inputmode="numeric" maxlength="4" placeholder="e.g. 1002"></div>
     </div>
 
     <label>Relationship to Sender * <span class="muted">(by affinity or consanguinity)</span></label>
@@ -165,7 +268,9 @@ function boxBlockHtml() {
       </select>
       <div class="muted size-hint" id="sizeHint${n}"></div></div>
       <div><label>Approx. Weight (kg) *</label><input id="bWeight${n}" type="number" min="0" step="0.1" required oninput="onSizeChange(${n})"></div>
-      <div><label>Total Value of Contents (Php) *</label><input id="bValue${n}" type="number" min="0" step="0.01" required></div>
+      <div><label>Total Value of Contents (Php) *</label><input id="bValue${n}" type="number" min="0" step="0.01" max="${MAX_BOX_VALUE}" required oninput="onValueChange(${n})">
+      <div class="muted size-hint">Maximum ${peso(MAX_BOX_VALUE)} per box.</div>
+      <div class="excess-warn" id="valWarn${n}" style="display:none"></div></div>
     </div>
     <div class="excess-warn" id="excess${n}" style="display:none"></div>
     <label>Special Instructions</label><input id="bInstr${n}">
@@ -177,6 +282,10 @@ function boxBlockHtml() {
     <div class="goods-grid">
       <div>${goodsCol(GOODS_CATEGORIES.slice(0, half), 0)}</div>
       <div>${goodsCol(GOODS_CATEGORIES.slice(half), half)}</div>
+    </div>
+    <div id="othersWrap${n}" style="display:none;margin-top:8px">
+      <label class="sub">If “Others”, please specify the item(s) *</label>
+      <input id="othersSpec${n}" placeholder="Describe the item(s) under “Others”">
     </div>
   </div>`;
 }
@@ -192,6 +301,8 @@ function renumberBoxes() {
   [...document.querySelectorAll('.box-block')].forEach((el, i) => {
     const lbl = el.querySelector('.box-index');
     if (lbl) lbl.textContent = i + 1;
+    const btn = el.querySelector('.copy-box1-btn'); // only boxes after the first can copy from Box 1
+    if (btn) btn.style.display = i === 0 ? 'none' : '';
   });
 }
 async function addBox() {
@@ -226,9 +337,10 @@ function renderForm() {
       <div class="rc-label">TYPE OF AVAILMENT *</div>
       <div class="muted" style="font-size:12px;margin-bottom:6px">Check one only. You may only avail of the Balikbayan Box Privilege if you are a Qualified Filipino While Abroad.</div>
       <div class="check-grid">
-        ${AVAILMENT_TYPES.map(a => `<label class="chk"><input type="radio" name="availment" value="${a.key}" required>
+        ${AVAILMENT_TYPES.map(a => `<label class="chk"><input type="radio" name="availment" value="${a.key}" required onchange="onAvailmentChange()">
           <span>${a.group ? `<span class="muted">${esc(a.group)} — </span>` : ''}${esc(a.label)}</span></label>`).join('')}
       </div>
+      <div id="availNote" class="note-info" style="display:none;margin-top:8px"></div>
 
       <div class="rc-label" style="margin-top:14px">TYPE OF SENDER *</div>
       <div class="check-grid">
@@ -264,7 +376,7 @@ function renderForm() {
         </div>
       </div>
 
-      <label>Complete Current Address Abroad *</label><textarea id="sAddrAbroad" required></textarea>
+      <label>Complete Current Address Abroad *</label><textarea id="sAddrAbroad" required oninput="syncPickupIfSame()"></textarea>
       <label>Complete Address in the Philippines *</label><textarea id="sAddrPh" required></textarea>
 
       <div class="form-grid">
@@ -285,7 +397,8 @@ function renderForm() {
             <option value="PM">Afternoon (1:00 PM – 5:00 PM)</option>
           </select></div>
         </div>
-        <label>Pick-up Address * <span class="muted">(leave as-is to use your address abroad)</span></label>
+        <label class="chk" style="margin:2px 0 6px"><input type="checkbox" id="puSameAbroad" onchange="onPickupSameChange()"> <span>Same as my address abroad</span></label>
+        <label>Pick-up Address *</label>
         <textarea id="puAddress"></textarea>
         <label>Pick-up Instructions</label><input id="puNotes">
       </div>
@@ -338,8 +451,14 @@ function onServiceChange() {
 function val(id) { const e = document.getElementById(id); return e ? e.value.trim() : ''; }
 
 function collectGoods(n) {
+  const spec = val('othersSpec' + n);
   return [...document.querySelectorAll(`.goodsQty[data-box="${n}"]`)]
-    .map(i => ({ category: i.dataset.cat, qty: parseInt(i.value, 10) || 0 }))
+    .map(i => {
+      const qty = parseInt(i.value, 10) || 0;
+      const g = { category: i.dataset.cat, qty };
+      if (i.dataset.cat === 'Others' && qty > 0 && spec) g.specify = spec;
+      return g;
+    })
     .filter(g => g.qty > 0);
 }
 
@@ -385,6 +504,13 @@ async function submitIntake() {
       if (!isPhMobile(phone)) throw new Error(`Box ${num}: receiver contact number must be 11 digits starting with 09 (e.g. 09171234567).`);
       const goods = collectGoods(n);
       if (!goods.length) throw new Error(`Box ${num}: please enter a quantity for at least one item.`);
+      if (goods.some(g => g.category === 'Others') && !val('othersSpec' + n)) {
+        throw new Error(`Box ${num}: please specify the item(s) under “Others”.`);
+      }
+      const boxValue = parseFloat(need('bValue', 'Total Value of Contents')) || 0;
+      if (MAX_BOX_VALUE && boxValue > MAX_BOX_VALUE) {
+        throw new Error(`Box ${num}: the declared value (${peso(boxValue)}) exceeds the ${peso(MAX_BOX_VALUE)} limit per box.`);
+      }
       return {
         receiver: {
           family_name: need('rFam', 'Receiver Family Name'),
@@ -398,6 +524,7 @@ async function submitIntake() {
           barangay: val('rBrgyName' + n) || val('rBrgy' + n),
           street_address: need('rStreet', 'House No. / Street'),
           landmark: need('rLandmark', 'Landmark'),
+          postal_code: val('rZip' + n),
           relationship: need('rRel', 'Relationship to Sender')
         },
         size_category: val('bSize' + n),
@@ -442,6 +569,7 @@ async function submitIntake() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
     submitted = true;
+    saveSenderProfile(); // so a returning sender can autofill next time (this device only)
     renderConfirmation(data.reference_code);
   } catch (e) {
     err.textContent = e.message;

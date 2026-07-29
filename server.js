@@ -385,7 +385,8 @@ app.get('/api/box-sizes', (req, res) => {
     sizes: BOXSIZE.BOX_SIZES,
     boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
     excess_charge_per_kg: d.settings.excessWeightChargePerKg != null ? d.settings.excessWeightChargePerKg : null,
-    excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP'
+    excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP',
+    max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 150000
   });
 });
 
@@ -467,12 +468,20 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
       if (!BOC.RELATIONSHIPS.includes(r.relationship)) throw new Error(`Box ${n}: a valid Relationship to Sender is required`);
       const goods = Array.isArray(bx.goods)
         ? bx.goods.filter(g => g && BOC.GOODS_CATEGORIES.includes(g.category) && +g.qty > 0)
-          .map(g => ({ category: g.category, qty: +g.qty }))
+          .map(g => {
+            const item = { category: g.category, qty: +g.qty };
+            if (g.category === 'Others') item.specify = String(g.specify || '').trim();
+            return item;
+          })
         : [];
       if (!goods.length) throw new Error(`Box ${n}: at least one itemized good is required`);
+      if (goods.some(g => g.category === 'Others' && !g.specify)) throw new Error(`Box ${n}: please specify the item(s) under “Others”`);
       const sizeKey = SM.SIZE_CATEGORIES.includes(bx.size_category) ? bx.size_category : 'LARGE';
       const sizeInfo = BOXSIZE.bySize(sizeKey);
       const weight = +rq(bx.weight_kg, 'Weight') || 0;
+      const boxValue = +rq(bx.total_value_php, 'Total Value of Contents') || 0;
+      const maxBoxValue = db.get().settings.maxBoxValuePhp != null ? db.get().settings.maxBoxValuePhp : 150000;
+      if (maxBoxValue && boxValue > maxBoxValue) throw new Error(`Box ${n}: declared value ₱${boxValue.toLocaleString('en-PH')} exceeds the ₱${maxBoxValue.toLocaleString('en-PH')} limit per box`);
       return {
         receiver: {
           family_name: rq(r.family_name, 'Receiver Family Name'),
@@ -486,6 +495,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
           barangay: rq(r.barangay, 'Barangay'),
           street_address: rq(r.street_address, 'House No. / Street'),
           landmark: rq(r.landmark, 'Landmark'),
+          postal_code: String(r.postal_code || '').trim(),
           relationship: r.relationship,
           country: 'Philippines'
         },
@@ -493,7 +503,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
         weight_kg: weight,
         standard_weight_kg: sizeInfo ? sizeInfo.standard_weight_kg : null,
         excess_weight_kg: BOXSIZE.excessWeightKg(sizeKey, weight),
-        total_value_php: +rq(bx.total_value_php, 'Total Value of Contents') || 0,
+        total_value_php: boxValue,
         special_instructions: String(bx.special_instructions || '').trim(),
         goods
       };

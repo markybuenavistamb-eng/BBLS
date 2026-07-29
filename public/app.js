@@ -539,7 +539,8 @@ async function pageShipmentNew(intakeId) {
       phone_primary: r.contact_number || '', email: r.email || '',
       address_line: r.street_address || '', barangay: r.barangay || '',
       city_municipality: r.city_municipality || '', province: r.region || '',
-      region: mapPsgcRegion(r.region), country: 'Philippines', landmark: r.landmark || ''
+      region: mapPsgcRegion(r.region), country: 'Philippines', landmark: r.landmark || '',
+      postal_code: r.postal_code || ''
     });
     await loadCustomers();
     document.getElementById('bxReceiver' + n).innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
@@ -594,8 +595,8 @@ function intakeSubmittedDetailsHtml(intake) {
   const line = (label, val) => `<div class="rc-line"><span>${esc(label)}</span>${esc(val || '-')}</div>`;
   const boxes = (intake.boxes || []).map((b, i) => {
     const r = b.receiver || {};
-    const addr = [r.street_address, r.barangay, r.city_municipality, r.region].filter(Boolean).join(', ');
-    const goods = (b.goods || []).map(g => `${esc(g.category)} x ${g.qty}`).join(', ');
+    const addr = [r.street_address, r.barangay, r.city_municipality, r.region, r.postal_code].filter(Boolean).join(', ');
+    const goods = (b.goods || []).map(g => `${esc(g.category)}${g.category === 'Others' && g.specify ? ' (' + esc(g.specify) + ')' : ''} x ${g.qty}`).join(', ');
     return `<div class="rc-box" style="margin-top:8px">
       <div class="rc-label">BOX ${i + 1} - ${esc(personName(r))}</div>
       ${line('Contact', r.contact_number)}
