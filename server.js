@@ -10,6 +10,7 @@ const storage = require('./lib/storage');
 const sess = require('./lib/session');
 const BOC = require('./lib/boc');
 const BOXSIZE = require('./lib/boxsizes');
+const REF = require('./lib/refdata');
 
 // Service types where VFIC collects the box from the sender → a pick-up slot is required.
 const PICKUP_SERVICES = ['DOOR_TO_DOOR', 'DOOR_TO_PORT', 'DOOR_TO_AIRPORT'];
@@ -132,6 +133,38 @@ function changeBoxStatus(box, to, actor, note = '', extraVars = {}) {
     notif.queueForTrigger(box, to, extraVars);
   }
   return null;
+}
+
+// Correction / reversal — bypasses the forward-only state machine. Used only by the
+// explicit "undo / revert" endpoints so staff can fix a mis-clicked Action. Writes a
+// status_event so the correction is auditable.
+function forceBoxStatus(box, to, actor, note = '') {
+  const d = db.get();
+  const nowIso = new Date().toISOString();
+  d.status_events.push({
+    id: db.nextId('status_event'), box_id: box.id,
+    from_status: box.status, to_status: to,
+    actor_user_id: actor ? actor.id : null, note: note || '', created_at: nowIso, correction: true
+  });
+  box.status = to;
+  box.status_updated_at = nowIso;
+}
+
+// One step back for a container's lifecycle status (used by the revert endpoint).
+const CONTAINER_PREV = {
+  LOADING: 'BOOKING', IN_TRANSIT: 'LOADING', ARRIVED: 'IN_TRANSIT',
+  AT_CUSTOMS: 'ARRIVED', RELEASED: 'AT_CUSTOMS', STRIPPED: 'RELEASED'
+};
+
+// Next automatic load code (C1, C2, …) — always monotonic above the highest existing code,
+// so it never collides even if a container was removed.
+function nextLoadCode(d) {
+  let max = 0;
+  for (const c of d.containers) {
+    const m = /^C(\d+)$/.exec(String(c.load_code || ''));
+    if (m) max = Math.max(max, +m[1]);
+  }
+  return `C${max + 1}`;
 }
 
 // ---------- auth routes ----------
@@ -356,6 +389,11 @@ app.get('/api/box-sizes', (req, res) => {
   });
 });
 
+// Reference lists for the Container booking form (shipping lines, origin/destination ports).
+app.get('/api/refdata', requireAuth, (req, res) => {
+  res.json({ shipping_lines: REF.SHIPPING_LINES, origin_ports: REF.ORIGIN_PORTS, destination_ports: REF.DESTINATION_PORTS });
+});
+
 // ---------- online intake requests (public self-service fill-up, reviewed & encoded by staff) ----------
 // Public submission: no login. Sender fills their own info + box(es) + uploads a passport/ID scan.
 // This does NOT create a shipment/customer directly — an agent reviews it and encodes it via
@@ -573,6 +611,10 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
   if (req.user.role === 'WAREHOUSE' && !['RECEIVED_WAREHOUSE', 'SORTED'].includes(status)) {
     return res.status(403).json({ error: 'Warehouse role can only mark Received/Sorted' });
   }
+  // A box moves to In-Transit only via its container being marked Departed — never manually.
+  if (status === 'IN_TRANSIT') {
+    return res.status(400).json({ error: 'A box moves to In-Transit only when its container is marked Departed. Open the container in the Containers module and use “Mark Departed”.' });
+  }
   if (status === 'CANCELLED' && !note) return res.status(400).json({ error: 'Cancellation requires a reason' });
   if (status === 'SORTED') {
     const rgn = region || (d.customers.find(c => c.id === box.receiver_id) || {}).region;
@@ -583,6 +625,38 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
   const err = changeBoxStatus(box, status, req.user, note || '');
   if (err) return res.status(400).json({ error: err });
   if (box.status === 'RECEIVED_ORIGIN' && box.container_id) box.container_id = null; // unloaded from container
+  db.persist();
+  res.json(boxDetail(box));
+});
+// Undo the last status change — for a mis-clicked Action. Removes the most recent status
+// event and rolls the box back to the prior status, reconciling any side effects.
+app.post('/api/boxes/:id/revert', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE'), (req, res) => {
+  const d = db.get();
+  const box = d.boxes.find(b => b.id === +req.params.id);
+  if (!box) return res.status(404).json({ error: 'Not found' });
+  const events = d.status_events.filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  if (events.length <= 1) return res.status(400).json({ error: 'Nothing to undo — box is at its initial status.' });
+  const last = events[events.length - 1];
+  // Warehouse can only undo warehouse-stage actions; only admin can undo a completed delivery/return/cancel.
+  if (req.user.role === 'WAREHOUSE' && !['RECEIVED_WAREHOUSE', 'SORTED'].includes(last.to_status)) {
+    return res.status(403).json({ error: 'Warehouse role can only undo Received/Sorted.' });
+  }
+  if (['DELIVERED', 'RETURNED', 'CANCELLED'].includes(last.to_status) && req.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Only an admin can undo a Delivered / Returned / Cancelled box.' });
+  }
+  d.status_events = d.status_events.filter(e => e.id !== last.id);
+  box.status = last.from_status;
+  box.status_updated_at = new Date().toISOString();
+  // Reconcile side effects of the undone action.
+  if (last.to_status === 'LOADED_CONTAINER') {
+    box.container_id = null; box.container_load_code = null; box.container_box_number = null; box.load_sequence = null;
+  }
+  if (last.to_status === 'ASSIGNED') box.trucking_assignment_id = null; // removed from trip
+  if (last.to_status === 'DELIVERED' || last.to_status === 'RETURNED') {
+    // drop the matching delivery attempt so the count stays accurate
+    const att = d.delivery_attempts.filter(a => a.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (att.length) d.delivery_attempts = d.delivery_attempts.filter(a => a.id !== att[att.length - 1].id);
+  }
   db.persist();
   res.json(boxDetail(box));
 });
@@ -604,8 +678,9 @@ app.post('/api/containers', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) =>
     origin_port: b.origin_port || '', destination_port: b.destination_port || '',
     etd: b.etd || null, eta: b.eta || null, actual_departure: null, actual_arrival: null,
     // Short code appended to each loaded box's number so you can see, at a glance,
-    // which container a box travelled in (e.g. VF-2026-000013-01/C1).
-    load_code: String(b.load_code || '').trim().toUpperCase() || `C${db.get().containers.length + 1}`,
+    // which container a box travelled in (e.g. VF-2026-000013-01/C1). Always assigned
+    // automatically in sequence — the client cannot set it.
+    load_code: nextLoadCode(db.get()),
     load_plan_notes: '',
     status: 'BOOKING', created_at: new Date().toISOString()
   };
@@ -687,6 +762,34 @@ app.post('/api/containers/:id/arrive', requireRole('ADMIN', 'SHIPPER_AGENT', 'CO
   c.actual_arrival = new Date().toISOString();
   db.persist();
   res.json({ ok: true, boxes_updated: boxes.length });
+});
+// Revert / correct a container's status by one step (undo a mis-clicked action). Reverses the
+// box cascade for Depart (IN_TRANSIT→LOADING) and Arrive (ARRIVED→IN_TRANSIT).
+app.post('/api/containers/:id/revert', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
+  const d = db.get();
+  const c = d.containers.find(x => x.id === +req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const prev = CONTAINER_PREV[c.status];
+  if (!prev) return res.status(400).json({ error: `Container is at ${c.status} — there is no earlier status to revert to.` });
+  let reversed = 0;
+  if (c.status === 'IN_TRANSIT') {
+    for (const box of d.boxes.filter(b => b.container_id === c.id && b.status === 'IN_TRANSIT')) {
+      forceBoxStatus(box, 'LOADED_CONTAINER', req.user, `Correction: departure of ${c.container_number} reversed`); reversed++;
+    }
+    c.actual_departure = null;
+  } else if (c.status === 'ARRIVED') {
+    for (const box of d.boxes.filter(b => b.container_id === c.id && b.status === 'ARRIVED_PORT')) {
+      forceBoxStatus(box, 'IN_TRANSIT', req.user, `Correction: arrival of ${c.container_number} reversed`); reversed++;
+    }
+    c.actual_arrival = null;
+  } else if (c.status === 'LOADING') {
+    if (d.boxes.some(b => b.container_id === c.id)) {
+      return res.status(400).json({ error: 'Unload all boxes before reverting this container to Booking.' });
+    }
+  }
+  c.status = prev;
+  db.persist();
+  res.json({ ...c, reverted_to: prev, boxes_reverted: reversed });
 });
 // Warehouse stripping scan: each box → RECEIVED_WAREHOUSE
 app.post('/api/containers/:id/strip-scan', requireRole(...PH_SIDE), (req, res) => {

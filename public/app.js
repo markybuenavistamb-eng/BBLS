@@ -15,7 +15,9 @@ const STATUS_LABELS = new Proxy(STATUS_LABELS_EN, {
 const PIPELINE = ['CREATED', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
   'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED', 'LOADED_TRUCK', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
 const NEXT_STATUS = {
-  CREATED: ['RECEIVED_ORIGIN'], RECEIVED_ORIGIN: ['LOADED_CONTAINER'], LOADED_CONTAINER: ['IN_TRANSIT', 'RECEIVED_ORIGIN'],
+  // Note: LOADED_CONTAINER → IN_TRANSIT is deliberately NOT a manual action — a box goes
+  // In-Transit only when its container is marked Departed. 'RECEIVED_ORIGIN' here = unload.
+  CREATED: ['RECEIVED_ORIGIN'], RECEIVED_ORIGIN: ['LOADED_CONTAINER'], LOADED_CONTAINER: ['RECEIVED_ORIGIN'],
   IN_TRANSIT: ['ARRIVED_PORT'], ARRIVED_PORT: ['RECEIVED_WAREHOUSE'], RECEIVED_WAREHOUSE: ['SORTED'],
   SORTED: ['ASSIGNED'], ASSIGNED: ['LOADED_TRUCK', 'SORTED'], LOADED_TRUCK: ['OUT_FOR_DELIVERY'],
   OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'], RETURNED: ['ASSIGNED'], DELIVERED: [], CANCELLED: []
@@ -1029,7 +1031,8 @@ async function pageBoxDetail(id) {
              <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
           : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
         ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
-        ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No manual actions available at this status.</span>' : ''}
+        ${['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE'].includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
+        ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No forward actions available at this status.</span>' : ''}
       </div>
       ${b.status === 'OUT_FOR_DELIVERY' ? podFormHtml(b.id) : ''}
     </div>
@@ -1079,6 +1082,14 @@ async function cancelBox(id) {
   const reason = prompt('Cancellation reason (required):');
   if (!reason) return;
   await doStatus(id, 'CANCELLED', reason);
+}
+async function revertBox(id, lastLabel) {
+  if (!confirm(`Undo the last action${lastLabel ? ` (“${lastLabel}”)` : ''}? The box rolls back to the previous status.`)) return;
+  try {
+    const b = await api(`/api/boxes/${id}/revert`, { method: 'POST' });
+    flash(`Reverted to ${STATUS_LABELS[b.status] || b.status}`);
+    route();
+  } catch (e) { showErr(e); }
 }
 
 function podFormHtml(boxId) {
@@ -1134,11 +1145,21 @@ async function submitPod(boxId) {
 
 /* ---------- containers ---------- */
 async function pageContainers() {
-  const list = await api('/api/containers');
+  const [list, ref] = await Promise.all([
+    api('/api/containers'),
+    canIntake() ? api('/api/refdata') : Promise.resolve({ shipping_lines: [], origin_ports: [], destination_ports: [] })
+  ]);
+  const nextCode = 'C' + (list.reduce((m, c) => { const n = /^C(\d+)$/.exec(c.load_code || ''); return n ? Math.max(m, +n[1]) : m; }, 0) + 1);
+  const lineOpts = (ref.shipping_lines || []).map(s => `<option value="${esc(s)}">`).join('');
+  const originOpts = (ref.origin_ports || []).flatMap(g => g.ports).map(p => `<option value="${esc(p)}">`).join('');
+  const destOpts = (ref.destination_ports || []).map(p => `<option value="${esc(p)}">`).join('');
   view(`
     <h1>Containers</h1>
     ${canIntake() ? `
     <details class="collapse card"><summary>+ Book new container</summary>
+      <datalist id="dlLines">${lineOpts}</datalist>
+      <datalist id="dlOrigin">${originOpts}</datalist>
+      <datalist id="dlDest">${destOpts}</datalist>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
         <div><label>Size</label><select id="cnSize">
@@ -1146,12 +1167,12 @@ async function pageContainers() {
           <option value="C40HQ">40 ft HQ</option>
           <option value="C20">20 ft</option>
         </select></div>
-        <div><label>Load code <span class="muted">(box no. suffix)</span></label><input id="cnLoadCode" placeholder="e.g. C1" maxlength="6"></div>
-        <div><label>Shipping line</label><input id="cnLine"></div>
+        <div><label>Load code <span class="muted">(auto)</span></label><input value="${esc(nextCode)}" disabled title="Assigned automatically in sequence"></div>
+        <div><label>Shipping line</label><input id="cnLine" list="dlLines" placeholder="Select AISL member line…"></div>
         <div><label>Vessel</label><input id="cnVessel"></div>
         <div><label>Booking #</label><input id="cnBooking"></div>
-        <div><label>Origin port</label><input id="cnOrigin"></div>
-        <div><label>Destination port</label><input id="cnDest" value="Manila (MICP)"></div>
+        <div><label>Origin port</label><input id="cnOrigin" list="dlOrigin" placeholder="Select or type…"></div>
+        <div><label>Destination port</label><input id="cnDest" list="dlDest" value="Manila (MICP)"></div>
         <div><label>ETD</label><input id="cnEtd" type="date"></div>
         <div><label>ETA</label><input id="cnEta" type="date"></div>
       </div>
@@ -1175,7 +1196,7 @@ async function createContainer() {
   try {
     const c = await api('/api/containers', {
       method: 'POST',
-      body: { container_number: cnNumber.value, size: cnSize.value, load_code: cnLoadCode.value, shipping_line: cnLine.value, vessel_name: cnVessel.value, booking_number: cnBooking.value, origin_port: cnOrigin.value, destination_port: cnDest.value, etd: cnEtd.value || null, eta: cnEta.value || null }
+      body: { container_number: cnNumber.value, size: cnSize.value, shipping_line: cnLine.value, vessel_name: cnVessel.value, booking_number: cnBooking.value, origin_port: cnOrigin.value, destination_port: cnDest.value, etd: cnEtd.value || null, eta: cnEta.value || null }
     });
     flash(`Container ${c.container_number} booked`);
     location.hash = '#/containers/' + c.id;
@@ -1194,6 +1215,7 @@ async function pageContainerDetail(id) {
         ${c.status === 'IN_TRANSIT' && isAgent() ? `<button onclick="containerAction(${c.id}, 'arrive', 'Container arrived — receivers notified by SMS')">⚓ Mark arrived</button>` : ''}
         ${['ARRIVED', 'AT_CUSTOMS'].includes(c.status) && isAgent() ? `
           <button class="secondary" onclick="setContainerStatus(${c.id}, '${c.status === 'ARRIVED' ? 'AT_CUSTOMS' : 'RELEASED'}')">→ ${c.status === 'ARRIVED' ? 'At customs' : 'Released'}</button>` : ''}
+        ${isAgent() && c.status !== 'BOOKING' ? `<button class="secondary danger" onclick="containerRevert(${c.id}, '${esc(c.status)}')" title="Undo a mis-clicked status">↩ Revert status</button>` : ''}
       </div>
     </div>
     <div class="card form-grid">
@@ -1369,6 +1391,19 @@ async function containerAction(id, action, msg) {
 }
 async function setContainerStatus(id, status) {
   try { await api('/api/containers/' + id, { method: 'PUT', body: { status } }); route(); } catch (e) { showErr(e); }
+}
+const CONTAINER_PREV_LBL = { LOADING: 'Booking', IN_TRANSIT: 'Loading', ARRIVED: 'In-Transit', AT_CUSTOMS: 'Arrived', RELEASED: 'At customs', STRIPPED: 'Released' };
+async function containerRevert(id, status) {
+  const prev = CONTAINER_PREV_LBL[status] || 'the previous status';
+  let extra = '';
+  if (status === 'IN_TRANSIT') extra = '\n\nThis also moves its boxes back from In-Transit to Loaded-in-container.';
+  if (status === 'ARRIVED') extra = '\n\nThis also moves its boxes back from Arrived to In-Transit.';
+  if (!confirm(`Revert this container from ${status} back to ${prev}?${extra}`)) return;
+  try {
+    const r = await api(`/api/containers/${id}/revert`, { method: 'POST' });
+    flash(`Reverted to ${r.reverted_to}${r.boxes_reverted ? ` (${r.boxes_reverted} box(es) rolled back)` : ''}`);
+    route();
+  } catch (e) { showErr(e); }
 }
 
 /* ---------- warehouse scan hub ---------- */
