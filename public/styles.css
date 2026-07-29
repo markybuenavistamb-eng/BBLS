@@ -210,6 +210,21 @@ button.small { padding: 6px 11px; font-size: 13px; }
 .track-result { max-width: 640px; margin: 18px auto; padding: 0 14px; }
 .big-status { font-size: 20px; font-weight: 800; margin: 4px 0 2px; }
 
+/* ---------- Print / Save-as-PDF page setup ----------
+   All printed documents (BOC forms, receiving forms, receipts, packing lists,
+   container manifests, labels) print on Philippine legal / "long" paper: 8.5 x 13 in.
+   In the browser Print dialog choose "Save as PDF" and keep paper size Legal (8.5x13). */
+@page { size: 8.5in 13in; margin: 0.2in; }
+@media print {
+  html, body { background: #fff !important; }
+  /* Hide the app chrome so only the document prints */
+  .sidebar, .sidebar-backdrop, .topbar, .topbar-mobile, .no-print { display: none !important; }
+  .shell { display: block !important; }
+  .wrap, main.wrap { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  /* Fit every document container to the printable width (8.1in) */
+  .receipt, .manifest, .boc-page, .label-sheet { max-width: 100% !important; margin: 0 auto 8px !important; box-shadow: none !important; }
+}
+
 /* Label print view */
 .label-sheet { background: #fff; border: 2px solid #000; max-width: 420px; margin: 20px auto; padding: 18px; text-align: center; }
 .label-sheet .tid { font-size: 22px; font-weight: 800; letter-spacing: 1px; margin: 8px 0; }

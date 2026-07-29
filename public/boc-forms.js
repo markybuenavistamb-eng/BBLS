@@ -274,7 +274,7 @@ function pageReceivingFormBlank(boxCount) {
       <label style="margin:0">Boxes to print</label>
       <input id="blankCount" type="number" min="1" max="20" value="${n}" style="max-width:80px">
       <button class="secondary small" onclick="pageReceivingFormBlank(+document.getElementById('blankCount').value)">Update</button>
-      <button onclick="window.print()">🖨 Print</button>
+      <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
     ${Array.from({ length: n }, (_, i) => bocInfoSheet(emptyS, emptyBox, i + 1, n) + bocPackingList(emptyS, emptyBox, i + 1, n)).join('')}`);
 }
@@ -289,7 +289,7 @@ async function pageReceivingForm(shipmentId) {
       <h1>Information Sheet — ${esc(s.shipment_number)}</h1>
       <div>
         <a href="#/packing-list/${s.id}"><button class="secondary">Packing List (p.2) →</button></a>
-        <button onclick="window.print()">🖨 Print</button>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
       </div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">
@@ -308,7 +308,7 @@ async function pagePackingList(shipmentId) {
       <h1>Packing List — ${esc(s.shipment_number)}</h1>
       <div>
         <a href="#/receiving-form/${s.id}"><button class="secondary">← Information Sheet (p.1)</button></a>
-        <button onclick="window.print()">🖨 Print</button>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
       </div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">

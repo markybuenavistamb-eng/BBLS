@@ -880,7 +880,7 @@ async function pageLabels(kind, id) {
   view(`
     <div class="row no-print" style="justify-content:space-between">
       <h1>Labels — ${esc(title)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
+      <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
     <div class="labels-grid">
       ${boxes.map(b => `
@@ -967,7 +967,7 @@ async function pageTruckReceipt(kind, id) {
   view(`
     <div class="row no-print" style="justify-content:space-between">
       <h1>Delivery Receipt${kind === 'trip' ? 's' : ''} — ${esc(title)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
+      <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">Print and send with the driver — one copy per box, for the receiver to sign on delivery.</div>
     ${boxes.length ? boxes.map((b, i) => truckReceiptBlockHtml(b, kind === 'trip' ? trip : b.trip, i === boxes.length - 1)).join('')
@@ -987,7 +987,7 @@ async function pageDeliveryReceipt(boxId) {
   view(`
     <div class="row no-print" style="justify-content:space-between">
       <h1>Proof of Delivery — ${esc(b.box_number)}</h1>
-      <div><button onclick="window.print()">🖨 Print</button> <a href="#/boxes/${b.id}"><button class="secondary">← Back to box</button></a></div>
+      <div><button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button> <a href="#/boxes/${b.id}"><button class="secondary">← Back to box</button></a></div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">Internal record for VFIC's files — generated after the outcome is recorded. For the document the driver carries and the receiver signs at the door, see <a href="#/truck-receipt/b/${b.id}">Delivery Receipt</a>.</div>
     <div class="receipt">
@@ -1380,7 +1380,7 @@ async function pageContainerManifest(containerId) {
   view(`
     <div class="row no-print" style="justify-content:space-between">
       <h1>Container Manifest — ${esc(c.container_number)}</h1>
-      <button onclick="window.print()">🖨 Print</button>
+      <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
     <div class="manifest">
       <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
@@ -1661,7 +1661,7 @@ async function pageManifest(id) {
   const t = await api('/api/trips/' + id);
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Trip manifest</h1><button onclick="window.print()">🖨 Print</button>
+      <h1>Trip manifest</h1><button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
     <div class="manifest">
       <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
