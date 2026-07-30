@@ -379,6 +379,18 @@ app.post('/api/shipments/:id/receive', requireRole('ADMIN', 'SHIPPER_AGENT'), (r
   res.json({ ok: true, received: boxes.length });
 });
 
+// ---------- health (public: report the storage backend so persistence can be verified; no secrets) ----------
+app.get('/api/health', (req, res) => {
+  const store = require('./lib/store');
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
+    persistent: !store.ephemeral,            // false = data resets on cold start (no cloud DB yet)
+    time: new Date().toISOString()
+  });
+});
+
 // ---------- box sizes (public: booking form + staff app share this single source of truth) ----------
 app.get('/api/box-sizes', (req, res) => {
   const d = db.get();
