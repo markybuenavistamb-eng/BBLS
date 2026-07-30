@@ -164,6 +164,7 @@ function bocPackingList(s, box, boxNo, boxTotal) {
 
   const famName = r.family_name || (legacy.full_name || '').split(' ').slice(-1)[0] || '';
   const givName = r.given_name || (legacy.full_name || '').split(' ')[0] || '';
+  const zip = r.postal_code || legacy.postal_code || '';
   const phAddress = [r.street_address, r.barangay, r.city_municipality, r.region].filter(Boolean).join(', ')
     || [legacy.address_line, legacy.barangay, legacy.city_municipality, legacy.province].filter(Boolean).join(', ');
 
@@ -196,7 +197,10 @@ function bocPackingList(s, box, boxNo, boxTotal) {
           <td colspan="2"><small>Contact Number/s:*</small>${line(r.contact_number || legacy.phone_primary)}</td>
           <td colspan="2"><small>Email Address, if any:</small>${line(r.email || legacy.email)}</td>
         </tr>
-        <tr><td colspan="4"><small>Complete Philippine Address:*</small>${line(phAddress)}</td></tr>
+        <tr>
+          <td colspan="3"><small>Complete Philippine Address:*</small>${line(phAddress)}</td>
+          <td><small>ZIP / Postal Code:</small>${line(zip)}</td>
+        </tr>
         <tr>
           <td colspan="4">
             <small>Relationship to Sender (by affinity or consanguinity): (Check one (1) box only)</small>
