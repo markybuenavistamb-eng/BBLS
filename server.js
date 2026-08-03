@@ -399,7 +399,7 @@ app.get('/api/box-sizes', (req, res) => {
     boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
     excess_charge_per_kg: d.settings.excessWeightChargePerKg != null ? d.settings.excessWeightChargePerKg : null,
     excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP',
-    max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 150000,
+    max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 10000,
     service_levels: SM.SERVICE_LEVELS,
     origin_countries: REF.ORIGIN_COUNTRIES
   });
@@ -496,7 +496,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
       const sizeInfo = BOXSIZE.bySize(sizeKey);
       const weight = +rq(bx.weight_kg, 'Weight') || 0;
       const boxValue = +rq(bx.total_value_php, 'Total Value of Contents') || 0;
-      const maxBoxValue = db.get().settings.maxBoxValuePhp != null ? db.get().settings.maxBoxValuePhp : 150000;
+      const maxBoxValue = db.get().settings.maxBoxValuePhp != null ? db.get().settings.maxBoxValuePhp : 10000;
       if (maxBoxValue && boxValue > maxBoxValue) throw new Error(`Box ${n}: declared value ₱${boxValue.toLocaleString('en-PH')} exceeds the ₱${maxBoxValue.toLocaleString('en-PH')} limit per box`);
       return {
         receiver: {

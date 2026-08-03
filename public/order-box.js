@@ -105,7 +105,10 @@ function renderForm() {
       <div id="addrWrap" style="margin-top:8px">
         <label>Sender's Complete Address Abroad * <span class="muted">(where we deliver the empty box[es])</span></label>
         <div class="form-grid">
-          <div><label class="sub">Country *</label><input id="oCountry" list="dlCountries" required placeholder="Select country…"></div>
+          <div><label class="sub">Country *</label><select id="oCountry" required>
+            <option value="">— select country —</option>
+            ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select></div>
           <div><label class="sub">City / State / Province *</label><input id="oCity" required></div>
           <div><label class="sub">Postal / ZIP Code</label><input id="oZip" placeholder="e.g. 10110"></div>
         </div>
@@ -124,7 +127,7 @@ function renderForm() {
         <div><label>Sender's Email <span class="muted">(if any)</span></label><input id="cEmail" type="email"></div>
       </div>
       <label>Notes <span class="muted">(optional)</span></label><input id="cNotes" placeholder="Anything we should know">
-      <div class="muted" style="font-size:12px;margin-top:6px"><b>All fields with an asterisk (*) are required.</b></div>
+      <div style="font-size:12px;margin-top:6px"><b style="color:#d32f2f">All fields with an asterisk (*) are required.</b></div>
       <div id="obError" class="error"></div>
       <button onclick="submitOrder()">Place order</button>
       <div class="muted" style="margin-top:6px">After you order, a VFIC agent will contact you to confirm the price and schedule.</div>

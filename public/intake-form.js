@@ -9,7 +9,7 @@ let BOX_SIZES = [];
 let EXCESS_RATE = null;
 let EXCESS_CCY = 'PHP';
 let BOC_MAX_CBM = 0.20;
-let MAX_BOX_VALUE = 150000; // per-box declared-value ceiling (admin-configurable)
+let MAX_BOX_VALUE = 10000; // per-box declared-value ceiling (admin-configurable)
 let SERVICE_LEVELS = ['OCEAN_ECONOMY', 'OCEAN_PRIORITY', 'EXPRESS_AIR'];
 const SERVICE_LEVEL_LABELS = { OCEAN_ECONOMY: 'Ocean Economy', OCEAN_PRIORITY: 'Ocean Priority', EXPRESS_AIR: 'Express Air' };
 let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
@@ -335,7 +335,7 @@ function renderForm() {
         Incomplete or wrong receiver details are the main cause of failed deliveries.
         Additional charges apply for re-delivery caused by incorrect or unreachable contact details.
       </div>
-      <div style="margin-top:6px"><b>All fields with an asterisk (*) are required.</b></div>
+      <div style="margin-top:6px"><b style="color:#d32f2f">All fields with an asterisk (*) are required.</b></div>
     </div>
 
     <div class="card">
@@ -386,8 +386,10 @@ function renderForm() {
 
       <div class="form-grid">
         <div><label>Sending From (branch / city) *</label><input id="oAgent" required></div>
-        <div><label>Country *</label><input id="sCountry" list="dlCountries" required placeholder="Select country…">
-          <datalist id="dlCountries">${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>
+        <div><label>Country *</label><select id="sCountry" required>
+          <option value="">— select country —</option>
+          ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select></div>
         <div><label>Service Level *</label><select id="oLevel" required>
           ${SERVICE_LEVELS.map(k => `<option value="${k}">${esc(SERVICE_LEVEL_LABELS[k] || k)}</option>`).join('')}
         </select></div>
