@@ -154,7 +154,7 @@ async function boot() {
   try { ME = await api('/api/me'); } catch (e) { ME = null; }
   VI.onChange(() => { if (ME) { renderShell(); route(); } });
   if (!ME) return renderLogin();
-  await loadBoxSizeCatalog();
+  await Promise.all([loadBoxSizeCatalog(), loadMyModules()]);
   renderShell();
   route();
 }
@@ -210,7 +210,7 @@ function renderLogin() {
 async function doLogin() {
   try {
     ME = await api('/api/login', { method: 'POST', body: { email: lgEmail.value.trim(), password: lgPass.value } });
-    await loadBoxSizeCatalog();
+    await Promise.all([loadBoxSizeCatalog(), loadMyModules()]);
     renderShell();
     location.hash = '#/dashboard';
     route();
@@ -237,6 +237,30 @@ const ROLE_LABELS = {
 };
 const isAccounting = () => ME && R_ADMINS.concat(['ACCOUNTING']).includes(ME.role);
 
+// Sidebar entries are gated by MODULE (see lib/modules.js), so an admin can switch any
+// module off for a role in Admin → Roles & Modules and it disappears from that role's nav.
+const NAV2 = [
+  { section: 'nav.section.ops' },
+  ['#/dashboard', 'nav.dashboard', 'grid', 'dashboard'],
+  ['#/shipments', 'nav.shipments', 'package', 'shipments'],
+  ['#/box-orders', 'nav.boxorders', 'box', 'box_orders'],
+  ['#/boxes', 'nav.boxes', 'box', 'boxes'],
+  ['#/containers', 'nav.containers', 'container', 'containers'],
+  ['#/origin-warehouse', 'nav.originwh', 'warehouse', 'origin_warehouse'],
+  ['#/warehouse', 'nav.warehouse', 'warehouse', 'ph_warehouse'],
+  ['#/trips', 'nav.trips', 'truck', 'trips'],
+  ['#/returns', 'nav.returns', 'undo', 'returns'],
+  { section: 'nav.section.people' },
+  ['#/customers', 'nav.customers', 'users', 'customers'],
+  ['#/notifications', 'nav.sms', 'chat', 'sms'],
+  ['#/reports', 'nav.reports', 'chart', 'reports'],
+  ['#/accounting', 'nav.accounting', 'chart', 'accounting'],
+  { section: 'nav.section.system' },
+  ['#/branches', 'nav.branches', 'container', 'branches'],
+  ['#/scan', 'nav.scan', 'scan', 'scan'],
+  ['#/admin', 'nav.admin', 'gear', 'admin']
+];
+
 const NAV = [
   { section: 'nav.section.ops' },
   ['#/dashboard', 'nav.dashboard', 'grid', R_AGENTS.concat(['WAREHOUSE', 'ACCOUNTING'])],
@@ -257,21 +281,69 @@ const NAV = [
   ['#/scan', 'nav.scan', 'scan', R_AGENTS.concat(['WAREHOUSE'])],
   ['#/admin', 'nav.admin', 'gear', R_ADMINS]
 ];
+/* ---------- sidebar: module-gated, collapsible, branch-aware ---------- */
+let MY = null;                       // /api/my-modules for the signed-in user
+const COLLAPSE_KEY = 'vfic_nav_collapsed';
+const GROUP_KEY = 'vfic_nav_groups';
+const isNavCollapsed = () => localStorage.getItem(COLLAPSE_KEY) === '1';
+function toggleSidebar() {
+  const next = !isNavCollapsed();
+  localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+  document.getElementById('shell').classList.toggle('nav-collapsed', next);
+  const btn = document.getElementById('collapseBtn');
+  if (btn) { btn.textContent = next ? '»' : '«'; btn.title = next ? 'Expand sidebar' : 'Collapse sidebar'; }
+}
+function collapsedGroups() {
+  try { return JSON.parse(localStorage.getItem(GROUP_KEY) || '[]'); } catch (e) { return []; }
+}
+function toggleNavGroup(key) {
+  const set = new Set(collapsedGroups());
+  set.has(key) ? set.delete(key) : set.add(key);
+  localStorage.setItem(GROUP_KEY, JSON.stringify([...set]));
+  renderShell();
+}
+async function loadMyModules() {
+  try { MY = await api('/api/my-modules'); }
+  catch (e) { MY = null; }
+}
+
 function renderShell() {
   document.getElementById('preauth').style.display = 'none';
-  document.getElementById('shell').style.display = '';
+  const shell = document.getElementById('shell');
+  shell.style.display = '';
+  shell.classList.toggle('nav-collapsed', isNavCollapsed());
   document.getElementById('brandOps').textContent = VI.t('shell.ops');
   document.getElementById('logoutBtn').textContent = VI.t('common.logout');
+
+  const allowed = MY && Array.isArray(MY.modules) ? MY.modules : null;
+  const closed = new Set(collapsedGroups());
   let html = '';
-  for (const item of NAV) {
-    if (item.section) { html += `<div class="nav-section">${VI.t(item.section)}</div>`; continue; }
-    const [href, key, ic, roles] = item;
-    if (!roles.includes(ME.role)) continue;
-    html += `<a href="${href}" data-nav="${href}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span></a>`;
+  let group = null, buffer = '', count = 0;
+  const flush = () => {
+    if (!group) { html += buffer; buffer = ''; return; }
+    if (count) {
+      const shut = closed.has(group);
+      html += `<button type="button" class="nav-section nav-group${shut ? ' shut' : ''}" onclick="toggleNavGroup('${group}')">
+          <span>${VI.t(group)}</span><span class="chev">${shut ? '▸' : '▾'}</span></button>
+        <div class="nav-group-items${shut ? ' hidden' : ''}">${buffer}</div>`;
+    }
+    buffer = ''; count = 0;
+  };
+  for (const item of NAV2) {
+    if (item.section) { flush(); group = item.section; continue; }
+    const [href, key, ic, moduleKey] = item;
+    if (allowed && !allowed.includes(moduleKey)) continue;
+    if (!allowed && !R_ADMINS.includes(ME.role)) continue; // fail closed if modules unknown
+    buffer += `<a href="${href}" data-nav="${href}" title="${esc(VI.t(key))}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span></a>`;
+    count += 1;
   }
+  flush();
+
   document.getElementById('nav').innerHTML = html;
   document.getElementById('who').textContent = ME.name;
-  document.getElementById('whoRole').textContent = ME.role.replace(/_/g, ' ');
+  const roleLine = ROLE_LABELS[ME.role] || ME.role.replace(/_/g, ' ');
+  const branch = MY && MY.branch ? MY.branch.short : (MY && MY.sees_all_branches ? 'All branches' : '');
+  document.getElementById('whoRole').innerHTML = `${esc(roleLine)}${branch ? `<div class="who-branch">${esc(branch)}</div>` : ''}`;
   document.getElementById('langMount').innerHTML = VI.toggleHtml('renderShell();route()');
   markNav(location.hash || '#/dashboard');
 }
@@ -302,6 +374,7 @@ async function route() {
     if (p[0] === 'truck-receipt' && p[1] === 't') return pageTruckReceipt('trip', +p[2]);
     if (p[0] === 'truck-receipt' && p[1] === 'b') return pageTruckReceipt('box', +p[2]);
     if (p[0] === 'delivery-receipt') return pageDeliveryReceipt(+p[1]);
+    if (p[0] === 'sender-receipt') return pageSenderReceipt(+p[1]);
     if (p[0] === 'boxes' && p[1]) return pageBoxDetail(+p[1]);
     if (p[0] === 'boxes') return pageBoxes();
     if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
@@ -318,6 +391,8 @@ async function route() {
     if (p[0] === 'notifications') return pageNotifications();
     if (p[0] === 'reports') return pageReports();
     if (p[0] === 'accounting') return pageAccounting(p[1] || 'rates');
+    if (p[0] === 'branches') return pageBranches();
+    if (p[0] === 'role-modules') return pageRoleModules();
     if (p[0] === 'admin') return pageAdmin();
     if (p[0] === 'scan') return pageScan();
     pageDashboard();
@@ -866,6 +941,7 @@ async function pageShipmentDetail(id) {
       <h1>${esc(s.shipment_number)}</h1>
       <div>
         <a href="#/labels/s/${s.id}"><button class="secondary">🖨 Print labels</button></a>
+        <a href="#/sender-receipt/${s.id}"><button class="secondary">🧾 Official receipt</button></a>
         <a href="#/receiving-form/${s.id}"><button class="secondary">🖨 Receiving form</button></a>
         <a href="#/packing-list/${s.id}"><button class="secondary">🖨 Packing list</button></a>
         ${canIntake() && createdBoxes ? `<button onclick="confirmOriginReceipt(${s.id})">✓ Confirm origin receipt (${createdBoxes})</button>` : ''}
@@ -1936,6 +2012,103 @@ async function retryNotif(id) {
   try { await api('/api/notifications/retry/' + id, { method: 'POST' }); flash('Re-queued — worker will retry shortly'); route(); } catch (e) { showErr(e); }
 }
 
+/* ---------- roles × modules matrix ---------- */
+async function pageRoleModules() {
+  const d = await api('/api/role-modules');
+  const groups = [...new Set(d.modules.map(m => m.group))];
+  view(`
+    <div class="row" style="justify-content:space-between">
+      <h1>Roles &amp; Modules</h1>
+      <div><a href="#/admin"><button class="secondary">← Admin</button></a>
+      <button onclick="saveRoleModules()">Save permissions</button></div>
+    </div>
+    <div class="muted" style="margin-bottom:10px">Tick which modules each role can open. Unticking a module hides it from that role's sidebar and blocks its API. Locked ticks (🔒) keep the system administrable.</div>
+    ${groups.map(g => `
+      <h2>${esc(g)}</h2>
+      <div class="card table-scroll">
+        <table>
+          <tr><th>Module</th>${d.roles.map(r => `<th style="text-align:center">${esc(r.label)}</th>`).join('')}</tr>
+          ${d.modules.filter(m => m.group === g).map(m => `<tr>
+            <td><b>${esc(m.label)}</b><div class="muted">${esc(m.route)}</div></td>
+            ${d.roles.map(r => {
+              const locked = (d.locked[r.key] || []).includes(m.key);
+              const on = (d.matrix[r.key] || []).includes(m.key);
+              return `<td style="text-align:center">${locked
+                ? `<span title="Always enabled for this role">🔒</span><input type="checkbox" class="rmChk" data-role="${r.key}" data-mod="${m.key}" checked disabled style="display:none">`
+                : `<input type="checkbox" class="rmChk" data-role="${r.key}" data-mod="${m.key}" ${on ? 'checked' : ''} style="width:auto">`}</td>`;
+            }).join('')}
+          </tr>`).join('')}
+        </table>
+      </div>`).join('')}
+    <div class="card"><button onclick="saveRoleModules()">Save permissions</button></div>`);
+}
+async function saveRoleModules() {
+  const matrix = {};
+  document.querySelectorAll('.rmChk').forEach(el => {
+    const r = el.dataset.role;
+    matrix[r] = matrix[r] || [];
+    if (el.checked) matrix[r].push(el.dataset.mod);
+  });
+  try {
+    await api('/api/role-modules', { method: 'PUT', body: { matrix } });
+    await loadMyModules();
+    flash('Module permissions saved');
+    renderShell();
+    route();
+  } catch (e) { showErr(e); }
+}
+
+/* ---------- branches / business partners ---------- */
+async function pageBranches() {
+  const { branches, currency } = await api('/api/branches');
+  view(`
+    <h1>Branches &amp; Business Partners</h1>
+    <div class="muted" style="margin-bottom:10px">Our Thailand and Cambodia operations run as independent business partners with their own staff, warehouse and shipments — consolidated here for head office. Only Master and Developer Admins can see this view.</div>
+    <div class="tiles">
+      ${branches.map(b => `<div class="tile">
+        <div class="num">${b.shipments}</div>
+        <div class="lbl">${esc(b.short)} shipments<br><span class="muted">${b.boxes} boxes · ${b.staff} staff</span></div>
+      </div>`).join('')}
+    </div>
+    ${branches.map(b => `
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <h2 style="margin:0">${esc(b.label)}</h2>
+            <div class="muted">${esc(b.country)} · <span class="badge ${b.type === 'HQ' ? 'st-delivered' : 'st-created'}">${b.type === 'HQ' ? 'Head Office' : 'Business Partner'}</span></div>
+          </div>
+          <div style="text-align:right">
+            <div><b>${esc(money(b.revenue, currency))}</b><div class="muted">billed revenue</div></div>
+            ${b.type !== 'HQ' ? `<div style="margin-top:6px"><b>${esc(money(b.commission_due, currency))}</b><div class="muted">commission @ ${b.commission_pct || 0}%</div></div>` : ''}
+          </div>
+        </div>
+        <div class="form-grid" style="margin-top:10px">
+          <div><label>Registered partner name</label><input id="br_partner_name_${b.key}" value="${esc(b.partner_name || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
+          <div><label>Tax ID / TIN</label><input id="br_tax_id_${b.key}" value="${esc(b.tax_id || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
+          <div><label>Contact number</label><input id="br_contact_${b.key}" value="${esc(b.contact || '')}"></div>
+          <div><label>Email</label><input id="br_email_${b.key}" value="${esc(b.email || '')}"></div>
+          <div><label>Commission %</label><input id="br_commission_pct_${b.key}" type="number" min="0" max="100" step="0.01" value="${b.commission_pct || 0}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
+          <div><label>Settlement terms</label><input id="br_settlement_terms_${b.key}" value="${esc(b.settlement_terms || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
+        </div>
+        <label>Address</label><input id="br_address_${b.key}" value="${esc(b.address || '')}">
+        <div class="row" style="margin-top:10px;gap:8px">
+          <button onclick="saveBranch('${b.key}')">Save partner details</button>
+          <span class="muted">In transit: <b>${b.in_transit}</b> · Delivered: <b>${b.delivered}</b></span>
+        </div>
+      </div>`).join('')}`);
+}
+async function saveBranch(key) {
+  const g = (f) => (document.getElementById(`br_${f}_${key}`) || {}).value;
+  try {
+    await api('/api/branches/' + key, { method: 'PUT', body: {
+      partner_name: g('partner_name'), tax_id: g('tax_id'), contact: g('contact'),
+      email: g('email'), commission_pct: g('commission_pct'), settlement_terms: g('settlement_terms'),
+      address: g('address')
+    } });
+    flash('Partner details saved');
+  } catch (e) { showErr(e); }
+}
+
 /* ---------- accounting ---------- */
 const money = (v, ccy) => `${ccy || 'PHP'} ${Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 let ACCT_META = null;
@@ -2231,7 +2404,10 @@ async function renderBoxMovement(filter) {
 async function pageAdmin() {
   const [users, tpl] = await Promise.all([api('/api/users'), api('/api/templates')]);
   view(`
-    <h1>Admin</h1>
+    <div class="row" style="justify-content:space-between">
+      <h1>Admin</h1>
+      <a href="#/role-modules"><button class="secondary">🔐 Roles &amp; Modules</button></a>
+    </div>
     <h2>SMS templates</h2>
     <div class="card">
       <div class="muted">Placeholders: ${tpl.placeholders.map(p => `<code>{${p}}</code>`).join(' ')}</div>

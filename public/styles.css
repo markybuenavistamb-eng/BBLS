@@ -629,6 +629,83 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .pub-band .brand .badge-vf { background: var(--primary); padding: 3px 8px; border-radius: 6px; }
 .pub-band .spacer { flex: 1; }
 
+/* ---------- Official Receipt (sender's copy) ---------- */
+.or-receipt {
+  background: #fff; color: #000; border: 1px solid #000;
+  max-width: 8.1in; margin: 0 auto 16px; padding: 14px 18px;
+  font-family: "Courier New", Consolas, monospace; font-size: 11px; line-height: 1.35;
+  page-break-after: always;
+}
+.or-receipt:last-child { page-break-after: auto; }
+.or-top { display: flex; gap: 18px; align-items: flex-start; }
+.or-top-left { flex: 0 0 42%; }
+.or-top-right { flex: 1; }
+.or-barcode { display: block; max-width: 100%; height: 54px; }
+.or-trk { font-size: 17px; font-weight: 700; letter-spacing: 1px; margin-top: 3px; }
+.or-official { font-weight: 700; font-size: 12px; letter-spacing: .3px; margin-bottom: 3px; }
+.or-kv { display: flex; gap: 6px; }
+.or-kv > span { flex: 0 0 150px; }
+.or-kv > b { font-weight: 400; }
+.or-company { margin: 10px 0 8px; padding-bottom: 6px; border-bottom: 1px solid #000; font-size: 10.5px; }
+.or-company b { font-size: 12px; }
+.or-body { display: flex; gap: 18px; }
+.or-col { flex: 1; min-width: 0; }
+.or-col-right { flex: 0 0 46%; }
+.or-label { font-size: 10px; letter-spacing: .5px; }
+.or-name { font-size: 14px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+.or-sub, .or-addr { font-size: 10.5px; }
+.or-addr { text-transform: uppercase; }
+.or-route { font-size: 14px; font-weight: 700; letter-spacing: 1px; margin-bottom: 4px; }
+.or-vat { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #000; }
+.or-due { margin-top: 6px; padding-top: 6px; border-top: 1px solid #000; }
+.or-amount { font-size: 14px; font-weight: 700; }
+.or-amount > b { font-weight: 700; }
+.or-contents { margin-top: 10px; padding-top: 6px; border-top: 1px solid #000; font-size: 10.5px; }
+.or-warrant { font-size: 9px; margin-top: 6px; letter-spacing: .2px; }
+.or-signs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 26px; text-align: center; font-size: 9.5px; }
+.or-sigline { border-bottom: 1px solid #000; margin-bottom: 3px; height: 26px; }
+.or-care { margin-top: 10px; font-size: 10px; }
+@media print { .or-receipt { border: none; margin: 0 auto; max-width: 100%; } }
+
+/* ---------- collapsible sidebar + nav groups ---------- */
+.nav-collapse-btn {
+  position: absolute; top: 10px; right: 8px;
+  background: rgba(255,255,255,.10); color: #cfd3d8; border: 0;
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0; margin: 0;
+}
+.nav-collapse-btn:hover { background: var(--primary); color: #fff; }
+.sidebar-brand { position: relative; }
+
+/* Group headers behave as buttons that fold their section away. */
+.nav-section.nav-group {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  background: none; border: 0; cursor: pointer; text-align: left; margin: 0; font: inherit;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #9aa0a8;
+  padding: 14px 10px 5px; font-weight: 700;
+}
+.nav-section.nav-group:hover { color: #e4e6e9; }
+.nav-section.nav-group .chev { font-size: 10px; opacity: .8; }
+.nav-group-items.hidden { display: none; }
+
+/* Collapsed rail: icons only. */
+.app-shell.nav-collapsed .sidebar { width: 62px; }
+.app-shell.nav-collapsed .sidebar .co,
+.app-shell.nav-collapsed .sidebar-brand a,
+.app-shell.nav-collapsed .nav-section .chev,
+.app-shell.nav-collapsed .nav-section span,
+.app-shell.nav-collapsed #nav a span,
+.app-shell.nav-collapsed .sidebar-foot .who,
+.app-shell.nav-collapsed .sidebar-foot .role,
+.app-shell.nav-collapsed .sidebar-foot #langMount,
+.app-shell.nav-collapsed .sidebar-foot button { display: none; }
+.app-shell.nav-collapsed .nav-section.nav-group { padding: 10px 0 4px; justify-content: center; }
+.app-shell.nav-collapsed .nav-section.nav-group::after { content: "···"; color: #6f757d; }
+.app-shell.nav-collapsed #nav a { justify-content: center; padding: 10px 0; }
+.app-shell.nav-collapsed .nav-collapse-btn { position: static; margin: 10px auto 0; display: block; }
+.app-shell.nav-collapsed .sidebar-brand { padding: 6px 0; text-align: center; }
+.who-branch { font-size: 10.5px; color: var(--primary); font-weight: 700; letter-spacing: .4px; margin-top: 2px; }
+
 /* Info note (returning-sender autofill, office pick-up, etc.) */
 .note-info {
   background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a;

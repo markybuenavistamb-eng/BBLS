@@ -11,6 +11,49 @@ function fmtDay(iso) { return iso ? new Date(iso).toLocaleDateString('en-PH', { 
 
 let ME = null;
 
+// Country → international dialling code. Choosing a country pre-fills the phone field with
+// its code, so a sender never has to remember it. VFIC's lanes are listed first.
+const COUNTRY_CODES = [
+  { name: 'Thailand', code: '+66' },
+  { name: 'Cambodia', code: '+855' },
+  { name: 'Vietnam', code: '+84' },
+  { name: 'Philippines', code: '+63' },
+  { name: 'Singapore', code: '+65' },
+  { name: 'Malaysia', code: '+60' },
+  { name: 'Indonesia', code: '+62' },
+  { name: 'Hong Kong', code: '+852' },
+  { name: 'China', code: '+86' },
+  { name: 'Taiwan', code: '+886' },
+  { name: 'South Korea', code: '+82' },
+  { name: 'Japan', code: '+81' },
+  { name: 'United Arab Emirates', code: '+971' },
+  { name: 'Saudi Arabia', code: '+966' },
+  { name: 'Qatar', code: '+974' },
+  { name: 'Kuwait', code: '+965' },
+  { name: 'Bahrain', code: '+973' },
+  { name: 'Oman', code: '+968' },
+  { name: 'United States', code: '+1' },
+  { name: 'Canada', code: '+1' },
+  { name: 'United Kingdom', code: '+44' },
+  { name: 'Australia', code: '+61' },
+  { name: 'New Zealand', code: '+64' },
+  { name: 'Italy', code: '+39' },
+  { name: 'Spain', code: '+34' },
+  { name: 'Germany', code: '+49' }
+];
+// Swap the leading dial code when the country changes, keeping any number already typed.
+function onCountryChange() {
+  const sel = gid('acCountry'), phone = gid('acPhone');
+  if (!sel || !phone) return;
+  const next = (COUNTRY_CODES.find(c => c.name === sel.value) || {}).code || '';
+  const current = phone.value.trim();
+  const known = COUNTRY_CODES.map(c => c.code).sort((a, b) => b.length - a.length);
+  const stripped = known.reduce((v, code) => (v.startsWith(code) ? v.slice(code.length) : v), current).trim();
+  phone.value = next ? (stripped ? `${next} ${stripped}` : `${next} `) : stripped;
+  phone.focus();
+  phone.setSelectionRange(phone.value.length, phone.value.length);
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     method: opts.method || 'GET',
@@ -43,7 +86,14 @@ function renderAuth(mode) {
     <div class="card" style="max-width:460px;margin:0 auto">
       ${signup ? `
         <label>Full Name *</label><input id="acName" autocomplete="name">
-        <label>Mobile Number</label><input id="acPhone" autocomplete="tel" placeholder="e.g. +66 62 555 0119">` : ''}
+        <label>Country *</label>
+        <select id="acCountry" onchange="onCountryChange()">
+          <option value="">— select your country —</option>
+          ${COUNTRY_CODES.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (${esc(c.code)})</option>`).join('')}
+        </select>
+        <label>Mobile Number</label>
+        <input id="acPhone" autocomplete="tel" placeholder="Select a country to fill the code">
+        <div class="muted" style="font-size:12px;margin-top:4px">Choosing your country fills in the dialling code automatically.</div>` : ''}
       <label>Email *</label><input id="acEmail" type="email" autocomplete="email">
       <label>Password *</label><input id="acPass" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}">
       ${signup ? `<div class="muted" style="font-size:12px;margin-top:4px">At least 8 characters.</div>` : ''}
@@ -65,7 +115,8 @@ async function doSignup() {
   const err = gid('acErr'); err.textContent = '';
   try {
     ME = await api('/api/public/sender/signup', { method: 'POST', body: {
-      name: val('acName'), phone: val('acPhone'), email: val('acEmail'), password: gid('acPass').value
+      name: val('acName'), phone: val('acPhone'), country: val('acCountry'),
+      email: val('acEmail'), password: gid('acPass').value
     } });
     renderAccount();
   } catch (e) { err.textContent = e.message; }

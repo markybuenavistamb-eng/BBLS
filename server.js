@@ -10,6 +10,7 @@ const storage = require('./lib/storage');
 const sess = require('./lib/session');
 const BOC = require('./lib/boc');
 const BOXSIZE = require('./lib/boxsizes');
+const IDCHECK = require('./lib/idcheck');
 const REF = require('./lib/refdata');
 const REGION = require('./lib/regions');
 
@@ -72,6 +73,29 @@ function requireRole(...roles) {
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Your role does not allow this action' });
     next();
   });
+}
+
+// ---------- branch scoping ----------
+// A partner branch's staff only ever see their own origin country's operation.
+// Admins (Developer / Master) get the consolidated cross-branch view.
+function branchScope(user) { return user ? ROLE.originScope(user.role) : null; }
+function scopeShipmentList(user, shipments) {
+  const scope = branchScope(user);
+  return scope ? shipments.filter(s => s.origin_country === scope) : shipments;
+}
+// Boxes inherit their branch from the parent shipment.
+function scopeBoxList(user, boxes) {
+  const scope = branchScope(user);
+  if (!scope) return boxes;
+  const d = db.get();
+  const ok = new Set(d.shipments.filter(s => s.origin_country === scope).map(s => s.id));
+  return boxes.filter(b => ok.has(b.shipment_id));
+}
+// A container belongs to the branch whose country it sails from.
+function scopeContainerList(user, containers) {
+  const scope = branchScope(user);
+  if (!scope) return containers;
+  return containers.filter(c => String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase()));
 }
 
 // ---------- shared serializers ----------
@@ -322,7 +346,7 @@ app.put('/api/customers/:id', requireRole(...AGENTS), (req, res) => {
 // ---------- shipments ----------
 app.get('/api/shipments', requireAuth, (req, res) => {
   const d = db.get();
-  let list = d.shipments.slice();
+  let list = scopeShipmentList(req.user, d.shipments.slice());
   const q = String(req.query.q || '').toLowerCase();
   if (q) list = list.filter(s => {
     const sender = d.customers.find(c => c.id === s.sender_id) || {};
@@ -529,6 +553,8 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
 
     const idErr = validateIdDocument(req.file);
     if (idErr) return bad(idErr);
+    // Advisory check that the ID actually belongs to the declared sender.
+    const idCheck = IDCHECK.verifyIdDocument(req.file, sender);
 
     // --- B + C: recipient and itemized goods, per box ---
     let boxesIn;
@@ -602,6 +628,9 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
       currency: b.currency || 'USD',
       payment_status: b.payment_status === 'PAID' ? 'PAID' : 'UNPAID',
       passport_file: '/files/' + passportKey,
+      // Automated ID check + the staff decision that follows it.
+      id_check: idCheck,
+      id_verification: { status: 'PENDING', by: null, at: null, note: '' },
       boxes
     };
     d.intake_requests.push(rec);
@@ -614,7 +643,8 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
 // Staff review queue
 app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
-  let list = d.intake_requests.slice();
+  const scope = branchScope(req.user);
+  let list = d.intake_requests.filter(r => !scope || r.origin_country === scope);
   if (req.query.status) list = list.filter(r => r.status === req.query.status);
   list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
   res.json(list.map(r => ({
@@ -626,13 +656,27 @@ app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
     size_summary: Object.entries(r.boxes.reduce((m, b) => {
       const k = BOXSIZE.canonicalSize(b.size_category) || b.size_category || '—';
       m[k] = (m[k] || 0) + 1; return m;
-    }, {})).map(([k, n]) => `${n}× ${(BOXSIZE.bySize(k) || {}).label || k}`).join(', ')
+    }, {})).map(([k, n]) => `${n}× ${(BOXSIZE.bySize(k) || {}).label || k}`).join(', '),
+    id_verdict: (r.id_check || {}).verdict || null,
+    id_flag_count: ((r.id_check || {}).flags || []).length,
+    id_verification_status: (r.id_verification || {}).status || 'PENDING'
   })));
 });
 app.get('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
   const r = db.get().intake_requests.find(x => x.id === +req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
   res.json(r);
+});
+// Staff decision on the uploaded ID (confirm it matches the sender, or reject it).
+app.post('/api/intake-requests/:id/verify-id', requireRole(...AGENTS), (req, res) => {
+  const r = db.get().intake_requests.find(x => x.id === +req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const { status, note } = req.body || {};
+  if (!['VERIFIED', 'REJECTED', 'PENDING'].includes(status)) return res.status(400).json({ error: 'Invalid verification status' });
+  if (status === 'REJECTED' && !String(note || '').trim()) return res.status(400).json({ error: 'Please say why the ID was rejected' });
+  r.id_verification = { status, by: req.user.name, at: new Date().toISOString(), note: String(note || '').trim() };
+  db.persist();
+  res.json(r.id_verification);
 });
 app.put('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
   const r = db.get().intake_requests.find(x => x.id === +req.params.id);
@@ -713,7 +757,7 @@ app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
 // ---------- boxes ----------
 app.get('/api/boxes', requireAuth, (req, res) => {
   const d = db.get();
-  let list = d.boxes.slice();
+  let list = scopeBoxList(req.user, d.boxes.slice());
   const { q, status, region, container_id, trip_id } = req.query;
   if (status) list = list.filter(b => b.status === status);
   if (region) list = list.filter(b => b.region === region || (d.customers.find(c => c.id === b.receiver_id) || {}).region === region);
@@ -821,8 +865,8 @@ app.post('/api/boxes/:id/revert', requireRole(...AGENTS, 'WAREHOUSE'), (req, res
 // ---------- containers ----------
 app.get('/api/containers', requireAuth, (req, res) => {
   const d = db.get();
-  res.json(d.containers
-    .slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
+  res.json(scopeContainerList(req.user, d.containers.slice())
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })));
 });
 app.post('/api/containers', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
@@ -1223,6 +1267,109 @@ app.put('/api/settings/rates', requireRole(...ADMINS), (req, res) => {
 app.get('/api/roles', requireRole(...ADMINS), (req, res) => {
   res.json({ roles: ROLE.ROLES, developer_only: ['DEVELOPER_ADMIN'] });
 });
+
+// ---------- role → module permissions ----------
+const MODULES = require('./lib/modules');
+const BRANCH = require('./lib/branches');
+
+// What the signed-in user may open — drives the sidebar and client-side routing.
+app.get('/api/my-modules', requireAuth, (req, res) => {
+  const d = db.get();
+  const modules = MODULES.modulesForRole(req.user.role, d.settings.roleModules);
+  const branchKey = BRANCH.branchForRole(req.user.role);
+  res.json({
+    role: req.user.role,
+    role_label: ROLE.ROLE_LABELS[req.user.role] || req.user.role,
+    modules,
+    catalogue: MODULES.MODULES.filter(m => modules.includes(m.key)),
+    branch: branchKey ? BRANCH.byKey(branchKey) : null,
+    sees_all_branches: BRANCH.seesAllBranches(req.user.role)
+  });
+});
+
+// The full role × module matrix (Admin → Roles & Modules).
+app.get('/api/role-modules', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  res.json({
+    modules: MODULES.MODULES,
+    roles: ROLE.ROLES,
+    matrix: MODULES.matrix(ROLE.ROLE_KEYS, d.settings.roleModules),
+    locked: MODULES.LOCKED,
+    defaults: MODULES.DEFAULTS
+  });
+});
+app.put('/api/role-modules', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  const incoming = (req.body || {}).matrix;
+  if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'A matrix of role → modules is required' });
+  const next = {};
+  for (const role of ROLE.ROLE_KEYS) {
+    if (!Array.isArray(incoming[role])) continue;
+    const picked = incoming[role].filter(k => MODULES.MODULE_KEYS.includes(k));
+    next[role] = [...new Set([...picked, ...(MODULES.LOCKED[role] || [])])];
+  }
+  // A non-developer admin must not be able to lock the Developer Admin out of anything.
+  if (req.user.role !== 'DEVELOPER_ADMIN') next.DEVELOPER_ADMIN = MODULES.MODULE_KEYS.slice();
+  d.settings.roleModules = next;
+  db.persist();
+  res.json({ matrix: MODULES.matrix(ROLE.ROLE_KEYS, next) });
+});
+
+// Reject a request whose role has the module switched off.
+function requireModule(moduleKey) {
+  return (req, res, next) => requireAuth(req, res, () => {
+    if (!MODULES.canUseModule(req.user.role, moduleKey, db.get().settings.roleModules)) {
+      return res.status(403).json({ error: `The ${MODULES.MODULE_LABELS[moduleKey] || moduleKey} module is not enabled for your role` });
+    }
+    next();
+  });
+}
+
+// ---------- branches / business partners ----------
+// Consolidated view across all origin partners — Master/Developer Admin only.
+app.get('/api/branches', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  const list = BRANCH.resolve(d.settings.branches);
+  const withStats = list.map(b => {
+    const shipments = d.shipments.filter(s => b.type === 'HQ' ? false : s.origin_country === b.country);
+    const shipmentIds = shipments.map(s => s.id);
+    const boxes = d.boxes.filter(x => shipmentIds.includes(x.shipment_id));
+    const delivered = boxes.filter(x => x.status === 'DELIVERED').length;
+    const invoices = (d.invoices || []).filter(i => i.status !== 'VOID' && shipmentIds.includes(i.shipment_id));
+    const revenue = +invoices.reduce((n, i) => n + i.total, 0).toFixed(2);
+    return {
+      ...b,
+      staff: d.users.filter(u => BRANCH.branchForRole(ROLE.normalizeRole(u.role)) === b.key && u.active).length,
+      shipments: shipments.length,
+      boxes: boxes.length,
+      delivered,
+      in_transit: boxes.filter(x => ['LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT'].includes(x.status)).length,
+      revenue,
+      commission_due: +(revenue * (+b.commission_pct || 0) / 100).toFixed(2)
+    };
+  });
+  res.json({ branches: withStats, currency: (d.settings.rateCard || {}).currency || 'PHP' });
+});
+
+// Edit a partner's commercial details. Master/Developer Admin only.
+app.put('/api/branches/:key', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  if (!BRANCH.BRANCH_KEYS.includes(req.params.key)) return res.status(404).json({ error: 'Unknown branch' });
+  const b = req.body || {};
+  d.settings.branches = d.settings.branches || {};
+  const cur = d.settings.branches[req.params.key] || {};
+  for (const k of ['partner_name', 'address', 'contact', 'email', 'tax_id', 'settlement_terms']) {
+    if (k in b) cur[k] = String(b[k] || '').trim();
+  }
+  if ('commission_pct' in b) {
+    const pct = Number(b.commission_pct);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) return res.status(400).json({ error: 'Commission must be between 0 and 100' });
+    cur.commission_pct = pct;
+  }
+  d.settings.branches[req.params.key] = cur;
+  db.persist();
+  res.json(BRANCH.resolve(d.settings.branches).find(x => x.key === req.params.key));
+});
 app.get('/api/users', requireRole(...ADMINS), (req, res) => {
   res.json(db.get().users.map(({ password_hash, ...u }) => ({ ...u, role: ROLE.normalizeRole(u.role), role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role })));
 });
@@ -1281,7 +1428,7 @@ function requireSender(req, res, next) {
   req.sender = a;
   next();
 }
-const senderPublic = (a) => ({ id: a.id, name: a.name, email: a.email, phone: a.phone, created_at: a.created_at });
+const senderPublic = (a) => ({ id: a.id, name: a.name, email: a.email, phone: a.phone, country: a.country || '', created_at: a.created_at });
 
 app.post('/api/public/sender/signup', rateLimit, (req, res) => {
   const d = db.get();
@@ -1297,6 +1444,7 @@ app.post('/api/public/sender/signup', rateLimit, (req, res) => {
   const acct = {
     id: db.nextId('sender_account'), name, email,
     phone: String(b.phone || '').trim(),
+    country: String(b.country || '').trim(),
     password_hash: hashPassword(password),
     drafts: [], active: true, created_at: new Date().toISOString()
   };
