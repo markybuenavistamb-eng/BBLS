@@ -629,6 +629,13 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .pub-band .brand .badge-vf { background: var(--primary); padding: 3px 8px; border-radius: 6px; }
 .pub-band .spacer { flex: 1; }
 
+/* ---------- branch portal badge ---------- */
+.portal-chip {
+  display: inline-block; color: #fff; font-weight: 800; font-size: 12px;
+  letter-spacing: .6px; padding: 5px 12px; border-radius: 999px; margin-bottom: 10px;
+}
+.login-box .portal-chip { display: block; width: fit-content; }
+
 /* ---------- Official Receipt (sender's copy) ---------- */
 .or-receipt {
   background: #fff; color: #000; border: 1px solid #000;

@@ -151,32 +151,59 @@ function icon(name) {
 
 /* ---------- auth / shell ---------- */
 async function boot() {
+  await loadPortal();
   try { ME = await api('/api/me'); } catch (e) { ME = null; }
-  VI.onChange(() => { if (ME) { renderShell(); route(); } });
+  VI.onChange(() => { if (ME) { renderShell(); route(); } else { renderLogin(); } });
   if (!ME) return renderLogin();
   await Promise.all([loadBoxSizeCatalog(), loadMyModules()]);
   renderShell();
   route();
 }
 
+/* ---------- branch portals ----------
+   /th, /kh and /mnl are branded sign-in doors onto the same VFIC system. Branch staff sign
+   in at their own door; the data all lands in one place so Manila sees everything. */
+const PORTAL_SLUG = (() => {
+  const m = /^\/(th|kh|mnl)\/?$/i.exec(location.pathname);
+  return m ? m[1].toLowerCase() : null;
+})();
+let PORTAL = null;
+const DEMO_LOGINS = {
+  th: 'admin.th@vfic.demo · shipper@vfic.demo',
+  kh: 'admin.kh@vfic.demo · cambodia@vfic.demo',
+  mnl: 'admin@vfic.demo · consignee@vfic.demo · warehouse@vfic.demo'
+};
+async function loadPortal() {
+  if (!PORTAL_SLUG) return;
+  try { PORTAL = await api('/api/portal/' + PORTAL_SLUG); } catch (e) { PORTAL = null; }
+}
+
 function renderLogin() {
   document.getElementById('preauth').style.display = '';
   document.getElementById('shell').style.display = 'none';
+  const p = PORTAL;
+  const otherPortals = [['th', 'Thailand'], ['kh', 'Cambodia'], ['mnl', 'Manila HQ']].filter(([s]) => s !== PORTAL_SLUG);
   document.getElementById('view').innerHTML = `
     <div class="login-wrap">
-      <div class="login-brandside" style="--hero-img:url('${IMG.hero}')">
+      <div class="login-brandside" style="--hero-img:url('${IMG.hero}')${p ? `;--accent:${p.accent}` : ''}">
         <div class="lb-top">
           <span class="vf-logo-plate">
             <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:280px">
           </span>
         </div>
         <div>
-          <h2>${VI.t('login.subtitle')}</h2>
-          <p>${VI.t('brand.company')} — ${VI.t('brand.tagline')}</p>
+          ${p ? `<div class="portal-chip" style="background:${esc(p.accent)}">${esc(p.flag)} ${esc(p.name)} · ${esc(p.city)}</div>` : ''}
+          <h2>${p ? esc(p.label || p.name) : VI.t('login.subtitle')}</h2>
+          <p>${p
+            ? `${esc(p.type === 'HQ' ? 'Head office' : 'Branch operations')} — connected to VFIC Manila. Bookings, boxes and containers recorded here flow straight to head office.`
+            : `${VI.t('brand.company')} — ${VI.t('brand.tagline')}`}</p>
           <ul class="lb-points">
-            <li>${VI.t('land.svc.sea.t')} · ${VI.t('land.svc.air.t')} · ${VI.t('service.DOOR_TO_DOOR')}</li>
-            <li>${VI.t('land.hero.ctaTrack')} — ${VI.t('land.stat.tracking')}</li>
-            <li>${VI.t('land.contact.head')}: Intramuros, Manila</li>
+            ${p ? `<li>Your branch's own shipments, warehouse and containers</li>
+                   <li>Your own staff accounts and rate card</li>
+                   <li>Consolidated at VFIC Manila head office</li>`
+                : `<li>${VI.t('land.svc.sea.t')} · ${VI.t('land.svc.air.t')} · ${VI.t('service.DOOR_TO_DOOR')}</li>
+                   <li>${VI.t('land.hero.ctaTrack')} — ${VI.t('land.stat.tracking')}</li>
+                   <li>${VI.t('land.contact.head')}: Intramuros, Manila</li>`}
           </ul>
         </div>
         <div style="font-size:12px;color:#8aa0bf">© ${new Date().getFullYear()} ${VI.t('brand.company')}</div>
@@ -186,17 +213,22 @@ function renderLogin() {
           <div style="display:flex;justify-content:center;margin-bottom:10px">
             <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:290px">
           </div>
+          ${p ? `<div class="portal-chip" style="background:${esc(p.accent)};margin:0 auto 10px">${esc(p.flag)} ${esc(p.name)}</div>` : ''}
           <div style="text-align:center;margin-bottom:12px">${VI.toggleHtml('renderLogin()')}</div>
-          <h1 style="font-size:20px;text-align:center;margin:0 0 14px">${VI.t('login.title')}</h1>
+          <h1 style="font-size:20px;text-align:center;margin:0 0 14px">${p ? esc(p.name) + ' Sign In' : VI.t('login.title')}</h1>
           <label>${VI.t('common.email')}</label><input id="lgEmail" type="email" autocomplete="username">
           <label>${VI.t('common.password')}</label><input id="lgPass" type="password" autocomplete="current-password">
           <div style="margin-top:14px"><button style="width:100%" onclick="doLogin()">${VI.t('common.login')}</button></div>
           <div class="error" id="lgErr"></div>
           <div class="demo-creds">
             <b>${VI.t('login.demo')}</b> (${VI.t('login.password_is')} <code>demo1234</code>):<br>
-            admin@vfic.demo · shipper@vfic.demo<br>consignee@vfic.demo · warehouse@vfic.demo
+            ${esc(DEMO_LOGINS[PORTAL_SLUG] || 'admin@vfic.demo · shipper@vfic.demo · consignee@vfic.demo · warehouse@vfic.demo')}
           </div>
-          <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:13px">
+          <div style="margin-top:12px;font-size:13px;text-align:center">
+            <span class="muted">Other portals:</span>
+            ${otherPortals.map(([s, n]) => `<a href="/${s}" style="margin-left:8px">${n}</a>`).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:13px">
             <a href="/">${VI.t('login.home')}</a>
             <a href="/track.html">${VI.t('login.track')} →</a>
           </div>
@@ -209,7 +241,7 @@ function renderLogin() {
 }
 async function doLogin() {
   try {
-    ME = await api('/api/login', { method: 'POST', body: { email: lgEmail.value.trim(), password: lgPass.value } });
+    ME = await api('/api/login', { method: 'POST', body: { email: lgEmail.value.trim(), password: lgPass.value, portal: PORTAL_SLUG } });
     await Promise.all([loadBoxSizeCatalog(), loadMyModules()]);
     renderShell();
     location.hash = '#/dashboard';

@@ -46,6 +46,8 @@ app.use(['/api', '/files'], async (req, res, next) => {
 
 // ---------- auth helpers ----------
 const ROLE = require('./lib/roles');
+const BRANCH = require('./lib/branches');
+const MODULES = require('./lib/modules');
 const { ADMINS, SHIPPERS, AGENTS, PH_SIDE, ALL_STAFF, ACCOUNTING_ROLES } = {
   ADMINS: ROLE.ADMINS, SHIPPERS: ROLE.SHIPPERS, AGENTS: ROLE.AGENTS,
   PH_SIDE: ROLE.PH_SIDE, ALL_STAFF: ROLE.ALL_STAFF, ACCOUNTING_ROLES: ROLE.ACCOUNTING
@@ -196,12 +198,31 @@ function nextLoadCode(d) {
 }
 
 // ---------- auth routes ----------
+// `portal` is the branch slug the sign-in came from (th / kh / mnl). Branch staff can only
+// sign in at their own branch's portal; HQ admins may sign in anywhere.
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body || {};
+  const { email, password, portal } = req.body || {};
   const u = db.get().users.find(x => x.email.toLowerCase() === String(email || '').toLowerCase() && x.active);
   if (!u || !verifyPassword(password || '', u.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
+  const role = ROLE.normalizeRole(u.role);
+  if (portal && !BRANCH.roleAllowedAtPortal(role, portal)) {
+    const own = BRANCH.portalForBranch(BRANCH.branchForRole(role));
+    return res.status(403).json({
+      error: own
+        ? `This account belongs to ${own.name}. Please sign in at the ${own.name} portal (/${own.slug}).`
+        : 'This account cannot sign in at this branch portal.'
+    });
+  }
   res.cookie(sess.COOKIE_NAME, sess.tokenFor(u.id), sess.cookieOptions);
-  res.json({ id: u.id, name: u.name, email: u.email, role: u.role });
+  res.json({ id: u.id, name: u.name, email: u.email, role });
+});
+
+// Public branding for a branch portal's sign-in page.
+app.get('/api/portal/:slug', (req, res) => {
+  const p = BRANCH.portalBySlug(req.params.slug);
+  if (!p) return res.status(404).json({ error: 'Unknown portal' });
+  const b = BRANCH.resolve(db.get().settings.branches).find(x => x.key === p.branch) || {};
+  res.json({ ...p, label: b.label, country: b.country, type: b.type, address: b.address || '', contact: b.contact || '' });
 });
 app.post('/api/logout', (req, res) => { res.clearCookie(sess.COOKIE_NAME, { path: '/' }); res.json({ ok: true }); });
 app.get('/api/me', requireAuth, (req, res) => {
@@ -374,7 +395,7 @@ app.get('/api/shipments/:id', requireAuth, (req, res) => {
   });
 });
 // Intake: sender + 1..n boxes (each with its own receiver)
-app.post('/api/shipments', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const b = req.body || {};
   const sender = d.customers.find(c => c.id === +b.sender_id);
@@ -435,7 +456,7 @@ app.post('/api/shipments', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   db.persist();
   res.json({ ...shipment, boxes: boxes.map(boxRow) });
 });
-app.put('/api/shipments/:id', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.put('/api/shipments/:id', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const s = db.get().shipments.find(x => x.id === +req.params.id);
   if (!s) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
@@ -447,7 +468,7 @@ app.put('/api/shipments/:id', requireRole(...ADMINS, ...SHIPPERS), (req, res) =>
   res.json(s);
 });
 // Confirm physical receipt at origin: all CREATED boxes → RECEIVED_ORIGIN (SMS to sender)
-app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const s = d.shipments.find(x => x.id === +req.params.id);
   if (!s) return res.status(404).json({ error: 'Not found' });
@@ -869,7 +890,7 @@ app.get('/api/containers', requireAuth, (req, res) => {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })));
 });
-app.post('/api/containers', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.post('/api/containers', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const b = req.body || {};
   if (!b.container_number) return res.status(400).json({ error: 'Container number is required' });
   const c = {
@@ -921,7 +942,7 @@ app.put('/api/containers/:id', requireRole(...AGENTS), (req, res) => {
   res.json(c);
 });
 // Load a box (by scan/search) into a container: RECEIVED_ORIGIN → LOADED_CONTAINER
-app.post('/api/containers/:id/load', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.post('/api/containers/:id/load', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -941,7 +962,7 @@ app.post('/api/containers/:id/load', requireRole(...ADMINS, ...SHIPPERS), (req, 
   res.json({ box: boxRow(box), box_count: d.boxes.filter(b => b.container_id === c.id).length });
 });
 // Depart: container + all boxes → IN_TRANSIT
-app.post('/api/containers/:id/depart', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.post('/api/containers/:id/depart', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -1264,13 +1285,17 @@ app.put('/api/settings/rates', requireRole(...ADMINS), (req, res) => {
 
 // ---------- users (admin) ----------
 // Catalogue of assignable roles (for the Admin → Users role picker).
-app.get('/api/roles', requireRole(...ADMINS), (req, res) => {
-  res.json({ roles: ROLE.ROLES, developer_only: ['DEVELOPER_ADMIN'] });
+// A branch admin may only assign roles inside their own branch.
+app.get('/api/roles', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
+  const allowed = ROLE.manageableRoles(req.user.role);
+  res.json({
+    roles: ROLE.ROLES.filter(r => allowed.includes(r.key)),
+    developer_only: ['DEVELOPER_ADMIN'],
+    branch_scoped: ROLE.isBranchAdmin(req.user.role)
+  });
 });
 
 // ---------- role → module permissions ----------
-const MODULES = require('./lib/modules');
-const BRANCH = require('./lib/branches');
 
 // What the signed-in user may open — drives the sidebar and client-side routing.
 app.get('/api/my-modules', requireAuth, (req, res) => {
@@ -1370,16 +1395,28 @@ app.put('/api/branches/:key', requireRole(...ADMINS), (req, res) => {
   db.persist();
   res.json(BRANCH.resolve(d.settings.branches).find(x => x.key === req.params.key));
 });
-app.get('/api/users', requireRole(...ADMINS), (req, res) => {
-  res.json(db.get().users.map(({ password_hash, ...u }) => ({ ...u, role: ROLE.normalizeRole(u.role), role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role })));
+app.get('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
+  // A branch admin only sees the staff of their own branch.
+  const myBranch = BRANCH.branchForRole(req.user.role);
+  const scoped = ROLE.isBranchAdmin(req.user.role);
+  res.json(db.get().users
+    .map(({ password_hash, ...u }) => {
+      const role = ROLE.normalizeRole(u.role);
+      return { ...u, role, role_label: ROLE.ROLE_LABELS[role] || role, branch: BRANCH.branchForRole(role) };
+    })
+    .filter(u => !scoped || u.branch === myBranch));
 });
-app.post('/api/users', requireRole(...ADMINS), (req, res) => {
+app.post('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const { name, email, role, password } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   if (!ROLE.ROLE_KEYS.includes(role)) return res.status(400).json({ error: 'Invalid role' });
   // Only a Developer Admin can mint another Developer Admin.
   if (role === 'DEVELOPER_ADMIN' && req.user.role !== 'DEVELOPER_ADMIN') {
     return res.status(403).json({ error: 'Only a Developer Admin can create a Developer Admin account' });
+  }
+  // A branch admin may only create staff for their own branch.
+  if (!ROLE.manageableRoles(req.user.role).includes(role)) {
+    return res.status(403).json({ error: 'You can only create staff accounts for your own branch' });
   }
   if (db.get().users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(400).json({ error: 'Email already in use' });
   const u = { id: db.nextId('user'), name, email, role, password_hash: hashPassword(password), active: true, created_at: new Date().toISOString() };
@@ -1388,11 +1425,21 @@ app.post('/api/users', requireRole(...ADMINS), (req, res) => {
   const { password_hash, ...safe } = u;
   res.json(safe);
 });
-app.put('/api/users/:id', requireRole(...ADMINS), (req, res) => {
+app.put('/api/users/:id', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const d = db.get();
   const u = d.users.find(x => x.id === +req.params.id);
   if (!u) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
+  // A branch admin can only touch their own branch's staff, and only assign their own roles.
+  if (ROLE.isBranchAdmin(req.user.role)) {
+    const myBranch = BRANCH.branchForRole(req.user.role);
+    if (BRANCH.branchForRole(ROLE.normalizeRole(u.role)) !== myBranch) {
+      return res.status(403).json({ error: 'You can only manage staff in your own branch' });
+    }
+    if ('role' in b && !ROLE.manageableRoles(req.user.role).includes(b.role)) {
+      return res.status(403).json({ error: 'You can only assign roles within your own branch' });
+    }
+  }
   if ('role' in b) {
     if (!ROLE.ROLE_KEYS.includes(b.role)) return res.status(400).json({ error: 'Invalid role' });
     if ((b.role === 'DEVELOPER_ADMIN' || ROLE.normalizeRole(u.role) === 'DEVELOPER_ADMIN') && req.user.role !== 'DEVELOPER_ADMIN') {
@@ -1587,7 +1634,7 @@ function originWarehouseBoxes(user) {
     .filter(b => !scope || b.origin_country === scope);
 }
 
-app.get('/api/origin-warehouse', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.get('/api/origin-warehouse', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   let list = originWarehouseBoxes(req.user);
   if (req.query.origin_country) list = list.filter(b => b.origin_country === req.query.origin_country);
   if (req.query.size) list = list.filter(b => BOXSIZE.canonicalSize(b.size_category) === req.query.size);
@@ -1613,7 +1660,7 @@ app.get('/api/origin-warehouse', requireRole(...ADMINS, ...SHIPPERS), (req, res)
 });
 
 // How many boxes fit in one container, by volume and by payload weight.
-app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const size = SM.CONTAINER_SIZES.includes(req.query.size) ? req.query.size : 'C40';
   const cap = SM.CONTAINER_CAPACITY[size];
   let util = parseFloat(req.query.utilisation);
@@ -2115,6 +2162,10 @@ app.all('/api/cron/process-notifications', async (req, res) => {
 const noCache = res => res.set('Cache-Control', 'no-cache');
 app.get('/', (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'landing.html')); });
 app.get('/app', (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
+// Branch portals: /th (Thailand), /kh (Cambodia), /mnl (Manila HQ). Each serves the same
+// application — the slug only brands the sign-in and restricts who may sign in there.
+// All branches share one database, so Manila always sees the consolidated picture.
+app.get(['/th', '/kh', '/mnl'], (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 // Serve assets with must-revalidate so a new deploy is picked up immediately (no stale app.js/CSS).
 // ETags still yield cheap 304s when a file is unchanged.
 app.use(express.static(path.join(__dirname, 'public'), {
