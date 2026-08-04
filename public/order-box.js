@@ -22,8 +22,8 @@ function mountToggle() { const el = gid('langMount'); if (el && window.VI) el.in
 
 // A little isometric cardboard box, scaled to the real dimensions so sizes look different.
 function boxSvg(s) {
-  const k = 2.2; // in → px
-  const w = s.width_in * k, h = s.height_in * k, dp = s.length_in * k;
+  const k = 0.85; // cm → px
+  const w = s.width_cm * k, h = s.height_cm * k, dp = s.length_cm * k;
   const dx = dp * 0.5, dy = -dp * 0.5;
   const x0 = 12, y0 = 118 - h; // baseline
   const front = `${x0},${y0} ${x0 + w},${y0} ${x0 + w},${y0 + h} ${x0},${y0 + h}`;

@@ -337,6 +337,8 @@ function renderForm() {
       </div>
       <div style="margin-top:6px"><b style="color:#d32f2f">All fields with an asterisk (*) are required.</b></div>
     </div>
+    <div id="draftNote" class="note-info" style="display:none;margin-bottom:10px"></div>
+    ${SENDER ? `<div class="note-info" style="margin-bottom:10px">Signed in as <b>${esc(SENDER.email)}</b> — you can save this booking as a draft and finish it later. <a href="/account.html">My Account →</a></div>` : ''}
 
     <div class="card">
       <div class="rc-label">TYPE OF AVAILMENT *</div>
@@ -418,8 +420,12 @@ function renderForm() {
       <input id="sTotalValue" type="number" min="0" step="0.01" required>
 
       <label>Passport / Government ID (photo or scan) *</label>
-      <input id="passportFile" type="file" accept="image/*,application/pdf" required>
-      <div class="muted">Required — VFIC keeps a soft copy of your ID on file for this shipment.</div>
+      <input id="passportFile" type="file" accept=".jpg,.jpeg,.png,.webp,.heic,.pdf,image/jpeg,image/png,image/webp,image/heic,application/pdf" required>
+      <div class="note-info" style="margin-top:6px">
+        🔒 <b>How your ID is protected.</b> Accepted formats: JPG, PNG, WEBP, HEIC or PDF, up to 6 MB.
+        The file is checked on upload and stored in private storage — it is never published to a public link.
+        Only authorised VFIC staff can open it, and it is used solely for Bureau of Customs clearance of this shipment.
+      </div>
     </div>
 
     <h2>Your Box(es)</h2>
@@ -434,7 +440,12 @@ function renderForm() {
       </div>
       <label class="chk"><input type="checkbox" id="declare" required> <span>I agree to the declaration above *</span></label>
       <div id="submitError" class="error"></div>
-      <button onclick="submitIntake()">Submit Booking</button>
+      <div class="row" style="gap:8px">
+        <button onclick="submitIntake()">Submit Booking</button>
+        ${SENDER
+          ? `<button type="button" class="secondary" onclick="saveDraft()">💾 Save as draft</button>`
+          : `<a href="/account.html"><button type="button" class="secondary">Sign in to save a draft</button></a>`}
+      </div>
       <div class="muted">${esc(T('intake.after'))}</div>
     </div>`;
 
@@ -604,6 +615,73 @@ function renderConfirmation(refCode) {
     </div>`;
 }
 
+/* ---------- saved drafts (signed-in senders) ---------- */
+// A draft is a snapshot of every filled-in field plus the number of box blocks, so a sender
+// can stop half-way and pick the booking up later. The ID upload is never part of a draft.
+let SENDER = null;
+let CURRENT_DRAFT_ID = null;
+
+async function loadSender() {
+  try { SENDER = await (await fetch('/api/public/sender/me')).json(); if (SENDER && SENDER.error) SENDER = null; }
+  catch (e) { SENDER = null; }
+}
+function draftSnapshot() {
+  const fields = {};
+  document.querySelectorAll('#app input, #app select, #app textarea').forEach(el => {
+    if (!el.id || el.type === 'file') return;
+    fields[el.id] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+  });
+  const radios = {};
+  document.querySelectorAll('#app input[type=radio]:checked').forEach(el => { radios[el.name] = el.value; });
+  return { fields, radios, box_count: document.querySelectorAll('.box-block').length };
+}
+async function saveDraft() {
+  if (!SENDER) { location.href = '/account.html'; return; }
+  const label = prompt('Name this draft:', val('sFam') ? `Booking for ${val('sFam')}` : 'Untitled draft');
+  if (label === null) return;
+  try {
+    const d = await (await fetch('/api/public/sender/drafts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: CURRENT_DRAFT_ID, label: label || 'Untitled draft', payload: draftSnapshot() })
+    })).json();
+    if (d.error) throw new Error(d.error);
+    CURRENT_DRAFT_ID = d.id;
+    alert('Draft saved. You can finish it later from My Account.');
+  } catch (e) { alert(e.message); }
+}
+async function restoreDraft(id) {
+  try {
+    const drafts = await (await fetch('/api/public/sender/drafts')).json();
+    const d = Array.isArray(drafts) ? drafts.find(x => x.id === +id) : null;
+    if (!d || !d.payload) return;
+    CURRENT_DRAFT_ID = d.id;
+    const { fields = {}, radios = {}, box_count = 1 } = d.payload;
+    for (const name in radios) {
+      const el = document.querySelector(`#app input[name="${name}"][value="${radios[name]}"]`);
+      if (el) { el.checked = true; el.dispatchEvent(new Event('change')); }
+    }
+    while (document.querySelectorAll('.box-block').length < Math.min(box_count, 20)) await addBox();
+    for (const id2 in fields) {
+      const el = gid(id2);
+      if (!el || el.type === 'file') continue;
+      if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!fields[id2];
+      else el.value = fields[id2];
+    }
+    onSenderTypeChange(); onCollectionChange();
+    document.querySelectorAll('.box-block').forEach(el => {
+      const n = el.dataset.box;
+      onSizeChange(n); onValueChange(n); onOthersChange(n);
+    });
+    const note = gid('draftNote');
+    if (note) { note.textContent = `Resumed your saved draft “${d.label}”. Re-attach your ID before submitting.`; note.style.display = ''; }
+  } catch (e) { /* ignore — start a blank form */ }
+}
+
 if (window.VI) VI.onChange(() => { if (submitted) renderConfirmation(); else renderForm(); });
 mountToggle();
-loadBoxSizes().then(renderForm);
+(async () => {
+  await Promise.all([loadBoxSizes(), loadSender()]);
+  renderForm();
+  const draftId = new URLSearchParams(location.search).get('draft');
+  if (draftId && SENDER) await restoreDraft(draftId);
+})();

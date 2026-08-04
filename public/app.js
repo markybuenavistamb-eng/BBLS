@@ -54,7 +54,25 @@ function regionOptions(selected) {
       .map(r => `<option value="${r.code}"${r.code === selected ? ' selected' : ''}>${esc(r.label)}</option>`).join('') +
     `</optgroup>`).join('');
 }
-const SIZES = ['SMALL', 'MEDIUM', 'LARGE', 'JUMBO', 'CUSTOM'];
+// Box-size catalogue — loaded once from /api/box-sizes so the staff app, booking form and
+// printed documents all share one source of truth. Fallback mirrors lib/boxsizes.js.
+let BOX_SIZE_CATALOG = [
+  { key: 'SMALL', label: 'Small', dimensions: '55 x 55 x 40 cm', standard_weight_kg: 50, cbm: 0.121 },
+  { key: 'MEDIUM', label: 'Medium', dimensions: '55 x 55 x 60 cm', standard_weight_kg: 60, cbm: 0.1815 },
+  { key: 'LARGE', label: 'Large', dimensions: '55 x 55 x 75 cm', standard_weight_kg: 70, cbm: 0.2269 },
+  { key: 'GIGA', label: 'Giga Box', dimensions: '55 x 55 x 105 cm', standard_weight_kg: 80, cbm: 0.3176 }
+];
+const SIZES = () => BOX_SIZE_CATALOG.map(s => s.key);
+async function loadBoxSizeCatalog() {
+  try {
+    const d = await api('/api/box-sizes');
+    if (Array.isArray(d.sizes) && d.sizes.length) BOX_SIZE_CATALOG = d.sizes;
+  } catch (e) { /* keep fallback */ }
+}
+function sizeSelectOptions(selected) {
+  return BOX_SIZE_CATALOG.map(s =>
+    `<option value="${esc(s.key)}"${s.key === (selected || 'LARGE') ? ' selected' : ''}>${esc(s.label)} — ${esc(s.dimensions)}, up to ${s.standard_weight_kg} kg</option>`).join('');
+}
 const SERVICE_TYPES_EN = { DOOR_TO_DOOR: 'Door to Door', PORT_TO_PORT: 'Port to Port', DOOR_TO_PORT: 'Door to Port', DOOR_TO_AIRPORT: 'Door to Airport' };
 const SERVICE_TYPES = new Proxy(SERVICE_TYPES_EN, {
   get: (tgt, k) => (typeof k === 'string' && tgt[k] != null) ? VI.t('service.' + k, tgt[k]) : tgt[k]
@@ -136,6 +154,7 @@ async function boot() {
   try { ME = await api('/api/me'); } catch (e) { ME = null; }
   VI.onChange(() => { if (ME) { renderShell(); route(); } });
   if (!ME) return renderLogin();
+  await loadBoxSizeCatalog();
   renderShell();
   route();
 }
@@ -191,6 +210,7 @@ function renderLogin() {
 async function doLogin() {
   try {
     ME = await api('/api/login', { method: 'POST', body: { email: lgEmail.value.trim(), password: lgPass.value } });
+    await loadBoxSizeCatalog();
     renderShell();
     location.hash = '#/dashboard';
     route();
@@ -206,23 +226,36 @@ function toggleNav(open) {
   document.getElementById('shell').classList.toggle('nav-open', open);
 }
 
+/* ---------- roles (mirrors lib/roles.js) ---------- */
+const R_ADMINS = ['DEVELOPER_ADMIN', 'MASTER_ADMIN'];
+const R_SHIPPERS = ['SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'];
+const R_AGENTS = R_ADMINS.concat(R_SHIPPERS, ['CONSIGNEE_AGENT']);
+const ROLE_LABELS = {
+  DEVELOPER_ADMIN: 'Developer Admin', MASTER_ADMIN: 'Master Admin',
+  SHIPPER_AGENT_TH: 'Shipper Agent — Thailand', SHIPPER_AGENT_KH: 'Shipper Agent — Cambodia',
+  CONSIGNEE_AGENT: 'Consignee Agent (Manila)', WAREHOUSE: 'Warehouse Staff', ACCOUNTING: 'Accounting'
+};
+const isAccounting = () => ME && R_ADMINS.concat(['ACCOUNTING']).includes(ME.role);
+
 const NAV = [
   { section: 'nav.section.ops' },
-  ['#/dashboard', 'nav.dashboard', 'grid', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
-  ['#/shipments', 'nav.shipments', 'package', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
-  ['#/box-orders', 'nav.boxorders', 'box', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
-  ['#/boxes', 'nav.boxes', 'box', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
-  ['#/containers', 'nav.containers', 'container', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
-  ['#/warehouse', 'nav.warehouse', 'warehouse', ['ADMIN', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
-  ['#/trips', 'nav.trips', 'truck', ['ADMIN', 'CONSIGNEE_AGENT']],
-  ['#/returns', 'nav.returns', 'undo', ['ADMIN', 'CONSIGNEE_AGENT']],
+  ['#/dashboard', 'nav.dashboard', 'grid', R_AGENTS.concat(['WAREHOUSE', 'ACCOUNTING'])],
+  ['#/shipments', 'nav.shipments', 'package', R_AGENTS],
+  ['#/box-orders', 'nav.boxorders', 'box', R_AGENTS],
+  ['#/boxes', 'nav.boxes', 'box', R_AGENTS.concat(['WAREHOUSE'])],
+  ['#/containers', 'nav.containers', 'container', R_AGENTS],
+  ['#/origin-warehouse', 'nav.originwh', 'warehouse', R_ADMINS.concat(R_SHIPPERS)],
+  ['#/warehouse', 'nav.warehouse', 'warehouse', R_ADMINS.concat(['CONSIGNEE_AGENT','WAREHOUSE'])],
+  ['#/trips', 'nav.trips', 'truck', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
+  ['#/returns', 'nav.returns', 'undo', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
   { section: 'nav.section.people' },
-  ['#/customers', 'nav.customers', 'users', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
-  ['#/notifications', 'nav.sms', 'chat', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
-  ['#/reports', 'nav.reports', 'chart', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT']],
+  ['#/customers', 'nav.customers', 'users', R_AGENTS],
+  ['#/notifications', 'nav.sms', 'chat', R_AGENTS],
+  ['#/reports', 'nav.reports', 'chart', R_AGENTS],
+  ['#/accounting', 'nav.accounting', 'chart', R_ADMINS.concat(['ACCOUNTING'])],
   { section: 'nav.section.system' },
-  ['#/scan', 'nav.scan', 'scan', ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE']],
-  ['#/admin', 'nav.admin', 'gear', ['ADMIN']]
+  ['#/scan', 'nav.scan', 'scan', R_AGENTS.concat(['WAREHOUSE'])],
+  ['#/admin', 'nav.admin', 'gear', R_ADMINS]
 ];
 function renderShell() {
   document.getElementById('preauth').style.display = 'none';
@@ -274,6 +307,7 @@ async function route() {
     if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
     if (p[0] === 'containers' && p[1]) return pageContainerDetail(+p[1]);
     if (p[0] === 'containers') return pageContainers();
+    if (p[0] === 'origin-warehouse') return pageOriginWarehouse();
     if (p[0] === 'warehouse') return pageWarehouse();
     if (p[0] === 'trips' && p[1]) return pageTripDetail(+p[1]);
     if (p[0] === 'trips') return pageTrips();
@@ -283,6 +317,7 @@ async function route() {
     if (p[0] === 'customers') return pageCustomers();
     if (p[0] === 'notifications') return pageNotifications();
     if (p[0] === 'reports') return pageReports();
+    if (p[0] === 'accounting') return pageAccounting(p[1] || 'rates');
     if (p[0] === 'admin') return pageAdmin();
     if (p[0] === 'scan') return pageScan();
     pageDashboard();
@@ -290,10 +325,10 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
-const isAdmin = () => ME && ME.role === 'ADMIN';
-const isAgent = () => ME && ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'].includes(ME.role);
-const canDispatch = () => ME && ['ADMIN', 'CONSIGNEE_AGENT'].includes(ME.role);
-const canIntake = () => ME && ['ADMIN', 'SHIPPER_AGENT'].includes(ME.role);
+const isAdmin = () => ME && R_ADMINS.includes(ME.role);
+const isAgent = () => ME && R_AGENTS.includes(ME.role);
+const canDispatch = () => ME && R_ADMINS.concat(['CONSIGNEE_AGENT']).includes(ME.role);
+const canIntake = () => ME && R_ADMINS.concat(R_SHIPPERS).includes(ME.role);
 
 /* ---------- QR scanning ---------- */
 function scannerHtml(hint) {
@@ -424,16 +459,18 @@ async function pageIntakeRequests() {
     <h1>Online Intake Requests</h1>
     <div class="muted" style="margin-bottom:10px">Submitted by senders via the online receiving form (scan the QR code on the blank form to try it). Review and encode as a shipment, or dismiss duplicates/spam.</div>
     <div class="card table-scroll">
-      <table><tr><th>Reference</th><th>Sender</th><th>Phone</th><th>Boxes</th><th>Submitted</th><th>Status</th><th>Actions</th></tr>
+      <table><tr><th>Reference</th><th>Sender</th><th>Phone</th><th>Boxes</th><th>Size per box</th><th>Submitted</th><th>Status</th><th>Actions</th></tr>
       ${list.map(r => `<tr>
         <td>${esc(r.reference_code)}</td><td>${esc(r.sender_name)}</td><td>${esc(r.sender_phone)}</td>
-        <td>${r.box_count}</td><td>${fmtDate(r.submitted_at)}</td>
+        <td>${r.box_count}</td>
+        <td class="wrap-cell" style="max-width:220px">${esc(r.size_summary || '—')}</td>
+        <td>${fmtDate(r.submitted_at)}</td>
         <td><span class="badge ${r.status === 'PENDING' ? 'st-created' : r.status === 'CONVERTED' ? 'st-delivered' : 'st-cancelled'}">${esc(r.status)}</span></td>
         <td class="inline-actions">
           ${r.status === 'PENDING' && canIntake() ? `<a href="#/shipments/new?intake=${r.id}"><button class="small">Review & encode</button></a>
             <button class="small secondary" onclick="dismissIntake(${r.id})">Dismiss</button>` : ''}
         </td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">No online submissions yet</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No online submissions yet</td></tr>'}
       </table>
     </div>`);
 }
@@ -444,7 +481,13 @@ async function dismissIntake(id) {
 
 const BOX_ORDER_STATUSES = ['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'];
 const BOX_ORDER_BADGE = { NEW: 'st-created', PREPARING: 'st-sorted', DISPATCHED: 'st-out_for_delivery', FULFILLED: 'st-delivered', CANCELLED: 'st-cancelled' };
-function SIZE_LABEL(key) { const m = { MINI: 'Mini', MEDIUM: 'Medium', LARGE: 'Large', XL: 'Extra Large', JUMBO: 'Jumbo' }; return m[key] || key; }
+// Legacy imperial keys map onto the current catalogue so historical boxes still show a label.
+const LEGACY_SIZE_ALIASES = { MINI: 'SMALL', XL: 'LARGE', JUMBO: 'GIGA', CUSTOM: 'LARGE' };
+function SIZE_LABEL(key) {
+  const k = String(key || '').toUpperCase();
+  const hit = BOX_SIZE_CATALOG.find(s => s.key === (LEGACY_SIZE_ALIASES[k] || k));
+  return hit ? hit.label : (key || '');
+}
 async function pageBoxOrders() {
   const list = await api('/api/box-orders');
   const fulfilLabel = { DELIVER_ADDRESS: 'Deliver to address abroad', PICKUP_OFFICE: 'Pick up at branch abroad' };
@@ -491,7 +534,7 @@ function boxRowHtml() {
       </div>
       <div class="form-grid">
         <div><label>Receiver *</label><select id="bxReceiver${n}">${customerOptions('RECEIVER')}</select></div>
-        <div><label>Size</label><select id="bxSize${n}">${SIZES.map(s => `<option ${s === 'LARGE' ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+        <div><label>Size</label><select id="bxSize${n}">${sizeSelectOptions()}</select></div>
         <div><label>Weight (kg)</label><input id="bxWeight${n}" type="number" min="0" step="0.1"></div>
         <div><label>L×W×H (cm)</label><div class="row" style="flex-wrap:nowrap;gap:4px">
           <input id="bxL${n}" type="number" placeholder="L"><input id="bxW${n}" type="number" placeholder="W"><input id="bxH${n}" type="number" placeholder="H"></div></div>
@@ -1111,7 +1154,7 @@ async function pageBoxDetail(id) {
              <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
           : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
         ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
-        ${['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE'].includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
+        ${R_AGENTS.concat(['WAREHOUSE']).includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
         ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No forward actions available at this status.</span>' : ''}
       </div>
       ${b.status === 'OUT_FOR_DELIVERY' ? podFormHtml(b.id) : ''}
@@ -1230,16 +1273,17 @@ async function pageContainers() {
     canIntake() ? api('/api/refdata') : Promise.resolve({ shipping_lines: [], origin_ports: [], destination_ports: [] })
   ]);
   const nextCode = 'C' + (list.reduce((m, c) => { const n = /^C(\d+)$/.exec(c.load_code || ''); return n ? Math.max(m, +n[1]) : m; }, 0) + 1);
-  const lineOpts = (ref.shipping_lines || []).map(s => `<option value="${esc(s)}">`).join('');
-  const originOpts = (ref.origin_ports || []).flatMap(g => g.ports).map(p => `<option value="${esc(p)}">`).join('');
-  const destOpts = (ref.destination_ports || []).map(p => `<option value="${esc(p)}">`).join('');
+  // Proper <select> dropdowns (origin ports stay grouped by country/region).
+  const lineOpts = `<option value="">— select shipping line —</option>` +
+    (ref.shipping_lines || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  const originOpts = `<option value="">— select origin port —</option>` +
+    (ref.origin_ports || []).map(g =>
+      `<optgroup label="${esc(g.group)}">${(g.ports || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')}</optgroup>`).join('');
+  const destOpts = (ref.destination_ports || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   view(`
     <h1>Containers</h1>
     ${canIntake() ? `
     <details class="collapse card"><summary>+ Book new container</summary>
-      <datalist id="dlLines">${lineOpts}</datalist>
-      <datalist id="dlOrigin">${originOpts}</datalist>
-      <datalist id="dlDest">${destOpts}</datalist>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
         <div><label>Size</label><select id="cnSize">
@@ -1248,11 +1292,11 @@ async function pageContainers() {
           <option value="C20">20 ft</option>
         </select></div>
         <div><label>Load code <span class="muted">(auto)</span></label><input value="${esc(nextCode)}" disabled title="Assigned automatically in sequence"></div>
-        <div><label>Shipping line</label><input id="cnLine" list="dlLines" placeholder="Select AISL member line…"></div>
+        <div><label>Shipping line</label><select id="cnLine">${lineOpts}</select></div>
         <div><label>Vessel</label><input id="cnVessel"></div>
         <div><label>Booking #</label><input id="cnBooking"></div>
-        <div><label>Origin port</label><input id="cnOrigin" list="dlOrigin" placeholder="Select or type…"></div>
-        <div><label>Destination port</label><input id="cnDest" list="dlDest" value="Manila (MICP)"></div>
+        <div><label>Origin port</label><select id="cnOrigin">${originOpts}</select></div>
+        <div><label>Destination port</label><select id="cnDest">${destOpts}</select></div>
         <div><label>ETD</label><input id="cnEtd" type="date"></div>
         <div><label>ETA</label><input id="cnEta" type="date"></div>
       </div>
@@ -1286,7 +1330,7 @@ async function createContainer() {
 async function pageContainerDetail(id) {
   const c = await api('/api/containers/' + id);
   const loadable = ['BOOKING', 'LOADING'].includes(c.status) && canIntake();
-  const strippable = ['ARRIVED', 'AT_CUSTOMS', 'RELEASED'].includes(c.status) && ['ADMIN', 'CONSIGNEE_AGENT', 'WAREHOUSE'].includes(ME.role);
+  const strippable = ['ARRIVED', 'AT_CUSTOMS', 'RELEASED'].includes(c.status) && R_ADMINS.concat(['CONSIGNEE_AGENT','WAREHOUSE']).includes(ME.role);
   view(`
     <div class="row" style="justify-content:space-between">
       <h1>${esc(c.container_number)} ${badge(c.status)}</h1>
@@ -1484,6 +1528,87 @@ async function containerRevert(id, status) {
     flash(`Reverted to ${r.reverted_to}${r.boxes_reverted ? ` (${r.boxes_reverted} box(es) rolled back)` : ''}`);
     route();
   } catch (e) { showErr(e); }
+}
+
+/* ---------- origin warehouse: master list + container load plan ---------- */
+async function pageOriginWarehouse(size, util) {
+  const planSize = size || 'C40';
+  const planUtil = util || 0.85;
+  const [wh, plan] = await Promise.all([
+    api('/api/origin-warehouse'),
+    api(`/api/origin-warehouse/load-plan?size=${planSize}&utilisation=${planUtil}`)
+  ]);
+  const a = plan.actual;
+  view(`
+    <div class="row" style="justify-content:space-between">
+      <h1>Origin Warehouse${wh.scope ? ` <span class="badge st-created">${esc(wh.scope)}</span>` : ''}</h1>
+      <button class="secondary" onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
+    </div>
+    <div class="muted" style="margin-bottom:10px">Master list of boxes received at origin and waiting to be stuffed into a container${wh.scope ? ` — ${esc(wh.scope)} only` : ''}.</div>
+
+    <div class="tiles">
+      <div class="tile"><div class="num">${wh.totals.count}</div><div class="lbl">Boxes waiting</div></div>
+      <div class="tile"><div class="num">${wh.totals.cbm}</div><div class="lbl">Total volume (cbm)</div></div>
+      <div class="tile"><div class="num">${wh.totals.weight_kg}</div><div class="lbl">Total weight (kg)</div></div>
+      <div class="tile"><div class="num">${a.containers_needed == null ? '—' : a.containers_needed}</div><div class="lbl">${esc(plan.container_label)} containers needed</div></div>
+    </div>
+
+    <h2>Load plan</h2>
+    <div class="card no-print">
+      <div class="row" style="gap:8px;align-items:flex-end">
+        <div><label style="margin:0">Container</label>
+          <select id="lpSize" onchange="pageOriginWarehouse(lpSize.value, lpUtil.value)">
+            ${['C20', 'C40', 'C40HQ'].map(s => `<option value="${s}" ${s === plan.container_size ? 'selected' : ''}>${esc(CONTAINER_SIZE_LABELS[s])}</option>`).join('')}
+          </select></div>
+        <div><label style="margin:0">Stuffing utilisation</label>
+          <select id="lpUtil" onchange="pageOriginWarehouse(lpSize.value, lpUtil.value)">
+            ${[0.75, 0.8, 0.85, 0.9, 0.95].map(u => `<option value="${u}" ${Math.abs(u - plan.capacity.utilisation) < 0.001 ? 'selected' : ''}>${Math.round(u * 100)}%</option>`).join('')}
+          </select></div>
+        <div class="muted">Usable volume <b>${plan.capacity.usable_cbm} cbm</b> of ${plan.capacity.cbm} cbm · payload <b>${plan.capacity.payload_kg.toLocaleString()} kg</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <b>How many fit in one ${esc(plan.container_label)} container (if loaded with a single size)</b>
+      <div class="table-scroll" style="margin-top:8px"><table>
+        <tr><th>Box size</th><th>Dimensions</th><th>Volume</th><th>Weight allowance</th><th>Max by volume</th><th>Max by weight</th><th>Fits</th><th>Limited by</th></tr>
+        ${plan.per_size.map(s => `<tr>
+          <td><b>${esc(s.label)}</b></td><td>${esc(s.dimensions)}</td><td>${s.cbm} cbm</td><td>${s.standard_weight_kg} kg</td>
+          <td>${s.max_by_volume}</td><td>${s.max_by_weight}</td>
+          <td><b>${s.max_boxes}</b></td>
+          <td><span class="badge ${s.limited_by === 'volume' ? 'st-created' : 'st-sorted'}">${esc(s.limited_by)}</span></td>
+        </tr>`).join('')}
+      </table></div>
+    </div>
+
+    <div class="card">
+      <b>Against the ${wh.totals.count} box(es) actually waiting</b>
+      <div class="muted" style="margin:6px 0 10px">Packed largest-first, the way a container is really stuffed.</div>
+      <table>
+        <tr><td>Boxes that fit in this container</td><td style="text-align:right"><b>${a.fits_count}</b> of ${a.waiting_count}</td></tr>
+        <tr><td>Volume used</td><td style="text-align:right">${a.used_cbm} / ${plan.capacity.usable_cbm} cbm (${a.volume_fill_pct}%)</td></tr>
+        <tr><td>Weight used</td><td style="text-align:right">${a.used_weight_kg.toLocaleString()} / ${plan.capacity.payload_kg.toLocaleString()} kg (${a.weight_fill_pct}%)</td></tr>
+        <tr><td>Left for the next container</td><td style="text-align:right"><b>${a.left_over_count}</b> box(es)</td></tr>
+      </table>
+    </div>
+
+    <h2>Master list (${wh.totals.count})</h2>
+    ${wh.by_size.length ? `<div class="card"><b>By size:</b> ${wh.by_size.map(s => `${s.count}× ${esc(s.label)} <span class="muted">(${s.cbm} cbm, ${s.weight_kg} kg)</span>`).join(' · ')}</div>` : ''}
+    <div class="card table-scroll">
+      <table><tr><th>Box #</th><th>Sender</th><th>Receiver</th><th>Origin</th><th>Size</th><th>Volume</th><th>Weight</th><th>Fits this container</th></tr>
+      ${wh.boxes.map(b => {
+        const inPlan = a.fits.some(f => f.id === b.id);
+        return `<tr>
+          <td><a href="#/boxes/${b.id}">${esc(b.box_number)}</a></td>
+          <td>${esc(b.sender_name || '')}</td><td>${esc(b.receiver_name || '')}</td>
+          <td>${esc([b.origin_agent, b.origin_country].filter(Boolean).join(', '))}</td>
+          <td>${esc(b.size_label)}<div class="muted">${esc(b.dimensions)}</div></td>
+          <td>${b.cbm} cbm</td><td>${b.weight_kg || 0} kg</td>
+          <td>${inPlan ? '<span class="badge st-delivered">Yes</span>' : '<span class="badge st-created">Next load</span>'}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="8" class="muted">No boxes waiting at the origin warehouse</td></tr>'}
+      </table>
+    </div>`);
 }
 
 /* ---------- warehouse scan hub ---------- */
@@ -1809,6 +1934,230 @@ async function pageNotifications() {
 }
 async function retryNotif(id) {
   try { await api('/api/notifications/retry/' + id, { method: 'POST' }); flash('Re-queued — worker will retry shortly'); route(); } catch (e) { showErr(e); }
+}
+
+/* ---------- accounting ---------- */
+const money = (v, ccy) => `${ccy || 'PHP'} ${Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+let ACCT_META = null;
+
+async function pageAccounting(tab) {
+  if (!ACCT_META) ACCT_META = await api('/api/accounting/meta');
+  const tabs = [['rates', 'Rate Cards'], ['invoices', 'Billing & Receipts'], ['expenses', 'Expenses'], ['pnl', 'Profit & Loss']];
+  view(`
+    <h1>Accounting</h1>
+    <div class="row" style="gap:6px;margin-bottom:12px">
+      ${tabs.map(([k, l]) => `<a href="#/accounting/${k}"><button class="${k === tab ? '' : 'secondary'} small">${l}</button></a>`).join('')}
+    </div>
+    <div id="acctBody">Loading…</div>`);
+  if (tab === 'rates') return renderRateCard();
+  if (tab === 'invoices') return renderInvoices();
+  if (tab === 'expenses') return renderExpenses();
+  return renderPnl();
+}
+
+async function renderRateCard() {
+  const card = await api('/api/accounting/rate-card');
+  const zones = ACCT_META.zones, sizes = ACCT_META.sizes;
+  const cell = (id, val) => `<input id="${id}" type="number" min="0" step="0.01" value="${val || 0}" style="width:110px;padding:5px 7px">`;
+  const oceanTable = (lvl) => `
+    <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[lvl] || lvl)} — price per box</div>
+    <div class="table-scroll"><table>
+      <tr><th>Destination zone</th>${sizes.map(s => `<th>${esc(s.label)}<br><span class="muted" style="font-weight:400">${esc(s.dimensions)}</span></th>`).join('')}</tr>
+      ${zones.map(z => `<tr><td><b>${esc(z.label)}</b></td>
+        ${sizes.map(s => `<td>${cell(`rc_${lvl}_${z.key}_${s.key}`, card.ocean[lvl][z.key][s.key])}</td>`).join('')}
+      </tr>`).join('')}
+    </table></div>`;
+
+  document.getElementById('acctBody').innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div><label style="margin:0">Currency</label>
+          <select id="rcCurrency" style="max-width:140px">
+            ${['PHP', 'USD', 'THB', 'KHR', 'VND'].map(c => `<option ${c === card.currency ? 'selected' : ''}>${c}</option>`).join('')}
+          </select></div>
+        <div class="muted">${card.updated_at ? `Last updated ${fmtDate(card.updated_at)} by ${esc(card.updated_by || '')}` : 'Not saved yet'}</div>
+      </div>
+
+      <div class="rc-label" style="margin-top:16px">Empty box price <span class="muted" style="font-weight:400">(what a customer pays to buy a box)</span></div>
+      <div class="table-scroll"><table>
+        <tr>${sizes.map(s => `<th>${esc(s.label)}<br><span class="muted" style="font-weight:400">${esc(s.dimensions)}</span></th>`).join('')}</tr>
+        <tr>${sizes.map(s => `<td>${cell('rc_empty_' + s.key, card.empty_box_price[s.key])}</td>`).join('')}</tr>
+      </table></div>
+
+      ${ACCT_META.ocean_levels.map(oceanTable).join('')}
+
+      <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[ACCT_META.air_level] || 'Express Air')} — price per kilo</div>
+      <div class="table-scroll"><table>
+        <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
+        <tr>${zones.map(z => `<td>${cell('rc_air_' + z.key, card.air[ACCT_META.air_level][z.key])}</td>`).join('')}</tr>
+      </table></div>
+
+      <button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
+    </div>`;
+}
+async function saveRateCard() {
+  const zones = ACCT_META.zones, sizes = ACCT_META.sizes;
+  const v = (id) => +(document.getElementById(id) || {}).value || 0;
+  const body = {
+    currency: document.getElementById('rcCurrency').value,
+    empty_box_price: Object.fromEntries(sizes.map(s => [s.key, v('rc_empty_' + s.key)])),
+    ocean: Object.fromEntries(ACCT_META.ocean_levels.map(lvl => [lvl,
+      Object.fromEntries(zones.map(z => [z.key,
+        Object.fromEntries(sizes.map(s => [s.key, v(`rc_${lvl}_${z.key}_${s.key}`)]))]))])),
+    air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) }
+  };
+  try { await api('/api/accounting/rate-card', { method: 'PUT', body }); flash('Rate card saved'); renderRateCard(); }
+  catch (e) { showErr(e); }
+}
+
+async function renderInvoices() {
+  const [list, shipments] = await Promise.all([api('/api/accounting/invoices'), api('/api/shipments')]);
+  document.getElementById('acctBody').innerHTML = `
+    <details class="collapse card"><summary>+ New invoice</summary>
+      <div class="form-grid" style="margin-top:8px">
+        <div><label>Bill to *</label><input id="invTo" placeholder="Customer name"></div>
+        <div><label>From shipment <span class="muted">(optional — auto-prices the boxes)</span></label>
+          <select id="invShipment" onchange="quoteShipment()">
+            <option value="">— none —</option>
+            ${shipments.map(s => `<option value="${s.id}">${esc(s.shipment_number)} · ${esc(s.sender_name || '')}</option>`).join('')}
+          </select></div>
+      </div>
+      <div id="invLines"></div>
+      <button class="secondary small" onclick="addInvLine()">+ Add line</button>
+      <div><label>Notes</label><input id="invNotes"></div>
+      <button onclick="createInvoice()">Create invoice</button>
+    </details>
+    <div class="card table-scroll">
+      <table><tr><th>Invoice</th><th>Bill to</th><th>Total</th><th>Status</th><th>Receipt</th><th>Issued</th><th></th></tr>
+      ${list.map(i => `<tr>
+        <td><b>${esc(i.invoice_number)}</b></td>
+        <td>${esc(i.bill_to)}<div class="muted">${i.lines.map(l => esc(l.description)).join(', ')}</div></td>
+        <td>${esc(money(i.total, i.currency))}</td>
+        <td><span class="badge ${i.status === 'PAID' ? 'st-delivered' : i.status === 'VOID' ? 'st-cancelled' : 'st-created'}">${esc(i.status)}</span></td>
+        <td>${i.receipt_number ? `<b>${esc(i.receipt_number)}</b><div class="muted">${fmtDay(i.paid_at)}</div>` : '<span class="muted">—</span>'}</td>
+        <td>${fmtDay(i.issued_at)}</td>
+        <td class="inline-actions">
+          ${i.status !== 'PAID' ? `<button class="small" onclick="setInvoice(${i.id}, 'PAID')">Mark paid</button>` : `<button class="small secondary" onclick="setInvoice(${i.id}, 'UNPAID')">Unpay</button>`}
+          ${i.status !== 'VOID' ? `<button class="small secondary danger" onclick="setInvoice(${i.id}, 'VOID')">Void</button>` : ''}
+        </td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">No invoices yet</td></tr>'}
+      </table>
+    </div>`;
+  addInvLine();
+}
+let invLineSeq = 0;
+function addInvLine(desc = '', qty = 1, unit = 0) {
+  invLineSeq += 1;
+  const n = invLineSeq;
+  document.getElementById('invLines').insertAdjacentHTML('beforeend', `
+    <div class="row invLine" data-line="${n}" style="gap:6px;margin-top:6px">
+      <input class="ilDesc" placeholder="Description" value="${esc(desc)}" style="flex:2">
+      <input class="ilQty" type="number" min="0" step="1" value="${qty}" placeholder="Qty" style="width:80px">
+      <input class="ilUnit" type="number" min="0" step="0.01" value="${unit}" placeholder="Unit" style="width:110px">
+      <button class="secondary small" onclick="this.parentElement.remove()">×</button>
+    </div>`);
+}
+async function quoteShipment() {
+  const id = document.getElementById('invShipment').value;
+  if (!id) return;
+  try {
+    const q = await api('/api/accounting/quote/' + id);
+    document.getElementById('invLines').innerHTML = '';
+    q.boxes.forEach(b => addInvLine(`${b.box_number} · ${SIZE_LABEL(b.size_category)} · ${b.zone || 'unzoned'}`, 1, b.amount));
+    if (!q.boxes.length) addInvLine();
+    flash(`Priced ${q.boxes.length} box(es) — total ${money(q.total, q.currency)}`);
+  } catch (e) { showErr(e); }
+}
+async function createInvoice() {
+  const lines = [...document.querySelectorAll('.invLine')].map(el => ({
+    description: el.querySelector('.ilDesc').value.trim(),
+    qty: +el.querySelector('.ilQty').value || 0,
+    unit_amount: +el.querySelector('.ilUnit').value || 0
+  })).filter(l => l.description);
+  try {
+    await api('/api/accounting/invoices', { method: 'POST', body: {
+      bill_to: document.getElementById('invTo').value.trim(),
+      shipment_id: document.getElementById('invShipment').value || null,
+      notes: document.getElementById('invNotes').value.trim(), lines
+    } });
+    flash('Invoice created'); renderInvoices();
+  } catch (e) { showErr(e); }
+}
+async function setInvoice(id, status) {
+  try { await api('/api/accounting/invoices/' + id, { method: 'PUT', body: { status } }); flash('Invoice → ' + status); renderInvoices(); }
+  catch (e) { showErr(e); }
+}
+
+async function renderExpenses() {
+  const { expenses, categories } = await api('/api/accounting/expenses');
+  document.getElementById('acctBody').innerHTML = `
+    <details class="collapse card" open><summary>+ Record an expense</summary>
+      <div class="form-grid" style="margin-top:8px">
+        <div><label>Category</label><select id="exCat">${categories.map(c => `<option value="${c}">${c.replace(/_/g, ' ')}</option>`).join('')}</select></div>
+        <div><label>Description *</label><input id="exDesc" placeholder="e.g. Ocean freight for C3"></div>
+        <div><label>Amount *</label><input id="exAmt" type="number" min="0" step="0.01"></div>
+        <div><label>Date</label><input id="exDate" type="date"></div>
+      </div>
+      <button onclick="addExpense()">Record expense</button>
+    </details>
+    <div class="card table-scroll">
+      <table><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>By</th><th></th></tr>
+      ${expenses.map(e => `<tr>
+        <td>${fmtDay(e.spent_at)}</td><td><span class="badge st-created">${esc(e.category.replace(/_/g, ' '))}</span></td>
+        <td>${esc(e.description)}</td><td>${esc(money(e.amount, e.currency))}</td><td>${esc(e.recorded_by || '')}</td>
+        <td><button class="small secondary danger" onclick="delExpense(${e.id})">Delete</button></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">No expenses recorded</td></tr>'}
+      </table>
+    </div>`;
+}
+async function addExpense() {
+  try {
+    await api('/api/accounting/expenses', { method: 'POST', body: {
+      category: exCat.value, description: exDesc.value.trim(),
+      amount: exAmt.value, spent_at: exDate.value ? new Date(exDate.value).toISOString() : undefined
+    } });
+    flash('Expense recorded'); renderExpenses();
+  } catch (e) { showErr(e); }
+}
+async function delExpense(id) {
+  if (!confirm('Delete this expense?')) return;
+  try { await api('/api/accounting/expenses/' + id, { method: 'DELETE' }); renderExpenses(); } catch (e) { showErr(e); }
+}
+
+async function renderPnl(from, to) {
+  const q = new URLSearchParams();
+  if (from) q.set('from', from);
+  if (to) q.set('to', to);
+  const p = await api('/api/accounting/pnl' + (q.toString() ? '?' + q : ''));
+  const cat = Object.entries(p.expenses.by_category);
+  document.getElementById('acctBody').innerHTML = `
+    <div class="card">
+      <div class="row" style="gap:8px;align-items:flex-end">
+        <div><label style="margin:0">From</label><input id="pnlFrom" type="date" value="${from || ''}"></div>
+        <div><label style="margin:0">To</label><input id="pnlTo" type="date" value="${to || ''}"></div>
+        <button class="small" onclick="renderPnl(pnlFrom.value, pnlTo.value)">Apply</button>
+        ${from || to ? `<button class="small secondary" onclick="renderPnl()">Clear</button>` : ''}
+      </div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="num">${esc(money(p.revenue.billed, p.currency))}</div><div class="lbl">Revenue billed (${p.revenue.invoice_count} invoices)</div></div>
+      <div class="tile"><div class="num">${esc(money(p.revenue.collected, p.currency))}</div><div class="lbl">Collected</div></div>
+      <div class="tile"><div class="num">${esc(money(p.revenue.receivable, p.currency))}</div><div class="lbl">Receivable</div></div>
+      <div class="tile"><div class="num">${esc(money(p.expenses.total, p.currency))}</div><div class="lbl">Expenses (${p.expenses.count})</div></div>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">Profit &amp; Loss</h2>
+      <table>
+        <tr><td><b>Revenue (billed)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
+        ${cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')}
+        <tr><td><b>Total expenses</b></td><td style="text-align:right">− ${esc(money(p.expenses.total, p.currency))}</td></tr>
+        <tr style="border-top:2px solid var(--border)">
+          <td><b>Net profit (accrual)</b></td>
+          <td style="text-align:right;font-weight:800;color:${p.net_profit >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_profit, p.currency))}</td></tr>
+        <tr><td><b>Net cash (collected − expenses)</b></td>
+          <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>
+      </table>
+    </div>`;
 }
 
 /* ---------- reports ---------- */

@@ -14,9 +14,9 @@
 
       /* nav */
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
-      'nav.containers': 'Containers', 'nav.warehouse': 'Warehouse', 'nav.trips': 'Trips',
+      'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
       'nav.returns': 'Returns', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
-      'nav.reports': 'Reports', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
+      'nav.reports': 'Reports', 'nav.accounting': 'Accounting', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operations', 'nav.section.people': 'People & Comms', 'nav.section.system': 'System',
 
       /* common */
@@ -39,9 +39,9 @@
       'status.RETURNED': 'Returned', 'status.CANCELLED': 'Cancelled',
 
       /* friendly public statuses */
-      'pub.CREATED': 'Registered', 'pub.RECEIVED_ORIGIN': 'Received at origin',
-      'pub.LOADED_CONTAINER': 'Loaded in container', 'pub.IN_TRANSIT': 'On the way to the Philippines',
-      'pub.ARRIVED_PORT': 'Arrived in the Philippines', 'pub.RECEIVED_WAREHOUSE': 'Received at warehouse',
+      'pub.CREATED': 'Booking Confirmed', 'pub.RECEIVED_ORIGIN': 'Received at origin',
+      'pub.LOADED_CONTAINER': 'Loaded in container', 'pub.IN_TRANSIT': 'On the way to Destination',
+      'pub.ARRIVED_PORT': 'Arrived at Destination', 'pub.RECEIVED_WAREHOUSE': 'Received at warehouse',
       'pub.SORTED': 'Sorted for delivery region', 'pub.ASSIGNED': 'Scheduled for delivery',
       'pub.LOADED_TRUCK': 'Loaded on delivery truck', 'pub.OUT_FOR_DELIVERY': 'Out for delivery',
       'pub.DELIVERED': 'Delivered', 'pub.RETURNED': 'Delivery attempted — returned to warehouse',
@@ -57,7 +57,7 @@
       'dash.inTransit': 'Containers in transit', 'dash.activeTrips': 'Active trips', 'dash.recentSms': 'Recent SMS',
 
       /* landing */
-      'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
+      'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.account': 'Sign-up / Sign-in', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
       'land.hero.line1': 'Delivering your', 'land.hero.line2': 'love, sacrifice, and blessings home.',
       'land.hero.kicker': 'Worldwide to the Philippines · Since day one',
       'land.hero.title': 'Your balikbayan box, safely home.',
@@ -89,9 +89,9 @@
       'track.btn': 'Track', 'track.needBoth': 'Please enter both the box number and the last 4 digits of the receiver’s phone.',
       'track.loading': 'Looking up your box…', 'track.timeline': 'Shipment progress',
       'track.pending': 'Pending', 'track.detailedLog': 'View detailed status log',
-      'journey.CREATED': 'Booking registered', 'journey.RECEIVED_ORIGIN': 'Received at origin',
-      'journey.LOADED_CONTAINER': 'Loaded into container', 'journey.IN_TRANSIT': 'On the way to the Philippines',
-      'journey.ARRIVED_PORT': 'Arrived in the Philippines', 'journey.RECEIVED_WAREHOUSE': 'Received at VFIC warehouse',
+      'journey.CREATED': 'Booking Confirmed', 'journey.RECEIVED_ORIGIN': 'Received at origin',
+      'journey.LOADED_CONTAINER': 'Loaded into container', 'journey.IN_TRANSIT': 'On the way to Destination',
+      'journey.ARRIVED_PORT': 'Arrived at Destination', 'journey.RECEIVED_WAREHOUSE': 'Received at VFIC warehouse',
       'journey.SORTED': 'Sorted for {region}', 'journey.FORWARDED_REGION': 'Forwarded to {region}',
       'journey.OUT_FOR_DELIVERY': 'Out for delivery in {region}', 'journey.DELIVERED': 'Delivered',
       'track.for': 'For', 'track.help': 'Need help? Contact VFIC support at',
@@ -133,9 +133,9 @@
       'shell.viewSite': 'Tingnan ang public site',
 
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
-      'nav.containers': 'Mga Container', 'nav.warehouse': 'Bodega', 'nav.trips': 'Mga Biyahe',
+      'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',
       'nav.returns': 'Mga Naibalik', 'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
-      'nav.reports': 'Mga Ulat', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
+      'nav.reports': 'Mga Ulat', 'nav.accounting': 'Accounting', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operasyon', 'nav.section.people': 'Mga Tao at Komunikasyon', 'nav.section.system': 'Sistema',
 
       'common.search': 'Maghanap', 'common.print': 'I-print', 'common.save': 'I-save', 'common.cancel': 'Kanselahin',
@@ -154,9 +154,9 @@
       'status.OUT_FOR_DELIVERY': 'Ipinapadala na', 'status.DELIVERED': 'Naihatid',
       'status.RETURNED': 'Naibalik', 'status.CANCELLED': 'Kinansela',
 
-      'pub.CREATED': 'Nairehistro', 'pub.RECEIVED_ORIGIN': 'Natanggap sa pinagmulan',
-      'pub.LOADED_CONTAINER': 'Nakakarga na sa container', 'pub.IN_TRANSIT': 'Papunta na sa Pilipinas',
-      'pub.ARRIVED_PORT': 'Dumating na sa Pilipinas', 'pub.RECEIVED_WAREHOUSE': 'Natanggap sa bodega',
+      'pub.CREATED': 'Kumpirmado ang Booking', 'pub.RECEIVED_ORIGIN': 'Natanggap sa pinagmulan',
+      'pub.LOADED_CONTAINER': 'Nakakarga na sa container', 'pub.IN_TRANSIT': 'Papunta na sa Destinasyon',
+      'pub.ARRIVED_PORT': 'Dumating na sa Destinasyon', 'pub.RECEIVED_WAREHOUSE': 'Natanggap sa bodega',
       'pub.SORTED': 'Nabukod ayon sa rehiyon', 'pub.ASSIGNED': 'Nakaiskedyul para ihatid',
       'pub.LOADED_TRUCK': 'Nakakarga na sa truck', 'pub.OUT_FOR_DELIVERY': 'Ipinapadala na ngayon',
       'pub.DELIVERED': 'Naihatid na', 'pub.RETURNED': 'Sinubukang ihatid — ibinalik sa bodega',
@@ -169,7 +169,7 @@
       'dash.returns': 'Pila ng naibalik', 'dash.unpaid': 'Hindi pa bayad na padala', 'dash.pipeline': 'Daloy',
       'dash.inTransit': 'Mga container sa biyahe', 'dash.activeTrips': 'Aktibong biyahe', 'dash.recentSms': 'Kamakailang SMS',
 
-      'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
+      'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.account': 'Mag-sign up / Mag-sign in', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
       'land.hero.line1': 'Inihahatid ang inyong', 'land.hero.line2': 'pagmamahal, sakripisyo, at biyaya pauwi.',
       'land.hero.kicker': 'Buong mundo papuntang Pilipinas · Maaasahan',
       'land.hero.title': 'Ang inyong balikbayan box, ligtas na nakauwi.',
@@ -200,9 +200,9 @@
       'track.btn': 'I-track', 'track.needBoth': 'Pakilagay ang box number at ang huling 4 na digit ng telepono ng tatanggap.',
       'track.loading': 'Hinahanap ang inyong kahon…', 'track.timeline': 'Progreso ng padala',
       'track.pending': 'Nakabinbin', 'track.detailedLog': 'Tingnan ang detalyadong talaan ng status',
-      'journey.CREATED': 'Nairehistro ang booking', 'journey.RECEIVED_ORIGIN': 'Natanggap sa pinagmulan',
-      'journey.LOADED_CONTAINER': 'Nakakarga sa container', 'journey.IN_TRANSIT': 'Papunta na sa Pilipinas',
-      'journey.ARRIVED_PORT': 'Dumating na sa Pilipinas', 'journey.RECEIVED_WAREHOUSE': 'Natanggap sa bodega ng VFIC',
+      'journey.CREATED': 'Kumpirmado ang Booking', 'journey.RECEIVED_ORIGIN': 'Natanggap sa pinagmulan',
+      'journey.LOADED_CONTAINER': 'Nakakarga sa container', 'journey.IN_TRANSIT': 'Papunta na sa Destinasyon',
+      'journey.ARRIVED_PORT': 'Dumating na sa Destinasyon', 'journey.RECEIVED_WAREHOUSE': 'Natanggap sa bodega ng VFIC',
       'journey.SORTED': 'Nabukod para sa {region}', 'journey.FORWARDED_REGION': 'Ipinadala sa {region}',
       'journey.OUT_FOR_DELIVERY': 'Ihahatid na sa {region}', 'journey.DELIVERED': 'Naihatid na',
       'track.for': 'Para kay', 'track.help': 'Kailangan ng tulong? Tawagan ang VFIC support sa',

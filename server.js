@@ -44,15 +44,21 @@ app.use(['/api', '/files'], async (req, res, next) => {
 });
 
 // ---------- auth helpers ----------
-const AGENTS = ['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'];
-const PH_SIDE = ['ADMIN', 'CONSIGNEE_AGENT', 'WAREHOUSE'];
+const ROLE = require('./lib/roles');
+const { ADMINS, SHIPPERS, AGENTS, PH_SIDE, ALL_STAFF, ACCOUNTING_ROLES } = {
+  ADMINS: ROLE.ADMINS, SHIPPERS: ROLE.SHIPPERS, AGENTS: ROLE.AGENTS,
+  PH_SIDE: ROLE.PH_SIDE, ALL_STAFF: ROLE.ALL_STAFF, ACCOUNTING_ROLES: ROLE.ACCOUNTING
+};
 
 // Resolve the signed-cookie session to an active user, or null.
+// Legacy role names (ADMIN / SHIPPER_AGENT) are normalised so old accounts keep working.
 function userFromReq(req) {
   const token = req.cookies && req.cookies[sess.COOKIE_NAME];
   const payload = sess.verify(token);
-  if (!payload) return null;
-  return db.get().users.find(x => x.id === payload.uid && x.active) || null;
+  if (!sess.isStaffToken(payload)) return null; // a sender token must never authenticate staff
+  const u = db.get().users.find(x => x.id === payload.uid && x.active) || null;
+  if (u) u.role = ROLE.normalizeRole(u.role);
+  return u;
 }
 
 function requireAuth(req, res, next) {
@@ -182,7 +188,55 @@ app.get('/api/me', requireAuth, (req, res) => {
 // ---------- file uploads (in-memory → storage adapter: Vercel Blob or local disk) ----------
 const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const podUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const intakeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
+
+// --- ID-document upload security (passport / government ID) ---
+// A passport scan is sensitive personal data, so the upload is constrained on every axis:
+//   • allowlist of content types + extensions (no scripts, archives or office macros)
+//   • magic-byte sniffing so a renamed file cannot slip past the declared type
+//   • one file, hard size cap
+//   • stored under intake/* which the /files proxy only serves to authenticated agents
+const ID_MAX_BYTES = 6 * 1024 * 1024;
+const ID_ALLOWED = {
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/webp': ['.webp'],
+  'image/heic': ['.heic'],
+  'application/pdf': ['.pdf']
+};
+// Leading bytes that identify each accepted format.
+function sniffFileType(buf) {
+  if (!buf || buf.length < 12) return null;
+  const b = buf;
+  if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'image/jpeg';
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return 'image/png';
+  if (b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (b.slice(0, 4).toString('latin1') === '%PDF') return 'application/pdf';
+  if (b.slice(4, 8).toString('latin1') === 'ftyp') return 'image/heic'; // heic/heif family
+  return null;
+}
+function validateIdDocument(file) {
+  if (!file) return 'A scanned/soft copy of your passport or government ID is required';
+  if (file.size > ID_MAX_BYTES) return 'The ID file is too large — please upload a file under 6 MB';
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const declared = String(file.mimetype || '').toLowerCase();
+  if (!ID_ALLOWED[declared]) return 'Only JPG, PNG, WEBP, HEIC or PDF files are accepted for the ID';
+  if (!ID_ALLOWED[declared].includes(ext)) return 'The file extension does not match its content type';
+  const actual = sniffFileType(file.buffer);
+  if (!actual) return 'That file is not a readable image or PDF';
+  // jpeg/heic siblings are interchangeable enough; everything else must match exactly.
+  const family = (t) => (t === 'image/heic' ? 'image/heic' : t);
+  if (family(actual) !== family(declared)) return 'The file content does not match its file type — please re-save and try again';
+  return null;
+}
+const intakeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ID_MAX_BYTES, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const declared = String(file.mimetype || '').toLowerCase();
+    if (!ID_ALLOWED[declared]) return cb(new Error('Only JPG, PNG, WEBP, HEIC or PDF files are accepted for the ID'));
+    cb(null, true);
+  }
+});
 
 // Shipment documents (packing list / passport / receiving form) — agents + admin only
 app.post('/api/upload', requireRole(...AGENTS), docUpload.single('file'), async (req, res) => {
@@ -296,7 +350,7 @@ app.get('/api/shipments/:id', requireAuth, (req, res) => {
   });
 });
 // Intake: sender + 1..n boxes (each with its own receiver)
-app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.post('/api/shipments', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const b = req.body || {};
   const sender = d.customers.find(c => c.id === +b.sender_id);
@@ -357,7 +411,7 @@ app.post('/api/shipments', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => 
   db.persist();
   res.json({ ...shipment, boxes: boxes.map(boxRow) });
 });
-app.put('/api/shipments/:id', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.put('/api/shipments/:id', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const s = db.get().shipments.find(x => x.id === +req.params.id);
   if (!s) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
@@ -369,7 +423,7 @@ app.put('/api/shipments/:id', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) 
   res.json(s);
 });
 // Confirm physical receipt at origin: all CREATED boxes → RECEIVED_ORIGIN (SMS to sender)
-app.post('/api/shipments/:id/receive', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const s = d.shipments.find(x => x.id === +req.params.id);
   if (!s) return res.status(404).json({ error: 'Not found' });
@@ -414,7 +468,12 @@ app.get('/api/refdata', requireAuth, (req, res) => {
 // Public submission: no login. Sender fills their own info + box(es) + uploads a passport/ID scan.
 // This does NOT create a shipment/customer directly — an agent reviews it and encodes it via
 // New Shipment Intake, which pre-fills from the request and marks it CONVERTED.
-app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport_file'), async (req, res) => {
+// Multer rejections (bad type / oversize) surface as a clean 400 instead of a stack trace.
+const intakeIdUpload = (req, res, next) => intakeUpload.single('passport_file')(req, res, (err) => {
+  if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'The ID file is too large — please upload a file under 6 MB' : (err.message || 'Invalid upload') });
+  next();
+});
+app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, res) => {
   const b = req.body || {};
   const bad = (msg) => res.status(400).json({ error: msg });
   const need = (v, label) => { if (!String(v || '').trim()) throw new Error(`${label} is required`); return String(v).trim(); };
@@ -468,7 +527,8 @@ app.post('/api/public/intake-requests', rateLimit, intakeUpload.single('passport
       };
     }
 
-    if (!req.file) return bad('A scanned/soft copy of your passport or government ID is required');
+    const idErr = validateIdDocument(req.file);
+    if (idErr) return bad(idErr);
 
     // --- B + C: recipient and itemized goods, per box ---
     let boxesIn;
@@ -560,7 +620,13 @@ app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   res.json(list.map(r => ({
     id: r.id, reference_code: r.reference_code, status: r.status, submitted_at: r.submitted_at,
     sender_name: personName(r.sender), sender_phone: (r.sender || {}).contact_numbers || '',
-    box_count: r.boxes.length
+    box_count: r.boxes.length,
+    // Size breakdown so the queue shows what was booked without opening each request.
+    box_sizes: r.boxes.map(b => b.size_category),
+    size_summary: Object.entries(r.boxes.reduce((m, b) => {
+      const k = BOXSIZE.canonicalSize(b.size_category) || b.size_category || '—';
+      m[k] = (m[k] || 0) + 1; return m;
+    }, {})).map(([k, n]) => `${n}× ${(BOXSIZE.bySize(k) || {}).label || k}`).join(', ')
   })));
 });
 app.get('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
@@ -721,7 +787,7 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
 });
 // Undo the last status change — for a mis-clicked Action. Removes the most recent status
 // event and rolls the box back to the prior status, reconciling any side effects.
-app.post('/api/boxes/:id/revert', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE'), (req, res) => {
+app.post('/api/boxes/:id/revert', requireRole(...AGENTS, 'WAREHOUSE'), (req, res) => {
   const d = db.get();
   const box = d.boxes.find(b => b.id === +req.params.id);
   if (!box) return res.status(404).json({ error: 'Not found' });
@@ -732,7 +798,7 @@ app.post('/api/boxes/:id/revert', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGN
   if (req.user.role === 'WAREHOUSE' && !['RECEIVED_WAREHOUSE', 'SORTED'].includes(last.to_status)) {
     return res.status(403).json({ error: 'Warehouse role can only undo Received/Sorted.' });
   }
-  if (['DELIVERED', 'RETURNED', 'CANCELLED'].includes(last.to_status) && req.user.role !== 'ADMIN') {
+  if (['DELIVERED', 'RETURNED', 'CANCELLED'].includes(last.to_status) && !ROLE.isAdmin(req.user.role)) {
     return res.status(403).json({ error: 'Only an admin can undo a Delivered / Returned / Cancelled box.' });
   }
   d.status_events = d.status_events.filter(e => e.id !== last.id);
@@ -759,7 +825,7 @@ app.get('/api/containers', requireAuth, (req, res) => {
     .slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })));
 });
-app.post('/api/containers', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.post('/api/containers', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const b = req.body || {};
   if (!b.container_number) return res.status(400).json({ error: 'Container number is required' });
   const c = {
@@ -799,7 +865,7 @@ app.get('/api/containers/:id', requireAuth, (req, res) => {
     pending_strip: notScanned.map(b => b.container_box_number || b.box_number)
   });
 });
-app.put('/api/containers/:id', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
+app.put('/api/containers/:id', requireRole(...AGENTS), (req, res) => {
   const c = db.get().containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
@@ -811,7 +877,7 @@ app.put('/api/containers/:id', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_
   res.json(c);
 });
 // Load a box (by scan/search) into a container: RECEIVED_ORIGIN → LOADED_CONTAINER
-app.post('/api/containers/:id/load', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.post('/api/containers/:id/load', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -831,7 +897,7 @@ app.post('/api/containers/:id/load', requireRole('ADMIN', 'SHIPPER_AGENT'), (req
   res.json({ box: boxRow(box), box_count: d.boxes.filter(b => b.container_id === c.id).length });
 });
 // Depart: container + all boxes → IN_TRANSIT
-app.post('/api/containers/:id/depart', requireRole('ADMIN', 'SHIPPER_AGENT'), (req, res) => {
+app.post('/api/containers/:id/depart', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -843,7 +909,7 @@ app.post('/api/containers/:id/depart', requireRole('ADMIN', 'SHIPPER_AGENT'), (r
   res.json({ ok: true, boxes_updated: boxes.length });
 });
 // Arrive: container + all boxes → ARRIVED_PORT (SMS to receivers)
-app.post('/api/containers/:id/arrive', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/containers/:id/arrive', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -856,7 +922,7 @@ app.post('/api/containers/:id/arrive', requireRole('ADMIN', 'SHIPPER_AGENT', 'CO
 });
 // Revert / correct a container's status by one step (undo a mis-clicked action). Reverses the
 // box cascade for Depart (IN_TRANSIT→LOADING) and Arrive (ARRIVED→IN_TRANSIT).
-app.post('/api/containers/:id/revert', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/containers/:id/revert', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -933,7 +999,7 @@ app.get('/api/containers/:id/load-plan', requireAuth, (req, res) => {
   });
 });
 // Consignee agent records the discharge/dispatch plan for this container.
-app.put('/api/containers/:id/load-plan', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.put('/api/containers/:id/load-plan', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const c = db.get().containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
   c.load_plan_notes = String((req.body || {}).load_plan_notes || '').trim();
@@ -947,7 +1013,7 @@ app.get('/api/trips', requireAuth, (req, res) => {
   res.json(d.trips.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })));
 });
-app.post('/api/trips', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/trips', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const b = req.body || {};
   if (!b.driver_name || !b.region) return res.status(400).json({ error: 'Driver name and region are required' });
   if (!SM.REGIONS.includes(b.region)) return res.status(400).json({ error: 'Invalid region' });
@@ -975,7 +1041,7 @@ app.get('/api/trips/:id', requireAuth, (req, res) => {
   });
   res.json({ ...t, boxes });
 });
-app.put('/api/trips/:id', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.put('/api/trips/:id', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const t = db.get().trips.find(x => x.id === +req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
@@ -987,7 +1053,7 @@ app.put('/api/trips/:id', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) =>
   res.json(t);
 });
 // Assign SORTED or RETURNED boxes → ASSIGNED (this is the one-click re-dispatch too)
-app.post('/api/trips/:id/assign-boxes', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/trips/:id/assign-boxes', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const d = db.get();
   const t = d.trips.find(x => x.id === +req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
@@ -1004,7 +1070,7 @@ app.post('/api/trips/:id/assign-boxes', requireRole('ADMIN', 'CONSIGNEE_AGENT'),
   db.persist();
   res.json({ results, assigned: results.filter(r => r.ok).length });
 });
-app.post('/api/trips/:id/remove-box', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/trips/:id/remove-box', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const d = db.get();
   const t = d.trips.find(x => x.id === +req.params.id);
   const box = d.boxes.find(b => b.id === +req.body.box_id);
@@ -1030,7 +1096,7 @@ app.post('/api/trips/:id/load-scan', requireRole(...PH_SIDE), (req, res) => {
   res.json({ box: boxRow(box), remaining });
 });
 // Dispatch: all LOADED_TRUCK boxes → OUT_FOR_DELIVERY (SMS to receivers)
-app.post('/api/trips/:id/dispatch', requireRole('ADMIN', 'CONSIGNEE_AGENT'), (req, res) => {
+app.post('/api/trips/:id/dispatch', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const d = db.get();
   const t = d.trips.find(x => x.id === +req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
@@ -1105,7 +1171,7 @@ app.get('/api/notifications', requireAuth, (req, res) => {
     .map(n => ({ ...n, box_number: (d.boxes.find(b => b.id === n.box_id) || {}).box_number || '' }));
   res.json(list);
 });
-app.post('/api/notifications/retry/:id', requireRole('ADMIN'), (req, res) => {
+app.post('/api/notifications/retry/:id', requireRole(...ADMINS), (req, res) => {
   const n = db.get().notifications.find(x => x.id === +req.params.id);
   if (!n) return res.status(404).json({ error: 'Not found' });
   n.status = 'QUEUED';
@@ -1116,7 +1182,7 @@ app.post('/api/notifications/retry/:id', requireRole('ADMIN'), (req, res) => {
 });
 
 // ---------- SMS templates (admin) ----------
-app.get('/api/templates', requireRole('ADMIN'), (req, res) => {
+app.get('/api/templates', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   const merged = {};
   for (const [k, v] of Object.entries(notif.DEFAULT_TEMPLATES)) {
@@ -1124,7 +1190,7 @@ app.get('/api/templates', requireRole('ADMIN'), (req, res) => {
   }
   res.json({ templates: merged, placeholders: ['box_number', 'link', 'sender_first_name', 'receiver_first_name', 'driver_name', 'driver_contact', 'vfic_phone', 'received_by_name', 'reason'] });
 });
-app.put('/api/templates/:key', requireRole('ADMIN'), (req, res) => {
+app.put('/api/templates/:key', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   if (!notif.DEFAULT_TEMPLATES[req.params.key]) return res.status(404).json({ error: 'Unknown template' });
   const { body } = req.body || {};
@@ -1136,7 +1202,7 @@ app.put('/api/templates/:key', requireRole('ADMIN'), (req, res) => {
 });
 
 // ---------- rate settings (admin) ----------
-app.put('/api/settings/rates', requireRole('ADMIN'), (req, res) => {
+app.put('/api/settings/rates', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   const { excessWeightChargePerKg, excessWeightChargeCurrency } = req.body || {};
   if (excessWeightChargePerKg !== undefined) {
@@ -1153,13 +1219,21 @@ app.put('/api/settings/rates', requireRole('ADMIN'), (req, res) => {
 });
 
 // ---------- users (admin) ----------
-app.get('/api/users', requireRole('ADMIN'), (req, res) => {
-  res.json(db.get().users.map(({ password_hash, ...u }) => u));
+// Catalogue of assignable roles (for the Admin → Users role picker).
+app.get('/api/roles', requireRole(...ADMINS), (req, res) => {
+  res.json({ roles: ROLE.ROLES, developer_only: ['DEVELOPER_ADMIN'] });
 });
-app.post('/api/users', requireRole('ADMIN'), (req, res) => {
+app.get('/api/users', requireRole(...ADMINS), (req, res) => {
+  res.json(db.get().users.map(({ password_hash, ...u }) => ({ ...u, role: ROLE.normalizeRole(u.role), role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role })));
+});
+app.post('/api/users', requireRole(...ADMINS), (req, res) => {
   const { name, email, role, password } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
-  if (!['ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT', 'WAREHOUSE'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  if (!ROLE.ROLE_KEYS.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  // Only a Developer Admin can mint another Developer Admin.
+  if (role === 'DEVELOPER_ADMIN' && req.user.role !== 'DEVELOPER_ADMIN') {
+    return res.status(403).json({ error: 'Only a Developer Admin can create a Developer Admin account' });
+  }
   if (db.get().users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(400).json({ error: 'Email already in use' });
   const u = { id: db.nextId('user'), name, email, role, password_hash: hashPassword(password), active: true, created_at: new Date().toISOString() };
   db.get().users.push(u);
@@ -1167,14 +1241,443 @@ app.post('/api/users', requireRole('ADMIN'), (req, res) => {
   const { password_hash, ...safe } = u;
   res.json(safe);
 });
-app.put('/api/users/:id', requireRole('ADMIN'), (req, res) => {
-  const u = db.get().users.find(x => x.id === +req.params.id);
+app.put('/api/users/:id', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  const u = d.users.find(x => x.id === +req.params.id);
   if (!u) return res.status(404).json({ error: 'Not found' });
-  for (const k of ['name', 'role', 'active']) if (k in req.body) u[k] = req.body[k];
-  if (req.body.password) u.password_hash = hashPassword(req.body.password);
+  const b = req.body || {};
+  if ('role' in b) {
+    if (!ROLE.ROLE_KEYS.includes(b.role)) return res.status(400).json({ error: 'Invalid role' });
+    if ((b.role === 'DEVELOPER_ADMIN' || ROLE.normalizeRole(u.role) === 'DEVELOPER_ADMIN') && req.user.role !== 'DEVELOPER_ADMIN') {
+      return res.status(403).json({ error: 'Only a Developer Admin can grant or change a Developer Admin role' });
+    }
+  }
+  // Don't let an admin lock everyone out by demoting/deactivating the last admin.
+  const willLoseAdmin = (('role' in b && !ROLE.ADMINS.includes(b.role)) || b.active === false) && ROLE.ADMINS.includes(ROLE.normalizeRole(u.role));
+  if (willLoseAdmin) {
+    const otherAdmins = d.users.filter(x => x.id !== u.id && x.active && ROLE.ADMINS.includes(ROLE.normalizeRole(x.role)));
+    if (!otherAdmins.length) return res.status(400).json({ error: 'This is the last active admin — assign another admin first' });
+  }
+  for (const k of ['name', 'role', 'active']) if (k in b) u[k] = b[k];
+  if (b.password) u.password_hash = hashPassword(b.password);
   db.persist();
   const { password_hash, ...safe } = u;
-  res.json(safe);
+  res.json({ ...safe, role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(safe.role)] || safe.role });
+});
+
+// ---------- sender self-service accounts (public) ----------
+// A sender can create an account to track their boxes, park a half-finished booking as a
+// draft, and see everything they have sent before. Sessions live on their own cookie and
+// audience, entirely separate from staff sessions.
+function senderFromReq(req) {
+  const payload = sess.verify(req.cookies && req.cookies[sess.SENDER_COOKIE_NAME]);
+  if (!sess.isSenderToken(payload)) return null;
+  const d = db.get();
+  return (d.sender_accounts || []).find(a => a.id === payload.sid && a.active !== false) || null;
+}
+function requireSender(req, res, next) {
+  const a = senderFromReq(req);
+  if (!a) return res.status(401).json({ error: 'Please sign in to your sender account' });
+  req.sender = a;
+  next();
+}
+const senderPublic = (a) => ({ id: a.id, name: a.name, email: a.email, phone: a.phone, created_at: a.created_at });
+
+app.post('/api/public/sender/signup', rateLimit, (req, res) => {
+  const d = db.get();
+  d.sender_accounts = d.sender_accounts || [];
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const email = String(b.email || '').trim().toLowerCase();
+  const password = String(b.password || '');
+  if (!name) return res.status(400).json({ error: 'Your name is required' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'A valid email address is required' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (d.sender_accounts.some(a => a.email === email)) return res.status(400).json({ error: 'An account with that email already exists — please sign in instead' });
+  const acct = {
+    id: db.nextId('sender_account'), name, email,
+    phone: String(b.phone || '').trim(),
+    password_hash: hashPassword(password),
+    drafts: [], active: true, created_at: new Date().toISOString()
+  };
+  d.sender_accounts.push(acct);
+  db.persist();
+  res.cookie(sess.SENDER_COOKIE_NAME, sess.senderTokenFor(acct.id), sess.cookieOptions);
+  res.json(senderPublic(acct));
+});
+
+app.post('/api/public/sender/signin', rateLimit, (req, res) => {
+  const d = db.get();
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const password = String((req.body || {}).password || '');
+  const acct = (d.sender_accounts || []).find(a => a.email === email && a.active !== false);
+  if (!acct || !verifyPassword(password, acct.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
+  res.cookie(sess.SENDER_COOKIE_NAME, sess.senderTokenFor(acct.id), sess.cookieOptions);
+  res.json(senderPublic(acct));
+});
+
+app.post('/api/public/sender/signout', (req, res) => {
+  res.clearCookie(sess.SENDER_COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
+
+app.get('/api/public/sender/me', (req, res) => {
+  const a = senderFromReq(req);
+  if (!a) return res.status(401).json({ error: 'Not signed in' });
+  res.json(senderPublic(a));
+});
+
+// ---- saved drafts (a booking the sender is not ready to submit) ----
+app.get('/api/public/sender/drafts', requireSender, (req, res) => {
+  res.json(req.sender.drafts || []);
+});
+app.post('/api/public/sender/drafts', requireSender, (req, res) => {
+  const b = req.body || {};
+  const a = req.sender;
+  a.drafts = a.drafts || [];
+  const now = new Date().toISOString();
+  const payload = (b.payload && typeof b.payload === 'object') ? b.payload : {};
+  // Keep drafts small — this is a convenience cache, not a document store.
+  if (JSON.stringify(payload).length > 200000) return res.status(400).json({ error: 'This draft is too large to save' });
+  let draft = b.id ? a.drafts.find(x => x.id === +b.id) : null;
+  if (draft) {
+    draft.label = String(b.label || draft.label || 'Untitled draft').trim();
+    draft.payload = payload;
+    draft.updated_at = now;
+  } else {
+    if (a.drafts.length >= 20) return res.status(400).json({ error: 'You have reached the maximum of 20 saved drafts' });
+    draft = {
+      id: db.nextId('sender_draft'),
+      label: String(b.label || 'Untitled draft').trim(),
+      payload, created_at: now, updated_at: now
+    };
+    a.drafts.push(draft);
+  }
+  db.persist();
+  res.json(draft);
+});
+app.delete('/api/public/sender/drafts/:id', requireSender, (req, res) => {
+  const a = req.sender;
+  const before = (a.drafts || []).length;
+  a.drafts = (a.drafts || []).filter(x => x.id !== +req.params.id);
+  if (a.drafts.length === before) return res.status(404).json({ error: 'Draft not found' });
+  db.persist();
+  res.json({ ok: true });
+});
+
+// ---- the sender's own bookings and boxes ----
+// Matched on the email captured at booking time (intake) or on the customer record.
+app.get('/api/public/sender/shipments', requireSender, (req, res) => {
+  const d = db.get();
+  const email = req.sender.email;
+  const phoneDigits = BOC.normalizePhMobile(req.sender.phone) || String(req.sender.phone || '').replace(/\D/g, '');
+  const matchesSender = (obj) => {
+    const e = String((obj && obj.email) || '').trim().toLowerCase();
+    if (e && e === email) return true;
+    const p = String((obj && (obj.contact_numbers || obj.phone_primary)) || '').replace(/\D/g, '');
+    return !!(phoneDigits && p && p.endsWith(phoneDigits.slice(-9)));
+  };
+
+  // Online intake requests submitted by this sender.
+  const requests = (d.intake_requests || [])
+    .filter(r => matchesSender(r.sender))
+    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
+    .map(r => ({
+      reference_code: r.reference_code, status: r.status, submitted_at: r.submitted_at,
+      box_count: (r.boxes || []).length,
+      size_summary: (r.boxes || []).map(b => (BOXSIZE.bySize(b.size_category) || {}).label || b.size_category).join(', '),
+      service_level: r.service_level || null,
+      converted_shipment_id: r.converted_shipment_id || null
+    }));
+
+  // Encoded shipments where the sender customer record matches, with live box tracking.
+  const customerIds = d.customers.filter(c => matchesSender(c)).map(c => c.id);
+  const shipments = d.shipments
+    .filter(s => customerIds.includes(s.sender_id))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(s => ({
+      shipment_number: s.shipment_number, created_at: s.created_at,
+      service_level: s.service_level || null, payment_status: s.payment_status,
+      boxes: d.boxes.filter(b => b.shipment_id === s.id).map(b => {
+        const receiver = d.customers.find(c => c.id === b.receiver_id) || {};
+        return {
+          box_number: b.box_number, status: b.status,
+          status_label: SM.FRIENDLY[b.status] || b.status,
+          status_updated_at: b.status_updated_at,
+          size_label: (BOXSIZE.bySize(b.size_category) || {}).label || b.size_category,
+          receiver_name: receiver.full_name || '', receiver_city: receiver.city_municipality || '',
+          track_url: b.qr_token ? `/track.html?t=${b.qr_token}` : null
+        };
+      })
+    }));
+
+  res.json({ requests, shipments });
+});
+
+// ---------- origin warehouse: master list + container load planning ----------
+// Boxes physically sitting at the origin warehouse: received from the sender but not yet
+// stuffed into a container. A shipper agent only sees their own origin country.
+function originWarehouseBoxes(user) {
+  const d = db.get();
+  const scope = ROLE.originScope(user.role);
+  return d.boxes
+    .filter(b => b.status === 'RECEIVED_ORIGIN' && !b.container_id)
+    .map(b => {
+      const row = boxRow(b);
+      const shipment = d.shipments.find(s => s.id === b.shipment_id) || {};
+      const size = BOXSIZE.bySize(b.size_category);
+      return {
+        ...row,
+        origin_country: shipment.origin_country || '', origin_agent: shipment.origin_agent || '',
+        service_level: shipment.service_level || null,
+        size_label: size ? size.label : b.size_category,
+        dimensions: size ? size.dimensions : '',
+        cbm: size ? size.cbm : 0,
+        weight_kg: b.weight_kg || (size ? size.standard_weight_kg : 0)
+      };
+    })
+    .filter(b => !scope || b.origin_country === scope);
+}
+
+app.get('/api/origin-warehouse', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+  let list = originWarehouseBoxes(req.user);
+  if (req.query.origin_country) list = list.filter(b => b.origin_country === req.query.origin_country);
+  if (req.query.size) list = list.filter(b => BOXSIZE.canonicalSize(b.size_category) === req.query.size);
+  const bySize = {};
+  for (const b of list) {
+    const k = BOXSIZE.canonicalSize(b.size_category) || 'OTHER';
+    bySize[k] = bySize[k] || { size: k, label: (BOXSIZE.bySize(k) || {}).label || k, count: 0, cbm: 0, weight_kg: 0 };
+    bySize[k].count += 1;
+    bySize[k].cbm = +(bySize[k].cbm + b.cbm).toFixed(3);
+    bySize[k].weight_kg = +(bySize[k].weight_kg + (+b.weight_kg || 0)).toFixed(1);
+  }
+  res.json({
+    scope: ROLE.originScope(req.user.role),
+    boxes: list.sort((a, b) => String(a.box_number).localeCompare(String(b.box_number))),
+    totals: {
+      count: list.length,
+      cbm: +list.reduce((n, b) => n + b.cbm, 0).toFixed(3),
+      weight_kg: +list.reduce((n, b) => n + (+b.weight_kg || 0), 0).toFixed(1)
+    },
+    by_size: Object.values(bySize),
+    origins: [...new Set(list.map(b => b.origin_country).filter(Boolean))]
+  });
+});
+
+// How many boxes fit in one container, by volume and by payload weight.
+app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...SHIPPERS), (req, res) => {
+  const size = SM.CONTAINER_SIZES.includes(req.query.size) ? req.query.size : 'C40';
+  const cap = SM.CONTAINER_CAPACITY[size];
+  let util = parseFloat(req.query.utilisation);
+  if (!Number.isFinite(util) || util <= 0 || util > 1) util = SM.DEFAULT_STUFFING_UTILISATION;
+  const usableCbm = +(cap.cbm * util).toFixed(3);
+
+  // Theoretical capacity if the container were filled with a single box size.
+  const per_size = BOXSIZE.BOX_SIZES.map(s => {
+    const byVolume = Math.floor(usableCbm / s.cbm);
+    const byWeight = Math.floor(cap.payload_kg / s.standard_weight_kg);
+    return {
+      size: s.key, label: s.label, dimensions: s.dimensions, cbm: s.cbm,
+      standard_weight_kg: s.standard_weight_kg,
+      max_by_volume: byVolume, max_by_weight: byWeight,
+      max_boxes: Math.min(byVolume, byWeight),
+      limited_by: byVolume <= byWeight ? 'volume' : 'weight'
+    };
+  });
+
+  // How much of what is actually waiting at the warehouse would fit — largest boxes first,
+  // which is how a container is really stuffed.
+  const waiting = originWarehouseBoxes(req.user).sort((a, b) => b.cbm - a.cbm);
+  let cbmLeft = usableCbm, kgLeft = cap.payload_kg;
+  const fits = [], leftOver = [];
+  for (const b of waiting) {
+    const w = +b.weight_kg || 0;
+    if (b.cbm <= cbmLeft && w <= kgLeft) { fits.push(b); cbmLeft = +(cbmLeft - b.cbm).toFixed(3); kgLeft = +(kgLeft - w).toFixed(1); }
+    else leftOver.push(b);
+  }
+  res.json({
+    container_size: size, container_label: SM.CONTAINER_SIZE_LABELS[size],
+    capacity: { ...cap, utilisation: util, usable_cbm: usableCbm },
+    per_size,
+    actual: {
+      waiting_count: waiting.length,
+      fits_count: fits.length,
+      left_over_count: leftOver.length,
+      used_cbm: +(usableCbm - cbmLeft).toFixed(3),
+      used_weight_kg: +(cap.payload_kg - kgLeft).toFixed(1),
+      remaining_cbm: cbmLeft, remaining_weight_kg: kgLeft,
+      volume_fill_pct: usableCbm ? +(((usableCbm - cbmLeft) / usableCbm) * 100).toFixed(1) : 0,
+      weight_fill_pct: cap.payload_kg ? +(((cap.payload_kg - kgLeft) / cap.payload_kg) * 100).toFixed(1) : 0,
+      containers_needed: waiting.length && fits.length ? Math.ceil(waiting.length / fits.length) : (waiting.length ? null : 0),
+      fits: fits.map(b => ({ id: b.id, box_number: b.box_number, size_label: b.size_label, cbm: b.cbm, weight_kg: b.weight_kg }))
+    }
+  });
+});
+
+// ---------- accounting: rate cards, invoices/receipts, expenses, profit & loss ----------
+const RATES = require('./lib/rates');
+
+// Reference data for the rate-card editor.
+app.get('/api/accounting/meta', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  res.json({
+    zones: RATES.ZONES,
+    sizes: BOXSIZE.BOX_SIZES.map(s => ({ key: s.key, label: s.label, dimensions: s.dimensions })),
+    ocean_levels: RATES.OCEAN_LEVELS,
+    air_level: RATES.AIR_LEVEL,
+    service_level_labels: SM.SERVICE_LEVEL_LABELS
+  });
+});
+
+app.get('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  res.json(RATES.normalizeRateCard(db.get().settings.rateCard));
+});
+app.put('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const card = RATES.normalizeRateCard(req.body || {});
+  card.updated_at = new Date().toISOString();
+  card.updated_by = req.user.name;
+  d.settings.rateCard = card;
+  db.persist();
+  res.json(card);
+});
+
+// Quote a shipment from the current rate card (per box + total).
+app.get('/api/accounting/quote/:shipmentId', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const s = d.shipments.find(x => x.id === +req.params.shipmentId);
+  if (!s) return res.status(404).json({ error: 'Not found' });
+  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  const boxes = d.boxes.filter(b => b.shipment_id === s.id).map(b => {
+    const receiver = d.customers.find(c => c.id === b.receiver_id) || {};
+    const region = b.region || receiver.region || null;
+    const zone = RATES.zoneForRegion(region);
+    const p = RATES.priceBox({ card, service_level: s.service_level, zone, size_category: b.size_category, weight_kg: b.weight_kg });
+    return { box_id: b.id, box_number: b.box_number, size_category: b.size_category, weight_kg: b.weight_kg, region, zone, ...p };
+  });
+  res.json({
+    shipment_id: s.id, shipment_number: s.shipment_number, service_level: s.service_level,
+    currency: card.currency, boxes, total: +boxes.reduce((n, b) => n + b.amount, 0).toFixed(2)
+  });
+});
+
+// ---- invoices / receipts ----
+app.get('/api/accounting/invoices', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  let list = (d.invoices || []).slice();
+  if (req.query.status) list = list.filter(i => i.status === req.query.status);
+  list.sort((a, b) => b.issued_at.localeCompare(a.issued_at));
+  res.json(list);
+});
+app.post('/api/accounting/invoices', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  d.invoices = d.invoices || [];
+  const b = req.body || {};
+  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  const lines = (Array.isArray(b.lines) ? b.lines : [])
+    .map(l => ({ description: String(l.description || '').trim(), qty: +l.qty || 1, unit_amount: +l.unit_amount || 0 }))
+    .filter(l => l.description)
+    .map(l => ({ ...l, amount: +(l.qty * l.unit_amount).toFixed(2) }));
+  if (!lines.length) return res.status(400).json({ error: 'At least one invoice line is required' });
+  if (!String(b.bill_to || '').trim()) return res.status(400).json({ error: 'Bill-to name is required' });
+  d.seq.invoice_no = (d.seq.invoice_no || 0) + 1;
+  const inv = {
+    id: db.nextId('invoice'),
+    invoice_number: `INV-${new Date().getFullYear()}-${String(d.seq.invoice_no).padStart(5, '0')}`,
+    shipment_id: b.shipment_id ? +b.shipment_id : null,
+    box_order_id: b.box_order_id ? +b.box_order_id : null,
+    bill_to: String(b.bill_to).trim(),
+    currency: b.currency || card.currency,
+    lines,
+    total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
+    status: 'UNPAID', paid_at: null, payment_method: '', notes: String(b.notes || '').trim(),
+    issued_at: new Date().toISOString(), issued_by: req.user.name
+  };
+  d.invoices.push(inv);
+  db.persist();
+  res.json(inv);
+});
+// Mark paid → becomes a receipt.
+app.put('/api/accounting/invoices/:id', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const inv = (d.invoices || []).find(x => x.id === +req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  if (b.status && !['UNPAID', 'PAID', 'VOID'].includes(b.status)) return res.status(400).json({ error: 'Invalid status' });
+  if (b.status === 'PAID' && inv.status !== 'PAID') {
+    inv.paid_at = new Date().toISOString();
+    d.seq.receipt_no = (d.seq.receipt_no || 0) + 1;
+    inv.receipt_number = `OR-${new Date().getFullYear()}-${String(d.seq.receipt_no).padStart(5, '0')}`;
+  }
+  if (b.status === 'UNPAID') { inv.paid_at = null; inv.receipt_number = null; }
+  for (const k of ['status', 'payment_method', 'notes']) if (k in b) inv[k] = b[k];
+  db.persist();
+  res.json(inv);
+});
+
+// ---- expenses (the cost side of profit & loss) ----
+const EXPENSE_CATEGORIES = ['FREIGHT', 'TRUCKING', 'CUSTOMS', 'WAREHOUSE', 'BOX_PURCHASE', 'SALARIES', 'OTHER'];
+app.get('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const list = (d.expenses || []).slice().sort((a, b) => b.spent_at.localeCompare(a.spent_at));
+  res.json({ expenses: list, categories: EXPENSE_CATEGORIES });
+});
+app.post('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  d.expenses = d.expenses || [];
+  const b = req.body || {};
+  const amount = +b.amount;
+  if (!(amount > 0)) return res.status(400).json({ error: 'A positive amount is required' });
+  if (!String(b.description || '').trim()) return res.status(400).json({ error: 'Description is required' });
+  const e = {
+    id: db.nextId('expense'),
+    category: EXPENSE_CATEGORIES.includes(b.category) ? b.category : 'OTHER',
+    description: String(b.description).trim(),
+    amount: +amount.toFixed(2),
+    currency: b.currency || RATES.normalizeRateCard(d.settings.rateCard).currency,
+    container_id: b.container_id ? +b.container_id : null,
+    spent_at: b.spent_at || new Date().toISOString(),
+    recorded_by: req.user.name, created_at: new Date().toISOString()
+  };
+  d.expenses.push(e);
+  db.persist();
+  res.json(e);
+});
+app.delete('/api/accounting/expenses/:id', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const before = (d.expenses || []).length;
+  d.expenses = (d.expenses || []).filter(x => x.id !== +req.params.id);
+  if (d.expenses.length === before) return res.status(404).json({ error: 'Not found' });
+  db.persist();
+  res.json({ ok: true });
+});
+
+// ---- profit & loss ----
+app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const from = req.query.from ? new Date(req.query.from).toISOString() : '0000';
+  const to = req.query.to ? new Date(new Date(req.query.to).getTime() + 86400000).toISOString() : '9999';
+  const inRange = (iso) => iso && iso >= from && iso < to;
+
+  const invoices = (d.invoices || []).filter(i => i.status !== 'VOID' && inRange(i.issued_at));
+  const paid = invoices.filter(i => i.status === 'PAID');
+  const revenueBilled = +invoices.reduce((n, i) => n + i.total, 0).toFixed(2);
+  const revenueCollected = +paid.reduce((n, i) => n + i.total, 0).toFixed(2);
+  const receivable = +(revenueBilled - revenueCollected).toFixed(2);
+
+  const expenses = (d.expenses || []).filter(e => inRange(e.spent_at));
+  const byCategory = {};
+  for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
+  const totalExpenses = +expenses.reduce((n, e) => n + e.amount, 0).toFixed(2);
+
+  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  res.json({
+    currency: card.currency,
+    period: { from: req.query.from || null, to: req.query.to || null },
+    revenue: { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length },
+    expenses: { total: totalExpenses, by_category: byCategory, count: expenses.length },
+    net_profit: +(revenueBilled - totalExpenses).toFixed(2),
+    net_cash: +(revenueCollected - totalExpenses).toFixed(2)
+  });
 });
 
 // ---------- dashboard & reports ----------
@@ -1204,7 +1707,7 @@ function toCsv(rows) {
   const cell = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
   return [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\r\n');
 }
-app.get('/api/reports/:name', requireRole('ADMIN', 'SHIPPER_AGENT', 'CONSIGNEE_AGENT'), (req, res) => {
+app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   let rows = [];
   switch (req.params.name) {
@@ -1350,9 +1853,9 @@ function buildJourney(box) {
       detail: 'We received your box at our origin branch.' },
     { key: 'LOADED_CONTAINER', on: ['LOADED_CONTAINER'], label: 'Loaded into container',
       detail: container ? `Container ${container.container_number}.` : 'Loaded for shipping.' },
-    { key: 'IN_TRANSIT', on: ['IN_TRANSIT'], label: 'On the way to the Philippines',
+    { key: 'IN_TRANSIT', on: ['IN_TRANSIT'], label: 'On the way to Destination',
       detail: container && container.vessel_name ? `Vessel ${container.vessel_name}.` : 'Shipped by sea to the Philippines.' },
-    { key: 'ARRIVED_PORT', on: ['ARRIVED_PORT'], label: 'Arrived in the Philippines',
+    { key: 'ARRIVED_PORT', on: ['ARRIVED_PORT'], label: 'Arrived at Destination',
       detail: container && container.destination_port ? `Port of ${container.destination_port}.` : 'Arrived at the Philippine port.' },
     { key: 'RECEIVED_WAREHOUSE', on: ['RECEIVED_WAREHOUSE'], label: 'Received at VFIC warehouse',
       detail: 'Unloaded and received at our central (Manila) warehouse.' },
