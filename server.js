@@ -81,21 +81,29 @@ function requireRole(...roles) {
 // A partner branch's staff only ever see their own origin country's operation.
 // Admins (Developer / Master) get the consolidated cross-branch view.
 function branchScope(user) { return user ? ROLE.originScope(user.role) : null; }
-function scopeShipmentList(user, shipments) {
-  const scope = branchScope(user);
+// An HQ admin can narrow any list to one branch with ?branch=TH_BANGKOK. Branch staff are
+// already hard-scoped, so the parameter can only ever narrow, never widen.
+function effectiveScope(req) {
+  const own = branchScope(req.user);
+  if (own) return own;
+  const asked = BRANCH.byKey(String(req.query.branch || ''));
+  return asked && asked.type !== 'HQ' ? asked.country : null;
+}
+function scopeShipmentList(user, shipments, scopeOverride) {
+  const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
   return scope ? shipments.filter(s => s.origin_country === scope) : shipments;
 }
 // Boxes inherit their branch from the parent shipment.
-function scopeBoxList(user, boxes) {
-  const scope = branchScope(user);
+function scopeBoxList(user, boxes, scopeOverride) {
+  const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
   if (!scope) return boxes;
   const d = db.get();
   const ok = new Set(d.shipments.filter(s => s.origin_country === scope).map(s => s.id));
   return boxes.filter(b => ok.has(b.shipment_id));
 }
 // A container belongs to the branch whose country it sails from.
-function scopeContainerList(user, containers) {
-  const scope = branchScope(user);
+function scopeContainerList(user, containers, scopeOverride) {
+  const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
   if (!scope) return containers;
   return containers.filter(c => String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase()));
 }
@@ -367,7 +375,7 @@ app.put('/api/customers/:id', requireRole(...AGENTS), (req, res) => {
 // ---------- shipments ----------
 app.get('/api/shipments', requireAuth, (req, res) => {
   const d = db.get();
-  let list = scopeShipmentList(req.user, d.shipments.slice());
+  let list = scopeShipmentList(req.user, d.shipments.slice(), effectiveScope(req));
   const q = String(req.query.q || '').toLowerCase();
   if (q) list = list.filter(s => {
     const sender = d.customers.find(c => c.id === s.sender_id) || {};
@@ -411,7 +419,7 @@ app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIP
   const nowIso = new Date().toISOString();
   const shipment = {
     id: db.nextId('shipment'),
-    shipment_number: db.nextShipmentNumber(),
+    shipment_number: db.nextShipmentNumber(b.origin_country),
     sender_id: sender.id,
     origin_country: b.origin_country || '', origin_agent: b.origin_agent || '',
     service_type: b.service_type || 'DOOR_TO_DOOR',
@@ -506,7 +514,17 @@ app.get('/api/box-sizes', (req, res) => {
 
 // Reference lists for the Container booking form (shipping lines, origin/destination ports).
 app.get('/api/refdata', requireAuth, (req, res) => {
-  res.json({ shipping_lines: REF.SHIPPING_LINES, origin_ports: REF.ORIGIN_PORTS, origin_countries: REF.ORIGIN_COUNTRIES, destination_ports: REF.DESTINATION_PORTS });
+  // A branch user only gets their own country's origin ports, so the booking form can
+  // never offer another branch's port.
+  const scope = branchScope(req.user);
+  const originPorts = scope ? REF.ORIGIN_PORTS.filter(g => g.group === scope) : REF.ORIGIN_PORTS;
+  res.json({
+    shipping_lines: REF.SHIPPING_LINES,
+    origin_ports: originPorts,
+    origin_countries: scope ? [scope] : REF.ORIGIN_COUNTRIES,
+    destination_ports: REF.DESTINATION_PORTS,
+    branch_scope: scope
+  });
 });
 
 // ---------- online intake requests (public self-service fill-up, reviewed & encoded by staff) ----------
@@ -664,7 +682,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
 // Staff review queue
 app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
-  const scope = branchScope(req.user);
+  const scope = effectiveScope(req);
   let list = d.intake_requests.filter(r => !scope || r.origin_country === scope);
   if (req.query.status) list = list.filter(r => r.status === req.query.status);
   list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
@@ -778,7 +796,7 @@ app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
 // ---------- boxes ----------
 app.get('/api/boxes', requireAuth, (req, res) => {
   const d = db.get();
-  let list = scopeBoxList(req.user, d.boxes.slice());
+  let list = scopeBoxList(req.user, d.boxes.slice(), effectiveScope(req));
   const { q, status, region, container_id, trip_id } = req.query;
   if (status) list = list.filter(b => b.status === status);
   if (region) list = list.filter(b => b.region === region || (d.customers.find(c => c.id === b.receiver_id) || {}).region === region);
@@ -886,18 +904,32 @@ app.post('/api/boxes/:id/revert', requireRole(...AGENTS, 'WAREHOUSE'), (req, res
 // ---------- containers ----------
 app.get('/api/containers', requireAuth, (req, res) => {
   const d = db.get();
-  res.json(scopeContainerList(req.user, d.containers.slice())
+  res.json(scopeContainerList(req.user, d.containers.slice(), effectiveScope(req))
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })));
 });
 app.post('/api/containers', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const b = req.body || {};
   if (!b.container_number) return res.status(400).json({ error: 'Container number is required' });
+  // A branch books its own containers: the origin port must be one of its own country's
+  // ports, so a Thailand booking can never be filed against Cambodia.
+  const scope = branchScope(req.user);
+  let originPort = b.origin_port || '';
+  if (scope) {
+    const allowed = REF.originPortsFor(scope);
+    if (!originPort) originPort = allowed[0];
+    if (!allowed.includes(originPort)) {
+      return res.status(400).json({ error: `Your branch can only book containers from ${scope} (${allowed.join(' or ')}).` });
+    }
+  }
   const c = {
     id: db.nextId('container'), container_number: String(b.container_number).trim().toUpperCase(),
     size: SM.CONTAINER_SIZES.includes(b.size) ? b.size : 'C40',
     shipping_line: b.shipping_line || '', vessel_name: b.vessel_name || '', booking_number: b.booking_number || '',
-    origin_port: b.origin_port || '', destination_port: b.destination_port || '',
+    origin_port: originPort, destination_port: b.destination_port || '',
+    // The branch that booked it — used for the per-branch container view.
+    booked_by_branch: BRANCH.branchForRole(req.user.role) || (scope ? (BRANCH.byCountry(scope) || {}).key : null),
+    booked_by: req.user.name,
     etd: b.etd || null, eta: b.eta || null, actual_departure: null, actual_arrival: null,
     // Short code appended to each loaded box's number so you can see, at a glance,
     // which container a box travelled in (e.g. VF-2026-000013-01/C1). Always assigned
@@ -949,6 +981,17 @@ app.post('/api/containers/:id/load', requireRole(...ADMINS, ...ROLE.BRANCH_ADMIN
   const box = d.boxes.find(b => b.id === +req.body.box_id);
   if (!box) return res.status(404).json({ error: 'Box not found' });
   if (box.container_id && box.container_id !== c.id) return res.status(400).json({ error: 'Box is already on another container' });
+  // A branch loads only its own boxes into its own containers.
+  const scope = branchScope(req.user);
+  if (scope) {
+    const shipment = d.shipments.find(s => s.id === box.shipment_id) || {};
+    if (shipment.origin_country !== scope) {
+      return res.status(403).json({ error: `That box is not from your branch (${scope}) — it cannot be loaded here.` });
+    }
+    if (c.origin_port && !REF.originPortsFor(scope).includes(c.origin_port)) {
+      return res.status(403).json({ error: 'That container was booked by another branch.' });
+    }
+  }
   const err = changeBoxStatus(box, 'LOADED_CONTAINER', req.user, `Loaded into ${c.container_number}`);
   if (err) return res.status(400).json({ error: err });
   box.container_id = c.id;
@@ -1308,7 +1351,14 @@ app.get('/api/my-modules', requireAuth, (req, res) => {
     modules,
     catalogue: MODULES.MODULES.filter(m => modules.includes(m.key)),
     branch: branchKey ? BRANCH.byKey(branchKey) : null,
-    sees_all_branches: BRANCH.seesAllBranches(req.user.role)
+    sees_all_branches: BRANCH.seesAllBranches(req.user.role),
+    // HQ admins get the branch list so the sidebar can show one operations block per branch.
+    branches: BRANCH.seesAllBranches(req.user.role)
+      ? BRANCH.resolve(d.settings.branches).map(b => ({
+          key: b.key, short: b.short, label: b.label, country: b.country, type: b.type,
+          flag: (BRANCH.portalForBranch(b.key) || {}).flag || ''
+        }))
+      : []
   });
 });
 
@@ -1612,9 +1662,9 @@ app.get('/api/public/sender/shipments', requireSender, (req, res) => {
 // ---------- origin warehouse: master list + container load planning ----------
 // Boxes physically sitting at the origin warehouse: received from the sender but not yet
 // stuffed into a container. A shipper agent only sees their own origin country.
-function originWarehouseBoxes(user) {
+function originWarehouseBoxes(user, scopeOverride) {
   const d = db.get();
-  const scope = ROLE.originScope(user.role);
+  const scope = scopeOverride !== undefined ? scopeOverride : ROLE.originScope(user.role);
   return d.boxes
     .filter(b => b.status === 'RECEIVED_ORIGIN' && !b.container_id)
     .map(b => {
@@ -1635,7 +1685,7 @@ function originWarehouseBoxes(user) {
 }
 
 app.get('/api/origin-warehouse', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
-  let list = originWarehouseBoxes(req.user);
+  let list = originWarehouseBoxes(req.user, effectiveScope(req));
   if (req.query.origin_country) list = list.filter(b => b.origin_country === req.query.origin_country);
   if (req.query.size) list = list.filter(b => BOXSIZE.canonicalSize(b.size_category) === req.query.size);
   const bySize = {};
@@ -1647,7 +1697,7 @@ app.get('/api/origin-warehouse', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, .
     bySize[k].weight_kg = +(bySize[k].weight_kg + (+b.weight_kg || 0)).toFixed(1);
   }
   res.json({
-    scope: ROLE.originScope(req.user.role),
+    scope: effectiveScope(req),
     boxes: list.sort((a, b) => String(a.box_number).localeCompare(String(b.box_number))),
     totals: {
       count: list.length,
@@ -1682,7 +1732,7 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
 
   // How much of what is actually waiting at the warehouse would fit — largest boxes first,
   // which is how a container is really stuffed.
-  const waiting = originWarehouseBoxes(req.user).sort((a, b) => b.cbm - a.cbm);
+  const waiting = originWarehouseBoxes(req.user, effectiveScope(req)).sort((a, b) => b.cbm - a.cbm);
   let cbmLeft = usableCbm, kgLeft = cap.payload_kg;
   const fits = [], leftOver = [];
   for (const b of waiting) {

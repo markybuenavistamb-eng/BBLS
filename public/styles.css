@@ -629,6 +629,15 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .pub-band .brand .badge-vf { background: var(--primary); padding: 3px 8px; border-radius: 6px; }
 .pub-band .spacer { flex: 1; }
 
+/* ---------- head-office "viewing one branch" banner ---------- */
+.branch-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a;
+  border-radius: 10px; padding: 8px 14px; margin-bottom: 12px; font-size: 13px;
+}
+.branch-banner a { font-weight: 700; white-space: nowrap; }
+@media print { .branch-banner { display: none; } }
+
 /* ---------- branch portal badge ---------- */
 .portal-chip {
   display: inline-block; color: #fff; font-weight: 800; font-size: 12px;

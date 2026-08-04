@@ -101,11 +101,22 @@ function badge(status) {
 function payBadge(p) { return `<span class="badge pay-${esc(String(p).toLowerCase())}">${esc(p)}</span>`; }
 function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION_LABELS[r] || r)}</span>` : '<span class="muted">—</span>'; }
 
+// Endpoints that can be narrowed to a single branch. When head office is viewing a branch
+// block in the sidebar (#/shipments?branch=TH_BANGKOK), the filter rides along automatically.
+const BRANCH_FILTERABLE = ['/api/shipments', '/api/boxes', '/api/containers', '/api/intake-requests', '/api/origin-warehouse'];
+function withBranchFilter(path) {
+  const branch = new URLSearchParams(location.hash.split('?')[1] || '').get('branch');
+  if (!branch) return path;
+  const base = path.split('?')[0];
+  if (!BRANCH_FILTERABLE.includes(base)) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'branch=' + encodeURIComponent(branch);
+}
 async function api(path, opts = {}) {
   if (opts.body && !(opts.body instanceof FormData)) {
     opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
     opts.body = JSON.stringify(opts.body);
   }
+  if (!opts.method || opts.method === 'GET') path = withBranchFilter(path);
   const res = await fetch(path, opts);
   let data = null;
   try { data = await res.json(); } catch (e) { /* non-JSON */ }
@@ -113,7 +124,18 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function view(html) { stopScanner(); document.getElementById('view2').innerHTML = html; }
+// Banner shown to head office when a page is narrowed to one branch.
+function branchBanner() {
+  const key = new URLSearchParams(location.hash.split('?')[1] || '').get('branch');
+  if (!key || !MY || !MY.sees_all_branches) return '';
+  const b = (MY.branches || []).find(x => x.key === key);
+  if (!b) return '';
+  const route = location.hash.split('?')[0];
+  return `<div class="branch-banner">
+    <span>${esc(b.flag || '')} Viewing <b>${esc(b.label)}</b> only</span>
+    <a href="${route}">Show all branches ✕</a></div>`;
+}
+function view(html) { stopScanner(); document.getElementById('view2').innerHTML = branchBanner() + html; }
 function flash(msg, cls = 'success') {
   const el = document.createElement('div');
   el.className = cls;
@@ -349,16 +371,30 @@ function renderShell() {
 
   const allowed = MY && Array.isArray(MY.modules) ? MY.modules : null;
   const closed = new Set(collapsedGroups());
+  const navGroup = (key, label, inner, openByDefault) => {
+    const shut = closed.has(key) || (!closed.has(key) && openByDefault === false);
+    return `<button type="button" class="nav-section nav-group${shut ? ' shut' : ''}" onclick="toggleNavGroup('${key}')">
+        <span>${label}</span><span class="chev">${shut ? '▸' : '▾'}</span></button>
+      <div class="nav-group-items${shut ? ' hidden' : ''}">${inner}</div>`;
+  };
+  const linkFor = ([href, key, ic], suffix = '') =>
+    `<a href="${href}${suffix}" data-nav="${href}${suffix}" title="${esc(VI.t(key))}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span></a>`;
+
   let html = '';
+  // Head office view: one collapsible block of operations per branch, each filtered to that
+  // branch, followed by the head-office-wide modules.
+  if (MY && MY.sees_all_branches && Array.isArray(MY.branches) && MY.branches.length) {
+    const BRANCH_OPS = NAV2.filter(i => !i.section && ['shipments', 'box_orders', 'boxes', 'containers', 'origin_warehouse'].includes(i[3]));
+    for (const b of MY.branches.filter(x => x.type !== 'HQ')) {
+      const inner = BRANCH_OPS.map(item => linkFor(item, `?branch=${b.key}`)).join('');
+      html += navGroup('branch:' + b.key, `${esc(b.flag || '')} ${esc(b.short)}`.trim(), inner);
+    }
+  }
+
   let group = null, buffer = '', count = 0;
   const flush = () => {
     if (!group) { html += buffer; buffer = ''; return; }
-    if (count) {
-      const shut = closed.has(group);
-      html += `<button type="button" class="nav-section nav-group${shut ? ' shut' : ''}" onclick="toggleNavGroup('${group}')">
-          <span>${VI.t(group)}</span><span class="chev">${shut ? '▸' : '▾'}</span></button>
-        <div class="nav-group-items${shut ? ' hidden' : ''}">${buffer}</div>`;
-    }
+    if (count) html += navGroup(group, VI.t(group), buffer);
     buffer = ''; count = 0;
   };
   for (const item of NAV2) {
@@ -366,7 +402,7 @@ function renderShell() {
     const [href, key, ic, moduleKey] = item;
     if (allowed && !allowed.includes(moduleKey)) continue;
     if (!allowed && !R_ADMINS.includes(ME.role)) continue; // fail closed if modules unknown
-    buffer += `<a href="${href}" data-nav="${href}" title="${esc(VI.t(key))}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span></a>`;
+    buffer += linkFor(item);
     count += 1;
   }
   flush();
@@ -380,8 +416,13 @@ function renderShell() {
   markNav(location.hash || '#/dashboard');
 }
 function markNav(hash) {
-  document.querySelectorAll('#nav a').forEach(a => {
-    a.classList.toggle('active', hash.startsWith(a.dataset.nav));
+  // Branch links carry ?branch=…, so an exact match wins; otherwise fall back to the
+  // plain route so #/boxes/12 still highlights Boxes.
+  const links = [...document.querySelectorAll('#nav a')];
+  const exact = links.find(a => a.dataset.nav === hash);
+  links.forEach(a => {
+    const nav = a.dataset.nav;
+    a.classList.toggle('active', exact ? a === exact : (!nav.includes('?') && hash.split('?')[0].startsWith(nav)));
   });
 }
 
