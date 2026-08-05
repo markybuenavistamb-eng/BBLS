@@ -492,10 +492,21 @@ app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...ROLE.BRANCH_ADM
 app.get('/api/health', (req, res) => {
   const store = require('./lib/store');
   res.set('Cache-Control', 'no-store');
+  const checks = {
+    database_connected: !store.ephemeral,
+    node_id_set: !!process.env.VFIC_NODE_ID,
+    sync_secret_set: !!NODE.SYNC_SECRET,
+    peers_configured: NODE.PEERS.length > 0
+  };
   res.json({
     ok: true,
+    // Which deployment this is, so each node can be identified at a glance after release.
+    node: { id: NODE.SELF.id, label: NODE.SELF.label, type: NODE.SELF.type, id_band: `${NODE.SELF.idOffset}–${NODE.SELF.idOffset + 999999}` },
     backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
     persistent: !store.ephemeral,            // false = data resets on cold start (no cloud DB yet)
+    replication: { enabled: NODE.syncEnabled(), peers: NODE.PEERS.map(p => p.id) },
+    checks,
+    ready: Object.values(checks).every(Boolean),
     time: new Date().toISOString()
   });
 });
