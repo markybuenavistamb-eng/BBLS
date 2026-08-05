@@ -7,15 +7,44 @@ const digits = (v) => String(v || '').replace(/\D/g, '');
 const isPhMobile = (v) => /^09\d{9}$/.test(digits(v));
 
 let SIZES = [];
-let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
+let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia'];
 let submitted = false, LAST_REF = null;
 
-async function loadSizes() {
+// Empty-box pricing comes from the branch rate card of the country the customer is in, so
+// Thailand and Cambodia can be priced differently and in their own currency.
+let PRICES = {}, CURRENCY = '', PRICED = false;
+let COUNTRY = localStorage.getItem('vfic_order_country') || '';
+
+async function loadSizes(country) {
   try {
-    const d = await (await fetch('/api/box-sizes')).json();
+    const q = country ? '?country=' + encodeURIComponent(country) : '';
+    const d = await (await fetch('/api/box-sizes' + q)).json();
     SIZES = d.sizes || [];
     if (Array.isArray(d.origin_countries) && d.origin_countries.length) ORIGIN_COUNTRIES = d.origin_countries;
+    PRICES = d.empty_box_prices || {};
+    CURRENCY = d.currency || '';
+    PRICED = !!d.priced;
   } catch (e) { SIZES = []; }
+}
+
+const fmtMoney = (v) => `${CURRENCY} ${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const priceOf = (key) => +(PRICES[key] || 0);
+
+// Re-price the catalogue when the customer changes country, keeping their quantities.
+async function onOrderCountryChange() {
+  const sel = gid('obCountry');
+  COUNTRY = sel ? sel.value : '';
+  localStorage.setItem('vfic_order_country', COUNTRY);
+  const keep = {};
+  SIZES.forEach(s => { keep[s.key] = parseInt((gid('qty_' + s.key) || {}).value, 10) || 0; });
+  await loadSizes(COUNTRY);
+  const grid = gid('obGrid');
+  if (grid) grid.innerHTML = SIZES.map(sizeCardHtml).join('');
+  SIZES.forEach(s => { const el = gid('qty_' + s.key); if (el && keep[s.key]) el.value = keep[s.key]; });
+  // keep the delivery-address country in step with the pricing country
+  const addr = gid('oCountry');
+  if (addr && COUNTRY) addr.value = COUNTRY;
+  renderTotal();
 }
 
 function mountToggle() { const el = gid('langMount'); if (el && window.VI) el.innerHTML = VI.toggleHtml(); }
@@ -45,7 +74,10 @@ function sizeCardHtml(s) {
     <div class="ob-body">
       <div class="ob-name">${esc(s.label)}${s.key === 'LARGE' ? ' <span class="ob-tag">Standard</span>' : ''}</div>
       <div class="ob-spec">${esc(s.dimensions)}</div>
-      <div class="ob-spec muted">${s.cubic_feet} cu ft · up to <b>${s.standard_weight_kg} kg</b></div>
+      <div class="ob-spec muted"><b>${s.cbm} cbm</b> · up to <b>${s.standard_weight_kg} kg</b></div>
+      ${PRICED
+        ? `<div class="ob-price">${esc(fmtMoney(priceOf(s.key)))}<span class="ob-price-unit"> per box</span></div>`
+        : `<div class="ob-price muted" style="font-size:12.5px;font-weight:600">Price on request</div>`}
       ${s.exceeds_boc_cbm ? `<div class="ob-spec" style="color:#b45309;font-size:11px">Over the ${'≤'} 0.20 cbm balikbayan cap</div>` : ''}
       <div class="ob-qty">
         <button type="button" class="qbtn" onclick="bump('${s.key}',-1)">−</button>
@@ -66,9 +98,16 @@ function currentItems() {
 }
 function renderTotal() {
   const items = currentItems();
-  const total = items.reduce((n, i) => n + i.qty, 0);
   const el = gid('obTotal');
-  if (el) el.textContent = total ? `${total} box(es) selected: ${items.map(i => `${i.qty}× ${i.label}`).join(', ')}` : 'No boxes selected yet.';
+  if (!el) return;
+  if (!items.length) { el.innerHTML = 'No boxes selected yet.'; return; }
+  const boxes = items.reduce((n, i) => n + i.qty, 0);
+  const volume = items.reduce((n, i) => n + i.qty * ((SIZES.find(s => s.key === i.size) || {}).cbm || 0), 0);
+  const cost = items.reduce((n, i) => n + i.qty * priceOf(i.size), 0);
+  el.innerHTML = `
+    <div>${boxes} box(es): ${items.map(i => `${i.qty}× ${esc(i.label)}`).join(', ')} · <b>${volume.toFixed(3)} cbm</b> total</div>
+    ${PRICED ? `<div class="ob-grand">Estimated total: <b>${esc(fmtMoney(cost))}</b>
+      <span class="muted" style="font-weight:400;font-size:12px">— boxes only; delivery is confirmed by our agent</span></div>` : ''}`;
 }
 
 function onDeliveryChange() {
@@ -83,14 +122,23 @@ function renderForm() {
   if (window.VI) VI.applyStatic(document);
   gid('app').innerHTML = `
     <div class="card">
-      <div class="rc-label">1 · CHOOSE YOUR BOX SIZE(S)</div>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">Dimensions are outside measurements; the weight shown is the standard included allowance.</div>
-      <div class="ob-grid">${SIZES.map(sizeCardHtml).join('')}</div>
+      <div class="rc-label">1 · WHERE ARE YOU ORDERING FROM?</div>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">Box prices and currency depend on the branch serving your country.</div>
+      <select id="obCountry" onchange="onOrderCountryChange()" style="max-width:280px">
+        <option value="">— select your country —</option>
+        ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}"${c === COUNTRY ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="card">
+      <div class="rc-label">2 · CHOOSE YOUR BOX SIZE(S)</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Dimensions are outside measurements in centimetres; volume is shown in cubic metres (cbm) and the weight is the standard included allowance.</div>
+      <div class="ob-grid" id="obGrid">${SIZES.map(sizeCardHtml).join('')}</div>
       <div class="ob-total" id="obTotal">No boxes selected yet.</div>
     </div>
 
     <div class="card">
-      <div class="rc-label">2 · HOW WOULD YOU LIKE TO GET THEM?</div>
+      <div class="rc-label">3 · HOW WOULD YOU LIKE TO GET THEM?</div>
       <div class="note-info" style="margin-bottom:8px">The empty box(es) are delivered to the <b>sender abroad</b> — please use the sender's address and contact details below.</div>
       <datalist id="dlCountries">${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <label class="chk"><input type="radio" name="delivery" value="DELIVER_ADDRESS" checked onchange="onDeliveryChange()"> <span>Deliver to the sender's address abroad</span></label>
@@ -120,7 +168,7 @@ function renderForm() {
     </div>
 
     <div class="card">
-      <div class="rc-label">3 · SENDER'S CONTACT DETAILS</div>
+      <div class="rc-label">4 · SENDER'S CONTACT DETAILS</div>
       <div class="form-grid">
         <div><label>Sender's Full Name *</label><input id="cName" required></div>
         <div><label>Sender's Contact Number Abroad * <span class="muted">(include country code)</span></label><input id="cPhone" placeholder="e.g. +66 62 555 0119" required></div>
@@ -189,4 +237,4 @@ function renderConfirmation() {
 
 if (window.VI) VI.onChange(() => { if (submitted) renderConfirmation(); else renderForm(); });
 mountToggle();
-loadSizes().then(renderForm);
+loadSizes(COUNTRY).then(renderForm);

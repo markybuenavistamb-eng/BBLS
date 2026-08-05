@@ -2278,8 +2278,11 @@ async function pageAccounting(tab) {
   return renderPnl();
 }
 
-async function renderRateCard() {
-  const card = await api('/api/accounting/rate-card');
+let RC_BRANCH = '';
+async function renderRateCard(branch) {
+  if (branch !== undefined) RC_BRANCH = branch;
+  const card = await api('/api/accounting/rate-card' + (RC_BRANCH ? '?branch=' + encodeURIComponent(RC_BRANCH) : ''));
+  RC_BRANCH = card.branch || RC_BRANCH;
   const zones = ACCT_META.zones, sizes = ACCT_META.sizes;
   const editable = !!card.editable;
   const cell = (id, val) => `<input id="${id}" type="number" min="0" step="0.01" value="${val || 0}" style="width:110px;padding:5px 7px"${editable ? "" : " disabled"}>`;
@@ -2294,6 +2297,13 @@ async function renderRateCard() {
 
   document.getElementById('acctBody').innerHTML = `
     <div class="card">
+      ${(MY && MY.sees_all_branches) ? `<div style="margin-bottom:12px">
+        <label style="margin:0">Rate card for branch</label>
+        <select style="max-width:280px" onchange="renderRateCard(this.value)">
+          ${(MY.branches || []).map(b => `<option value="${esc(b.key)}"${b.key === card.branch ? ' selected' : ''}>${esc(b.flag || '')} ${esc(b.label)}</option>`).join('')}
+        </select>
+        <div class="muted" style="font-size:12px;margin-top:4px">Each branch is priced separately — pick a branch to view or edit its card.</div>
+      </div>` : ''}
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <div><label style="margin:0">Currency</label>
           <select id="rcCurrency" style="max-width:140px"${editable ? "" : " disabled"}>
@@ -2332,7 +2342,11 @@ async function saveRateCard() {
         Object.fromEntries(sizes.map(s => [s.key, v(`rc_${lvl}_${z.key}_${s.key}`)]))]))])),
     air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) }
   };
-  try { await api('/api/accounting/rate-card', { method: 'PUT', body }); flash('Rate card saved'); renderRateCard(); }
+  try {
+    await api('/api/accounting/rate-card' + (RC_BRANCH ? '?branch=' + encodeURIComponent(RC_BRANCH) : ''), { method: 'PUT', body });
+    flash('Rate card saved for ' + (NODE_LABELS[RC_BRANCH] || 'head office'));
+    renderRateCard();
+  }
   catch (e) { showErr(e); }
 }
 

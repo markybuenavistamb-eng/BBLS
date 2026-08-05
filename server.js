@@ -514,6 +514,11 @@ app.get('/api/health', (req, res) => {
 // ---------- box sizes (public: booking form + staff app share this single source of truth) ----------
 app.get('/api/box-sizes', (req, res) => {
   const d = db.get();
+  // A customer buying empty boxes is quoted from their own country's branch rate card, in
+  // that branch's currency. Unknown/absent country falls back to head office.
+  const branchKey = (BRANCH.byCountry(String(req.query.country || '').trim()) || {}).key || 'HQ_MANILA';
+  const card = rateCardFor(d, branchKey);
+  const prices = Object.fromEntries(BOXSIZE.SIZE_KEYS.map(k => [k, +(card.empty_box_price[k] || 0)]));
   res.json({
     sizes: BOXSIZE.BOX_SIZES,
     boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
@@ -521,7 +526,12 @@ app.get('/api/box-sizes', (req, res) => {
     excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP',
     max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 10000,
     service_levels: SM.SERVICE_LEVELS,
-    origin_countries: REF.ORIGIN_COUNTRIES
+    origin_countries: REF.ORIGIN_COUNTRIES,
+    // empty-box pricing for the selected country
+    empty_box_prices: prices,
+    currency: card.currency,
+    price_branch: branchKey,
+    priced: Object.values(prices).some(v => v > 0)
   });
 });
 
