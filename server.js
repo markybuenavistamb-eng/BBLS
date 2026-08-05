@@ -2026,6 +2026,176 @@ app.delete('/api/accounting/expenses/:id', requireRole(...ACCOUNTING_ROLES), (re
   res.json({ ok: true });
 });
 
+// ---- branch-to-branch invoicing ----
+// Head office does the destination-side work (customs, warehouse, sorting, last-mile) on
+// boxes an origin branch sent, so it bills that branch per delivered box, plus any agreed
+// commission on the branch's own revenue. The same invoice shows as a receivable to the
+// issuer and a payable to the billed branch, and lands in both P&Ls.
+const IB_STATUSES = ['DRAFT', 'ISSUED', 'PAID', 'DISPUTED', 'VOID'];
+
+function ibVisible(user, inv) {
+  const own = BRANCH.branchForRole(user.role);
+  if (!own || ROLE.isAdmin(user.role)) return true;      // head office sees every settlement
+  return inv.from_branch === own || inv.to_branch === own;
+}
+
+app.get('/api/accounting/interbranch', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const own = BRANCH.branchForRole(req.user.role);
+  const list = (d.interbranch_invoices || [])
+    .filter(i => ibVisible(req.user, i))
+    .filter(i => !req.query.status || i.status === req.query.status)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(i => ({
+      ...i,
+      // How this invoice reads from where the caller is sitting.
+      direction: own ? (i.from_branch === own ? 'RECEIVABLE' : 'PAYABLE') : 'BOTH',
+      from_label: BRANCH.BRANCH_LABELS[i.from_branch] || i.from_branch,
+      to_label: BRANCH.BRANCH_LABELS[i.to_branch] || i.to_branch
+    }));
+  const openTotal = (dir) => +list.filter(i => i.direction === dir && ['ISSUED', 'DISPUTED'].includes(i.status))
+    .reduce((n, i) => n + i.total, 0).toFixed(2);
+  res.json({
+    invoices: list,
+    branches: BRANCH.resolve(d.settings.branches).map(b => ({ key: b.key, label: b.label, short: b.short, type: b.type })),
+    my_branch: own,
+    totals: { receivable: openTotal('RECEIVABLE'), payable: openTotal('PAYABLE') },
+    statuses: IB_STATUSES
+  });
+});
+
+// Build a draft settlement for a period from what actually happened.
+app.post('/api/accounting/interbranch/generate', requireRole(...ADMINS, 'ACCOUNTING'), (req, res) => {
+  const d = db.get();
+  const b = req.body || {};
+  const from_branch = BRANCH.BRANCH_KEYS.includes(b.from_branch) ? b.from_branch : 'HQ_MANILA';
+  const to_branch = b.to_branch;
+  if (!BRANCH.BRANCH_KEYS.includes(to_branch)) return res.status(400).json({ error: 'Choose the branch to bill' });
+  if (from_branch === to_branch) return res.status(400).json({ error: 'A branch cannot invoice itself' });
+
+  const from = new Date(b.period_from || 0).toISOString();
+  const to = new Date(b.period_to ? new Date(b.period_to).getTime() + 86400000 : Date.now()).toISOString();
+  const billedBranch = BRANCH.byKey(to_branch);
+  const card = rateCardFor(d, from_branch);
+
+  // Boxes from the billed branch's shipments that reached DELIVERED inside the period.
+  const theirShipments = d.shipments.filter(s => s.origin_country === billedBranch.country);
+  const shipmentIds = new Set(theirShipments.map(s => s.id));
+  const deliveredAt = (box) => {
+    const ev = d.status_events.filter(e => e.box_id === box.id && e.to_status === 'DELIVERED')
+      .sort((x, y) => y.created_at.localeCompare(x.created_at))[0];
+    return ev ? ev.created_at : (box.status === 'DELIVERED' ? box.status_updated_at : null);
+  };
+  const byZone = {};
+  let counted = 0;
+  for (const box of d.boxes) {
+    if (!shipmentIds.has(box.shipment_id) || box.status !== 'DELIVERED') continue;
+    const at = deliveredAt(box);
+    if (!at || at < from || at >= to) continue;
+    const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
+    const zone = RATES.zoneForRegion(box.region || receiver.region);
+    if (!zone) continue;
+    byZone[zone] = (byZone[zone] || 0) + 1;
+    counted += 1;
+  }
+
+  const lines = Object.entries(byZone).map(([zone, qty]) => {
+    const fee = RATES.handlingFee(card, zone).amount;
+    return {
+      description: `Destination handling — ${RATES.ZONE_LABELS[zone]} (${qty} box${qty === 1 ? '' : 'es'} delivered)`,
+      zone, qty, unit_amount: fee, amount: +(qty * fee).toFixed(2)
+    };
+  }).filter(l => l.qty > 0);
+
+  // Optional commission on the billed branch's own customer revenue for the period.
+  const pct = +(BRANCH.resolve(d.settings.branches).find(x => x.key === to_branch) || {}).commission_pct || 0;
+  if (pct > 0) {
+    const theirRevenue = (d.invoices || [])
+      .filter(i => i.status !== 'VOID' && (i.branch || 'HQ_MANILA') === to_branch && i.issued_at >= from && i.issued_at < to)
+      .reduce((n, i) => n + i.total, 0);
+    if (theirRevenue > 0) {
+      lines.push({
+        description: `Network commission @ ${pct}% of ${billedBranch.short} billed revenue`,
+        zone: null, qty: 1, unit_amount: +(theirRevenue * pct / 100).toFixed(2), amount: +(theirRevenue * pct / 100).toFixed(2)
+      });
+    }
+  }
+
+  if (!lines.length) {
+    return res.status(400).json({ error: `Nothing to bill ${billedBranch.short} for that period — no boxes were delivered and no commission is due.` });
+  }
+  res.json({
+    draft: true, from_branch, to_branch,
+    period_from: b.period_from || null, period_to: b.period_to || null,
+    currency: card.currency, lines,
+    total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
+    boxes_counted: counted,
+    note: counted && !Object.values(byZone).length ? '' : undefined
+  });
+});
+
+app.post('/api/accounting/interbranch', requireRole(...ADMINS, 'ACCOUNTING'), (req, res) => {
+  const d = db.get();
+  d.interbranch_invoices = d.interbranch_invoices || [];
+  const b = req.body || {};
+  const from_branch = BRANCH.BRANCH_KEYS.includes(b.from_branch) ? b.from_branch : 'HQ_MANILA';
+  const to_branch = b.to_branch;
+  if (!BRANCH.BRANCH_KEYS.includes(to_branch)) return res.status(400).json({ error: 'Choose the branch to bill' });
+  if (from_branch === to_branch) return res.status(400).json({ error: 'A branch cannot invoice itself' });
+  const lines = (Array.isArray(b.lines) ? b.lines : [])
+    .map(l => ({
+      description: String(l.description || '').trim(),
+      zone: l.zone || null, qty: +l.qty || 1, unit_amount: +l.unit_amount || 0,
+      amount: +(((+l.qty || 1) * (+l.unit_amount || 0))).toFixed(2)
+    }))
+    .filter(l => l.description);
+  if (!lines.length) return res.status(400).json({ error: 'At least one line is required' });
+
+  d.seq.ib_no = (d.seq.ib_no || 0) + 1;
+  const inv = {
+    id: db.nextId('interbranch_invoice'),
+    invoice_number: `IB-${new Date().getFullYear()}-${String(d.seq.ib_no).padStart(5, '0')}`,
+    from_branch, to_branch,
+    period_from: b.period_from || null, period_to: b.period_to || null,
+    currency: b.currency || rateCardFor(d, from_branch).currency,
+    lines, total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
+    status: 'DRAFT', notes: String(b.notes || '').trim(),
+    issued_at: null, paid_at: null, settled_reference: '',
+    created_at: new Date().toISOString(), created_by: req.user.name
+  };
+  d.interbranch_invoices.push(inv);
+  db.persist();
+  res.json(inv);
+});
+
+app.put('/api/accounting/interbranch/:id', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const inv = (d.interbranch_invoices || []).find(x => x.id === +req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Not found' });
+  if (!ibVisible(req.user, inv)) return res.status(403).json({ error: 'That settlement does not involve your branch' });
+  const b = req.body || {};
+  const own = BRANCH.branchForRole(req.user.role);
+  const isIssuer = !own || ROLE.isAdmin(req.user.role) || inv.from_branch === own;
+
+  if (b.status) {
+    if (!IB_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid status' });
+    // The billed branch may dispute; only the issuer issues, voids or confirms payment.
+    if (!isIssuer && b.status !== 'DISPUTED') {
+      return res.status(403).json({ error: 'Only the issuing branch can change this settlement — you can raise a dispute instead' });
+    }
+    if (b.status === 'DISPUTED' && !String(b.notes || inv.notes || '').trim()) {
+      return res.status(400).json({ error: 'Please say what is disputed' });
+    }
+    if (b.status === 'ISSUED' && !inv.issued_at) inv.issued_at = new Date().toISOString();
+    if (b.status === 'PAID') inv.paid_at = new Date().toISOString();
+    if (b.status === 'DRAFT' || b.status === 'DISPUTED') inv.paid_at = null;
+    inv.status = b.status;
+  }
+  for (const k of ['notes', 'settled_reference']) if (k in b) inv[k] = String(b[k] || '').trim();
+  db.persist();
+  res.json(inv);
+});
+
 // ---- profit & loss ----
 app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
@@ -2047,15 +2217,35 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
   const totalExpenses = +expenses.reduce((n, e) => n + e.amount, 0).toFixed(2);
 
+  // Branch-to-branch settlements: money this branch has billed another (income) and money
+  // another branch has billed it (cost). Drafts are excluded — only issued/paid count.
+  const ibLive = (d.interbranch_invoices || [])
+    .filter(i => ['ISSUED', 'PAID', 'DISPUTED'].includes(i.status))
+    .filter(i => inRange(i.issued_at || i.created_at));
+  const ibIncome = allBooks ? 0 : +ibLive.filter(i => i.from_branch === branch).reduce((n, i) => n + i.total, 0).toFixed(2);
+  const ibCost = allBooks ? 0 : +ibLive.filter(i => i.to_branch === branch).reduce((n, i) => n + i.total, 0).toFixed(2);
+
   const card = rateCardFor(d, accountingBranch(req));
+  const totalCosts = +(totalExpenses + ibCost).toFixed(2);
+  const totalIncome = +(revenueBilled + ibIncome).toFixed(2);
   res.json({
     branch: allBooks ? 'ALL' : branch,
     currency: card.currency,
     period: { from: req.query.from || null, to: req.query.to || null },
     revenue: { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length },
     expenses: { total: totalExpenses, by_category: byCategory, count: expenses.length },
-    net_profit: +(revenueBilled - totalExpenses).toFixed(2),
-    net_cash: +(revenueCollected - totalExpenses).toFixed(2)
+    interbranch: {
+      income: ibIncome, cost: ibCost,
+      note: allBooks ? 'Excluded from the consolidated view — inter-branch charges net to zero across the group.' : null
+    },
+    totals: { income: totalIncome, costs: totalCosts },
+    net_profit: +(totalIncome - totalCosts).toFixed(2),
+    // Cash actually moved: collected customer invoices and settled inter-branch ones.
+    net_cash: +(revenueCollected
+      + (allBooks ? 0 : ibLive.filter(i => i.from_branch === branch && i.status === 'PAID').reduce((n, i) => n + i.total, 0))
+      - totalExpenses
+      - (allBooks ? 0 : ibLive.filter(i => i.to_branch === branch && i.status === 'PAID').reduce((n, i) => n + i.total, 0))
+    ).toFixed(2)
   });
 });
 

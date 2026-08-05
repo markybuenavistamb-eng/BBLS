@@ -2265,7 +2265,7 @@ let ACCT_META = null;
 
 async function pageAccounting(tab) {
   if (!ACCT_META) ACCT_META = await api('/api/accounting/meta');
-  const tabs = [['rates', 'Rate Cards'], ['invoices', 'Billing & Receipts'], ['expenses', 'Expenses'], ['pnl', 'Profit & Loss']];
+  const tabs = [['rates', 'Rate Cards'], ['invoices', 'Billing & Receipts'], ['interbranch', 'Inter-branch'], ['expenses', 'Expenses'], ['pnl', 'Profit & Loss']];
   view(`
     <h1>Accounting</h1>
     <div class="row" style="gap:6px;margin-bottom:12px">
@@ -2274,6 +2274,7 @@ async function pageAccounting(tab) {
     <div id="acctBody">Loading…</div>`);
   if (tab === 'rates') return renderRateCard();
   if (tab === 'invoices') return renderInvoices();
+  if (tab === 'interbranch') return renderInterbranch();
   if (tab === 'expenses') return renderExpenses();
   return renderPnl();
 }
@@ -2320,6 +2321,12 @@ async function renderRateCard(branch) {
 
       ${ACCT_META.ocean_levels.map(oceanTable).join('')}
 
+      <div class="rc-label" style="margin-top:12px">Inter-branch handling <span class="muted" style="font-weight:400">(what this branch charges another per delivered box for destination-side work)</span></div>
+      <div class="table-scroll"><table>
+        <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
+        <tr>${zones.map(z => `<td>${cell('rc_ib_' + z.key, (card.interbranch_handling || {})[z.key])}</td>`).join('')}</tr>
+      </table></div>
+
       <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[ACCT_META.air_level] || 'Express Air')} — price per kilo</div>
       <div class="table-scroll"><table>
         <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
@@ -2340,7 +2347,8 @@ async function saveRateCard() {
     ocean: Object.fromEntries(ACCT_META.ocean_levels.map(lvl => [lvl,
       Object.fromEntries(zones.map(z => [z.key,
         Object.fromEntries(sizes.map(s => [s.key, v(`rc_${lvl}_${z.key}_${s.key}`)]))]))])),
-    air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) }
+    air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) },
+    interbranch_handling: Object.fromEntries(zones.map(z => [z.key, v('rc_ib_' + z.key)]))
   };
   try {
     await api('/api/accounting/rate-card' + (RC_BRANCH ? '?branch=' + encodeURIComponent(RC_BRANCH) : ''), { method: 'PUT', body });
@@ -2488,9 +2496,12 @@ async function renderPnl(from, to) {
     <div class="card">
       <h2 style="margin-top:0">Profit &amp; Loss</h2>
       <table>
-        <tr><td><b>Revenue (billed)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
+        <tr><td><b>Revenue (billed to customers)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
+        ${p.interbranch && p.interbranch.income ? `<tr><td class="muted" style="padding-left:22px">Inter-branch billed to other branches</td><td style="text-align:right" class="muted">${esc(money(p.interbranch.income, p.currency))}</td></tr>` : ''}
+        ${p.interbranch && p.interbranch.note ? `<tr><td colspan="2" class="muted" style="font-size:12px">${esc(p.interbranch.note)}</td></tr>` : ''}
         ${cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')}
-        <tr><td><b>Total expenses</b></td><td style="text-align:right">− ${esc(money(p.expenses.total, p.currency))}</td></tr>
+        ${p.interbranch && p.interbranch.cost ? `<tr><td class="muted" style="padding-left:22px">Inter-branch charges from other branches</td><td style="text-align:right" class="muted">− ${esc(money(p.interbranch.cost, p.currency))}</td></tr>` : ''}
+        <tr><td><b>Total costs</b></td><td style="text-align:right">− ${esc(money((p.totals && p.totals.costs) || p.expenses.total, p.currency))}</td></tr>
         <tr style="border-top:2px solid var(--border)">
           <td><b>Net profit (accrual)</b></td>
           <td style="text-align:right;font-weight:800;color:${p.net_profit >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_profit, p.currency))}</td></tr>
@@ -2498,6 +2509,100 @@ async function renderPnl(from, to) {
           <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>
       </table>
     </div>`;
+}
+
+/* ---------- branch-to-branch settlements ---------- */
+const IB_BADGE = { DRAFT: 'st-created', ISSUED: 'st-sorted', PAID: 'st-delivered', DISPUTED: 'st-returned', VOID: 'st-cancelled' };
+let IB_DRAFT = null;
+
+async function renderInterbranch() {
+  const d = await api('/api/accounting/interbranch');
+  const canIssue = isAdmin() || (ME && ME.role === 'ACCOUNTING');
+  const partners = d.branches.filter(b => b.type !== 'HQ');
+  const row = (i) => `<tr>
+    <td><b>${esc(i.invoice_number)}</b><div class="muted">${fmtDay(i.created_at)}</div></td>
+    <td>${esc(i.from_label)} <span class="muted">→</span> ${esc(i.to_label)}
+      ${i.direction !== 'BOTH' ? `<div><span class="badge ${i.direction === 'RECEIVABLE' ? 'st-delivered' : 'st-returned'}">${i.direction}</span></div>` : ''}</td>
+    <td class="wrap-cell" style="max-width:320px">${i.lines.map(l => esc(l.description)).join('<br>')}
+      ${i.period_from || i.period_to ? `<div class="muted">Period ${fmtDay(i.period_from)} – ${fmtDay(i.period_to)}</div>` : ''}
+      ${i.notes ? `<div class="muted">“${esc(i.notes)}”</div>` : ''}</td>
+    <td><b>${esc(money(i.total, i.currency))}</b></td>
+    <td><span class="badge ${IB_BADGE[i.status]}">${esc(i.status)}</span></td>
+    <td class="inline-actions">
+      ${i.status === 'DRAFT' && canIssue ? `<button class="small" onclick="setIb(${i.id},'ISSUED')">Issue</button>` : ''}
+      ${i.status === 'ISSUED' && canIssue ? `<button class="small" onclick="setIb(${i.id},'PAID')">Mark settled</button>` : ''}
+      ${['ISSUED','DISPUTED'].includes(i.status) && i.direction === 'PAYABLE' ? `<button class="small secondary" onclick="disputeIb(${i.id})">Dispute</button>` : ''}
+      ${i.status !== 'VOID' && canIssue ? `<button class="small secondary danger" onclick="setIb(${i.id},'VOID')">Void</button>` : ''}
+    </td></tr>`;
+
+  document.getElementById('acctBody').innerHTML = `
+    <div class="tiles">
+      <div class="tile"><div class="num">${esc(money(d.totals.receivable))}</div><div class="lbl">Owed to us by other branches</div></div>
+      <div class="tile"><div class="num">${esc(money(d.totals.payable))}</div><div class="lbl">We owe other branches</div></div>
+    </div>
+    ${canIssue ? `
+    <details class="collapse card" open><summary>Generate a settlement from delivered boxes</summary>
+      <div class="muted" style="font-size:12px;margin:8px 0">
+        Head office bills an origin branch for the destination-side work on boxes it delivered
+        in the period — priced from the Inter-branch handling rates — plus any agreed commission.
+      </div>
+      <div class="form-grid">
+        <div><label>Billing branch</label><select id="ibFrom">${d.branches.map(b => `<option value="${b.key}" ${b.type === 'HQ' ? 'selected' : ''}>${esc(b.label)}</option>`).join('')}</select></div>
+        <div><label>Branch to bill</label><select id="ibTo">${partners.map(b => `<option value="${b.key}">${esc(b.label)}</option>`).join('')}</select></div>
+        <div><label>Period from</label><input id="ibFromDate" type="date"></div>
+        <div><label>Period to</label><input id="ibToDate" type="date"></div>
+      </div>
+      <button onclick="generateIb()">Preview settlement</button>
+      <div id="ibPreview"></div>
+    </details>` : ''}
+    <div class="card table-scroll">
+      <table><tr><th>Settlement</th><th>Between</th><th>Lines</th><th>Total</th><th>Status</th><th></th></tr>
+      ${d.invoices.map(row).join('') || '<tr><td colspan="6" class="muted">No inter-branch settlements yet</td></tr>'}
+      </table>
+    </div>`;
+}
+
+async function generateIb() {
+  const body = {
+    from_branch: ibFrom.value, to_branch: ibTo.value,
+    period_from: ibFromDate.value || null, period_to: ibToDate.value || null
+  };
+  const out = document.getElementById('ibPreview');
+  out.innerHTML = '<div class="muted">Working…</div>';
+  try {
+    const q = await api('/api/accounting/interbranch/generate', { method: 'POST', body });
+    IB_DRAFT = { ...body, currency: q.currency, lines: q.lines };
+    out.innerHTML = `
+      <div class="card" style="margin-top:10px">
+        <b>Draft settlement — ${esc(money(q.total, q.currency))}</b>
+        <div class="muted">${q.boxes_counted} delivered box(es) in the period</div>
+        <table style="margin-top:8px">
+          <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
+          ${q.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, q.currency))}</td><td>${esc(money(l.amount, q.currency))}</td></tr>`).join('')}
+        </table>
+        <button style="margin-top:10px" onclick="saveIb()">Create this settlement</button>
+      </div>`;
+  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+async function saveIb() {
+  if (!IB_DRAFT) return;
+  try {
+    const inv = await api('/api/accounting/interbranch', { method: 'POST', body: IB_DRAFT });
+    flash(`Settlement ${inv.invoice_number} created as a draft`);
+    IB_DRAFT = null;
+    renderInterbranch();
+  } catch (e) { showErr(e); }
+}
+async function setIb(id, status) {
+  if (status === 'VOID' && !confirm('Void this settlement?')) return;
+  try { await api('/api/accounting/interbranch/' + id, { method: 'PUT', body: { status } }); flash('Settlement → ' + status); renderInterbranch(); }
+  catch (e) { showErr(e); }
+}
+async function disputeIb(id) {
+  const notes = prompt('What is being disputed?');
+  if (!notes) return;
+  try { await api('/api/accounting/interbranch/' + id, { method: 'PUT', body: { status: 'DISPUTED', notes } }); flash('Marked disputed'); renderInterbranch(); }
+  catch (e) { showErr(e); }
 }
 
 /* ---------- reports ---------- */
