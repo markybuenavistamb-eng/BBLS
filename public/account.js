@@ -11,6 +11,17 @@ function fmtDay(iso) { return iso ? new Date(iso).toLocaleDateString('en-PH', { 
 
 let ME = null;
 
+// Where new senders found us — feeds the marketing side of the customer record.
+const HEARD_OPTIONS = [
+  'Facebook', 'Instagram', 'TikTok', 'YouTube',
+  'Google search', 'Friend or family referral', 'Walk-in / branch office',
+  'Flyer or poster', 'Radio or TV', 'Other'
+];
+function onHeardChange() {
+  const sel = gid('acHeard'), wrap = gid('acHeardOtherWrap');
+  if (sel && wrap) wrap.style.display = sel.value === 'Other' ? '' : 'none';
+}
+
 // Country → international dialling code. Choosing a country pre-fills the phone field with
 // its code, so a sender never has to remember it. VFIC's lanes are listed first.
 const COUNTRY_CODES = [
@@ -85,7 +96,10 @@ function renderAuth(mode) {
     </div>
     <div class="card" style="max-width:460px;margin:0 auto">
       ${signup ? `
-        <label>Full Name *</label><input id="acName" autocomplete="name">
+        <div class="form-grid">
+          <div><label>Given Name *</label><input id="acGiven" autocomplete="given-name"></div>
+          <div><label>Surname *</label><input id="acSurname" autocomplete="family-name"></div>
+        </div>
         <label>Country *</label>
         <select id="acCountry" onchange="onCountryChange()">
           <option value="">— select your country —</option>
@@ -96,7 +110,15 @@ function renderAuth(mode) {
         <div class="muted" style="font-size:12px;margin-top:4px">Choosing your country fills in the dialling code automatically.</div>` : ''}
       <label>Email *</label><input id="acEmail" type="email" autocomplete="email">
       <label>Password *</label><input id="acPass" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}">
-      ${signup ? `<div class="muted" style="font-size:12px;margin-top:4px">At least 8 characters.</div>` : ''}
+      ${signup ? `<div class="muted" style="font-size:12px;margin-top:4px">At least 8 characters.</div>
+        <label>How did you hear about us?</label>
+        <select id="acHeard" onchange="onHeardChange()">
+          <option value="">— select —</option>
+          ${HEARD_OPTIONS.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+        </select>
+        <div id="acHeardOtherWrap" style="display:none;margin-top:6px">
+          <input id="acHeardOther" placeholder="Please tell us where">
+        </div>` : ''}
       <div id="acErr" class="error"></div>
       <button onclick="${signup ? 'doSignup()' : 'doSignin()'}" style="width:100%;margin-top:10px">${signup ? 'Create account' : 'Sign in'}</button>
       <div class="muted" style="text-align:center;margin-top:12px">
@@ -114,8 +136,12 @@ function renderAuth(mode) {
 async function doSignup() {
   const err = gid('acErr'); err.textContent = '';
   try {
+    const heard = val('acHeard') === 'Other' ? (val('acHeardOther') || 'Other') : val('acHeard');
     ME = await api('/api/public/sender/signup', { method: 'POST', body: {
-      name: val('acName'), phone: val('acPhone'), country: val('acCountry'),
+      given_name: val('acGiven'), surname: val('acSurname'),
+      name: [val('acGiven'), val('acSurname')].filter(Boolean).join(' '),
+      heard_about_us: heard,
+      phone: val('acPhone'), country: val('acCountry'),
       email: val('acEmail'), password: gid('acPass').value
     } });
     renderAccount();

@@ -531,7 +531,14 @@ app.get('/api/box-sizes', (req, res) => {
     empty_box_prices: prices,
     currency: card.currency,
     price_branch: branchKey,
-    priced: Object.values(prices).some(v => v > 0)
+    priced: Object.values(prices).some(v => v > 0),
+    // Full shipping tariff so the booking form can quote a box as the sender fills it in:
+    // ocean is per box by size and destination zone, air is per kilo by zone.
+    shipping_rates: { ocean: card.ocean, air: card.air },
+    zones: RATES.ZONES,
+    region_zone: RATES.REGION_ZONE,
+    // The branch office city that serves this country — autofills "Sending From".
+    branch_city: (BRANCH.portalForBranch(branchKey) || {}).city || ''
   });
 });
 
@@ -1610,23 +1617,32 @@ function requireSender(req, res, next) {
   req.sender = a;
   next();
 }
-const senderPublic = (a) => ({ id: a.id, name: a.name, email: a.email, phone: a.phone, country: a.country || '', created_at: a.created_at });
+const senderPublic = (a) => ({
+  id: a.id, name: a.name, given_name: a.given_name || '', surname: a.surname || '',
+  email: a.email, phone: a.phone, country: a.country || '',
+  heard_about_us: a.heard_about_us || '', created_at: a.created_at
+});
 
 app.post('/api/public/sender/signup', rateLimit, (req, res) => {
   const d = db.get();
   d.sender_accounts = d.sender_accounts || [];
   const b = req.body || {};
-  const name = String(b.name || '').trim();
+  const given_name = String(b.given_name || '').trim();
+  const surname = String(b.surname || '').trim();
+  const name = [given_name, surname].filter(Boolean).join(' ') || String(b.name || '').trim();
   const email = String(b.email || '').trim().toLowerCase();
   const password = String(b.password || '');
-  if (!name) return res.status(400).json({ error: 'Your name is required' });
+  if (!given_name && !name) return res.status(400).json({ error: 'Your given name is required' });
+  if (given_name && !surname) return res.status(400).json({ error: 'Your surname is required' });
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'A valid email address is required' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   if (d.sender_accounts.some(a => a.email === email)) return res.status(400).json({ error: 'An account with that email already exists — please sign in instead' });
   const acct = {
-    id: db.nextId('sender_account'), name, email,
+    id: db.nextId('sender_account'), name, given_name, surname, email,
     phone: String(b.phone || '').trim(),
     country: String(b.country || '').trim(),
+    // Marketing attribution — where this sender first heard about VFIC.
+    heard_about_us: String(b.heard_about_us || '').trim(),
     password_hash: hashPassword(password),
     drafts: [], active: true, created_at: new Date().toISOString()
   };

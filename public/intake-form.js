@@ -14,9 +14,13 @@ let SERVICE_LEVELS = ['OCEAN_ECONOMY', 'OCEAN_PRIORITY', 'EXPRESS_AIR'];
 const SERVICE_LEVEL_LABELS = { OCEAN_ECONOMY: 'Ocean Economy', OCEAN_PRIORITY: 'Ocean Priority', EXPRESS_AIR: 'Express Air' };
 let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
 
-async function loadBoxSizes() {
+// Shipping tariff for the sender's country — ocean is per box by size and destination zone,
+// air is per kilo by zone. Loaded with the box sizes and refreshed when the country changes.
+let RATES_OCEAN = null, RATES_AIR = null, REGION_ZONE = {}, SHIP_CCY = '', BRANCH_CITY = '';
+
+async function loadBoxSizes(country) {
   try {
-    const r = await fetch('/api/box-sizes');
+    const r = await fetch('/api/box-sizes' + (country ? '?country=' + encodeURIComponent(country) : ''));
     const d = await r.json();
     BOX_SIZES = d.sizes || [];
     EXCESS_RATE = d.excess_charge_per_kg;
@@ -25,7 +29,91 @@ async function loadBoxSizes() {
     if (d.max_box_value_php != null) MAX_BOX_VALUE = d.max_box_value_php;
     if (Array.isArray(d.service_levels) && d.service_levels.length) SERVICE_LEVELS = d.service_levels;
     if (Array.isArray(d.origin_countries) && d.origin_countries.length) ORIGIN_COUNTRIES = d.origin_countries;
+    RATES_OCEAN = (d.shipping_rates || {}).ocean || null;
+    RATES_AIR = (d.shipping_rates || {}).air || null;
+    REGION_ZONE = d.region_zone || {};
+    SHIP_CCY = d.currency || '';
+    BRANCH_CITY = d.branch_city || '';
   } catch (e) { BOX_SIZES = []; }
+}
+
+const shipMoney = (v) => `${SHIP_CCY} ${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// PSGC region name → the 17-region code → billing zone.
+function regionCodeFromName(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return null;
+  if (n.includes('national capital') || /\bncr\b/.test(n)) return 'NCR';
+  if (n.includes('cordillera')) return 'CAR';
+  if (n.includes('ilocos')) return 'R1';
+  if (n.includes('cagayan valley')) return 'R2';
+  if (n.includes('central luzon')) return 'R3';
+  if (n.includes('calabarzon') || n.includes('iv-a')) return 'R4A';
+  if (n.includes('mimaropa') || n.includes('iv-b')) return 'MIMAROPA';
+  if (n.includes('bicol')) return 'R5';
+  if (n.includes('western visayas')) return 'R6';
+  if (n.includes('central visayas')) return 'R7';
+  if (n.includes('eastern visayas')) return 'R8';
+  if (n.includes('zamboanga')) return 'R9';
+  if (n.includes('northern mindanao')) return 'R10';
+  if (n.includes('davao')) return 'R11';
+  if (n.includes('soccsksargen') || n.includes('cotabato')) return 'R12';
+  if (n.includes('caraga')) return 'R13';
+  if (n.includes('bangsamoro') || n.includes('barmm')) return 'BARMM';
+  return null;
+}
+const zoneForBox = (n) => REGION_ZONE[regionCodeFromName(val('rRegionName' + n) || '')] || null;
+
+// Quote one box from the tariff: size + destination zone for ocean, weight for air.
+function quoteBox(n) {
+  const level = val('oLevel') || 'OCEAN_ECONOMY';
+  const zone = zoneForBox(n);
+  const size = val('bSize' + n) || 'LARGE';
+  if (!zone || !RATES_OCEAN) return { amount: null, zone, level };
+  if (level === 'EXPRESS_AIR') {
+    const perKg = +((RATES_AIR || {}).EXPRESS_AIR || {})[zone] || 0;
+    const kg = parseFloat(val('bWeight' + n)) || 0;
+    return { amount: +(perKg * kg).toFixed(2), zone, level, basis: `${shipMoney(perKg)}/kg × ${kg} kg` };
+  }
+  const amount = +(((RATES_OCEAN[level] || {})[zone] || {})[size] || 0);
+  return { amount: +amount.toFixed(2), zone, level, basis: `${SERVICE_LEVEL_LABELS[level]} · ${size}` };
+}
+
+// Show each box's fee and the shipment total.
+function renderQuotes() {
+  let total = 0, priced = 0, boxes = 0;
+  document.querySelectorAll('.box-block').forEach(el => {
+    const n = el.dataset.box;
+    boxes += 1;
+    const out = gid('fee' + n);
+    const q = quoteBox(n);
+    if (!out) return;
+    if (q.amount == null || !q.amount) {
+      out.innerHTML = q.zone
+        ? '<span class="muted">No rate set for this destination yet — our agent will confirm the fee.</span>'
+        : '<span class="muted">Select the receiver\'s region to see the shipping fee.</span>';
+    } else {
+      total += q.amount; priced += 1;
+      out.innerHTML = `Shipping fee: <b>${esc(shipMoney(q.amount))}</b> <span class="muted">(${esc(q.basis)})</span>`;
+    }
+  });
+  const box = gid('feeTotal');
+  if (box) {
+    box.innerHTML = priced
+      ? `Estimated shipping for ${priced} of ${boxes} box(es): <b>${esc(shipMoney(total))}</b>
+         <span class="muted">— excludes any excess-weight charge; confirmed by our agent.</span>`
+      : '<span class="muted">Shipping fees appear once you choose your country, service level and each receiver\'s region.</span>';
+    box.style.display = '';
+  }
+}
+
+// Country drives the price book, the branch that serves the sender, and the ID prefix.
+async function onOriginCountryChange() {
+  const country = val('sCountry');
+  await loadBoxSizes(country);
+  const agent = gid('oAgent');
+  if (agent && BRANCH_CITY && !agent.dataset.touched) agent.value = BRANCH_CITY;
+  renderQuotes();
 }
 const peso = (v) => 'Php ' + Number(v || 0).toLocaleString('en-PH');
 const sizeInfo = (key) => BOX_SIZES.find(s => s.key === key) || null;
@@ -33,7 +121,7 @@ const sizeInfo = (key) => BOX_SIZES.find(s => s.key === key) || null;
 function sizeOptionsHtml() {
   if (!BOX_SIZES.length) return '<option value="LARGE">LARGE</option>';
   return BOX_SIZES.map(s =>
-    `<option value="${s.key}"${s.key === 'LARGE' ? ' selected' : ''}>${esc(s.label)} — ${esc(s.dimensions)} (${s.cubic_feet} cu ft), up to ${s.standard_weight_kg} kg</option>`
+    `<option value="${s.key}"${s.key === 'LARGE' ? ' selected' : ''}>${esc(s.label)} — ${esc(s.dimensions)} (${s.cbm} cbm), up to ${s.standard_weight_kg} kg</option>`
   ).join('');
 }
 
@@ -47,7 +135,7 @@ function onSizeChange(n) {
   const s = sizeInfo(sel.value);
   if (!s) { hint.textContent = ''; warn.style.display = 'none'; return; }
 
-  hint.textContent = `${s.dimensions} · ${s.cubic_feet} cu ft (${s.cbm} cbm) · includes up to ${s.standard_weight_kg} kg`;
+  hint.textContent = `${s.dimensions} · ${s.cbm} cbm · includes up to ${s.standard_weight_kg} kg`;
 
   const w = parseFloat((document.getElementById('bWeight' + n) || {}).value) || 0;
   const over = Math.max(0, +(w - s.standard_weight_kg).toFixed(2));
@@ -267,16 +355,17 @@ function boxBlockHtml() {
     </select>
 
     <div class="form-grid" style="margin-top:10px">
-      <div><label>Box Size *</label><select id="bSize${n}" required onchange="onSizeChange(${n})">
+      <div><label>Box Size *</label><select id="bSize${n}" required onchange="onSizeChange(${n});renderQuotes()">
         ${sizeOptionsHtml()}
       </select>
       <div class="muted size-hint" id="sizeHint${n}"></div></div>
-      <div><label>Approx. Weight (kg) *</label><input id="bWeight${n}" type="number" min="0" step="0.1" required oninput="onSizeChange(${n})"></div>
+      <div><label>Approx. Weight (kg) *</label><input id="bWeight${n}" type="number" min="0" step="0.1" required oninput="onSizeChange(${n});renderQuotes()"></div>
       <div><label>Total Value of Contents (Php) *</label><input id="bValue${n}" type="number" min="0" step="0.01" max="${MAX_BOX_VALUE}" required oninput="onValueChange(${n})">
       <div class="muted size-hint">Maximum ${peso(MAX_BOX_VALUE)} per box.</div>
       <div class="excess-warn" id="valWarn${n}" style="display:none"></div></div>
     </div>
     <div class="excess-warn" id="excess${n}" style="display:none"></div>
+    <div class="fee-line" id="fee${n}"></div>
     <label>Special Instructions</label><input id="bInstr${n}">
 
     <div class="rc-label" style="margin-top:14px">C. ITEMIZED DESCRIPTION OF GOODS *</div>
@@ -319,7 +408,11 @@ async function addBox() {
       region: 'rRegion' + n, city: 'rCity' + n, barangay: 'rBrgy' + n,
       regionName: 'rRegionName' + n, cityName: 'rCityName' + n, barangayName: 'rBrgyName' + n
     });
+    // The destination region sets the billing zone, so re-quote whenever it changes.
+    const rg = gid('rRegion' + n);
+    if (rg) rg.addEventListener('change', () => setTimeout(renderQuotes, 0));
   }
+  renderQuotes();
 }
 
 /* ---------- whole form ---------- */
@@ -387,12 +480,12 @@ function renderForm() {
       <label>Complete Address in the Philippines *</label><textarea id="sAddrPh" required></textarea>
 
       <div class="form-grid">
-        <div><label>Sending From (branch / city) *</label><input id="oAgent" required></div>
-        <div><label>Country *</label><select id="sCountry" required>
+        <div><label>Sending From (branch / city) *</label><input id="oAgent" required oninput="this.dataset.touched=1"></div>
+        <div><label>Country *</label><select id="sCountry" required onchange="onOriginCountryChange()">
           <option value="">— select country —</option>
           ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
         </select></div>
-        <div><label>Service Level *</label><select id="oLevel" required>
+        <div><label>Service Level *</label><select id="oLevel" required onchange="renderQuotes()">
           ${SERVICE_LEVELS.map(k => `<option value="${k}">${esc(SERVICE_LEVEL_LABELS[k] || k)}</option>`).join('')}
         </select></div>
       </div>
@@ -431,6 +524,7 @@ function renderForm() {
     <h2>Your Box(es)</h2>
     <div id="boxes"></div>
     <button type="button" class="secondary" onclick="addBox()">+ Add another box</button>
+    <div class="card fee-total" id="feeTotal" style="display:none"></div>
 
     <div class="card">
       <div class="muted" style="font-size:12px;margin-bottom:8px">
@@ -681,7 +775,15 @@ if (window.VI) VI.onChange(() => { if (submitted) renderConfirmation(); else ren
 mountToggle();
 (async () => {
   await Promise.all([loadBoxSizes(), loadSender()]);
+  // A signed-in sender is priced from their own country's branch straight away.
+  const signedInCountry = SENDER && SENDER.country;
+  if (signedInCountry) await loadBoxSizes(signedInCountry);
   renderForm();
+  if (signedInCountry) {
+    const c = gid('sCountry');
+    if (c) { c.value = signedInCountry; await onOriginCountryChange(); }
+  }
   const draftId = new URLSearchParams(location.search).get('draft');
   if (draftId && SENDER) await restoreDraft(draftId);
+  renderQuotes();
 })();

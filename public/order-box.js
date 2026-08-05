@@ -237,4 +237,15 @@ function renderConfirmation() {
 
 if (window.VI) VI.onChange(() => { if (submitted) renderConfirmation(); else renderForm(); });
 mountToggle();
-loadSizes(COUNTRY).then(renderForm);
+// If the customer is signed in, price from the country on their account unless they've
+// already picked one on this device.
+(async () => {
+  if (!COUNTRY) {
+    try {
+      const me = await (await fetch('/api/public/sender/me')).json();
+      if (me && me.country) COUNTRY = me.country;
+    } catch (e) { /* not signed in — they'll pick a country below */ }
+  }
+  await loadSizes(COUNTRY);
+  renderForm();
+})();
