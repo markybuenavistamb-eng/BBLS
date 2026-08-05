@@ -745,3 +745,8 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .qbtn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
 .ob-total { margin-top: 12px; font-weight: 600; font-size: 13px; color: var(--muted); }
 .input-locked { background: #f1f5f9; color: var(--muted); }
+
+/* Inline "save as draft" panel (replaces browser prompt/alert dialogs) */
+.draft-panel { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 10px; background: #f8fafc; }
+.draft-panel .success { color: var(--green); font-size: 13px; }
+.draft-panel .error { color: var(--red); font-size: 13px; }

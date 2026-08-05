@@ -536,10 +536,24 @@ function renderForm() {
       <div id="submitError" class="error"></div>
       <div class="row" style="gap:8px">
         <button onclick="submitIntake()">Submit Booking</button>
-        ${SENDER
-          ? `<button type="button" class="secondary" onclick="saveDraft()">💾 Save as draft</button>`
-          : `<a href="/account.html"><button type="button" class="secondary">Sign in to save a draft</button></a>`}
+        <button type="button" class="secondary" onclick="openDraftPanel()">💾 Save as draft</button>
       </div>
+
+      <div id="draftPanel" class="draft-panel" style="display:none">
+        <label style="margin-top:0">Name this draft</label>
+        <div class="row" style="gap:6px;flex-wrap:nowrap">
+          <input id="draftLabel" placeholder="e.g. Booking for Lola Nena" style="flex:1">
+          <button type="button" onclick="saveDraft()">Save</button>
+          <button type="button" class="secondary" onclick="closeDraftPanel()">Cancel</button>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          ${SENDER
+            ? 'Saved to your account — pick it up later from My Account. Your ID upload is never stored in a draft.'
+            : 'You are not signed in, so this draft is kept in this browser only. <a href="/account.html">Create an account</a> to keep it on file and reach it from any device.'}
+        </div>
+        <div id="draftMsg" style="margin-top:6px"></div>
+      </div>
+
       <div class="muted">${esc(T('intake.after'))}</div>
     </div>`;
 
@@ -729,19 +743,100 @@ function draftSnapshot() {
   document.querySelectorAll('#app input[type=radio]:checked').forEach(el => { radios[el.name] = el.value; });
   return { fields, radios, box_count: document.querySelectorAll('.box-block').length };
 }
+// Drafts are named and confirmed inline. Browser dialogs (prompt/alert) are deliberately not
+// used: an in-app or embedded browser can suppress them, which silently swallowed the save.
+const LOCAL_DRAFT_KEY = 'vfic_local_draft';
+
+function openDraftPanel() {
+  const panel = gid('draftPanel');
+  if (!panel) return;
+  panel.style.display = '';
+  const input = gid('draftLabel');
+  if (input && !input.value) input.value = val('sFam') ? `Booking for ${val('sFam')}` : 'Untitled draft';
+  const msg = gid('draftMsg'); if (msg) msg.innerHTML = '';
+  if (input) { input.focus(); input.select(); }
+  panel.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+function closeDraftPanel() { const p = gid('draftPanel'); if (p) p.style.display = 'none'; }
+function draftMessage(html, ok = true) {
+  const el = gid('draftMsg');
+  if (el) el.innerHTML = `<span class="${ok ? 'success' : 'error'}">${html}</span>`;
+}
+
 async function saveDraft() {
-  if (!SENDER) { location.href = '/account.html'; return; }
-  const label = prompt('Name this draft:', val('sFam') ? `Booking for ${val('sFam')}` : 'Untitled draft');
-  if (label === null) return;
+  const label = (val('draftLabel') || 'Untitled draft').trim() || 'Untitled draft';
+  const payload = draftSnapshot();
+
+  // Not signed in — keep it in this browser so the work is never lost.
+  if (!SENDER) {
+    try {
+      localStorage.setItem(LOCAL_DRAFT_KEY, JSON.stringify({ label, payload, saved_at: new Date().toISOString() }));
+      draftMessage(`Saved “${esc(label)}” in this browser. It will be offered back the next time you open this form. <a href="/account.html">Sign in</a> to keep it on your account.`);
+    } catch (e) {
+      draftMessage('This browser would not let us save the draft (private mode blocks local storage). Please sign in to save it to your account.', false);
+    }
+    return;
+  }
+
   try {
-    const d = await (await fetch('/api/public/sender/drafts', {
+    const res = await fetch('/api/public/sender/drafts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: CURRENT_DRAFT_ID, label: label || 'Untitled draft', payload: draftSnapshot() })
-    })).json();
-    if (d.error) throw new Error(d.error);
+      body: JSON.stringify({ id: CURRENT_DRAFT_ID, label, payload })
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || `Could not save the draft (${res.status})`);
     CURRENT_DRAFT_ID = d.id;
-    alert('Draft saved. You can finish it later from My Account.');
-  } catch (e) { alert(e.message); }
+    draftMessage(`Draft “${esc(d.label)}” saved. Finish it later from <a href="/account.html">My Account</a>.`);
+  } catch (e) {
+    draftMessage(esc(e.message || 'Could not save the draft. Please try again.'), false);
+  }
+}
+
+// Offer back a draft kept in this browser (signed-out save).
+function localDraft() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_DRAFT_KEY) || 'null'); } catch (e) { return null; }
+}
+function offerLocalDraft() {
+  const d = localDraft();
+  const note = gid('draftNote');
+  if (!d || !note) return;
+  note.innerHTML = `You have an unfinished draft saved in this browser — <b>${esc(d.label)}</b>.
+    <button type="button" class="small" onclick="resumeLocalDraft()">Resume it</button>
+    <button type="button" class="small secondary" onclick="discardLocalDraft()">Discard</button>`;
+  note.style.display = '';
+}
+async function resumeLocalDraft() {
+  const d = localDraft();
+  if (!d) return;
+  await applyDraftPayload(d.payload);
+  const note = gid('draftNote');
+  if (note) { note.textContent = `Resumed your saved draft “${d.label}”. Re-attach your ID before submitting.`; note.style.display = ''; }
+}
+function discardLocalDraft() {
+  try { localStorage.removeItem(LOCAL_DRAFT_KEY); } catch (e) {}
+  const note = gid('draftNote'); if (note) note.style.display = 'none';
+}
+// Put a saved snapshot back on the form — shared by account drafts and browser-local drafts.
+async function applyDraftPayload(payload) {
+  const { fields = {}, radios = {}, box_count = 1 } = payload || {};
+  for (const name in radios) {
+    const el = document.querySelector(`#app input[name="${name}"][value="${radios[name]}"]`);
+    if (el) { el.checked = true; el.dispatchEvent(new Event('change')); }
+  }
+  while (document.querySelectorAll('.box-block').length < Math.min(box_count, 20)) await addBox();
+  for (const id2 in fields) {
+    const el = gid(id2);
+    if (!el || el.type === 'file') continue;
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!fields[id2];
+    else el.value = fields[id2];
+  }
+  onSenderTypeChange(); onCollectionChange();
+  if (val('sCountry')) await onOriginCountryChange();
+  document.querySelectorAll('.box-block').forEach(el => {
+    const n = el.dataset.box;
+    onSizeChange(n); onValueChange(n); onOthersChange(n);
+  });
+  renderQuotes();
 }
 async function restoreDraft(id) {
   try {
@@ -749,23 +844,7 @@ async function restoreDraft(id) {
     const d = Array.isArray(drafts) ? drafts.find(x => x.id === +id) : null;
     if (!d || !d.payload) return;
     CURRENT_DRAFT_ID = d.id;
-    const { fields = {}, radios = {}, box_count = 1 } = d.payload;
-    for (const name in radios) {
-      const el = document.querySelector(`#app input[name="${name}"][value="${radios[name]}"]`);
-      if (el) { el.checked = true; el.dispatchEvent(new Event('change')); }
-    }
-    while (document.querySelectorAll('.box-block').length < Math.min(box_count, 20)) await addBox();
-    for (const id2 in fields) {
-      const el = gid(id2);
-      if (!el || el.type === 'file') continue;
-      if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!fields[id2];
-      else el.value = fields[id2];
-    }
-    onSenderTypeChange(); onCollectionChange();
-    document.querySelectorAll('.box-block').forEach(el => {
-      const n = el.dataset.box;
-      onSizeChange(n); onValueChange(n); onOthersChange(n);
-    });
+    await applyDraftPayload(d.payload);
     const note = gid('draftNote');
     if (note) { note.textContent = `Resumed your saved draft “${d.label}”. Re-attach your ID before submitting.`; note.style.display = ''; }
   } catch (e) { /* ignore — start a blank form */ }
@@ -785,5 +864,6 @@ mountToggle();
   }
   const draftId = new URLSearchParams(location.search).get('draft');
   if (draftId && SENDER) await restoreDraft(draftId);
+  else if (!SENDER) offerLocalDraft();   // pick up a draft saved in this browser
   renderQuotes();
 })();
