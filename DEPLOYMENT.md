@@ -3,14 +3,20 @@
 Three deployments of this one repository, each with its own database, replicating to each
 other. Manila is head office; Thailand and Cambodia are branch nodes.
 
-| Node | Vercel project | Portal URL | `VFIC_NODE_ID` | ID band |
-|---|---|---|---|---|
-| Manila HQ | `vfic-mnl` | `/mnl` (+ `/dev`) | `HQ_MANILA` | 0 – 999,999 |
-| Thailand | `vfic-th` | `/th` | `TH_BANGKOK` | 1,000,000 – 1,999,999 |
-| Cambodia | `vfic-kh` | `/kh` | `KH_PHNOMPENH` | 2,000,000 – 2,999,999 |
+| Node | Vercel project | Portal URL | `VFIC_NODE_ID` | Database | ID band |
+|---|---|---|---|---|---|
+| Manila HQ | `vfic-mnl` | `/mnl` (+ `/dev`) | `HQ_MANILA` | Supabase 1 | 0 – 999,999 |
+| Thailand | `vfic-th` | `/th` | `TH_BANGKOK` | Supabase 2 | 1,000,000 – 1,999,999 |
+| Cambodia | `vfic-kh` | `/kh` | `KH_PHNOMPENH` | Upstash Redis | 2,000,000 – 2,999,999 |
 
 All three deploy from the **same GitHub repo** (`markybuenavistamb-eng/BBLS`, branch `main`).
 Nothing needs to be forked or branched — only the environment variables differ.
+
+**Why Cambodia is on Upstash:** Supabase's free plan allows two projects per account. The
+storage layer supports Redis REST as an equal alternative, so the third node runs on Upstash's
+free tier — still a genuinely separate database. Replication is backend-agnostic: a node does
+not know or care what its peers store data in. (Verified: a shipment created on a Redis-backed
+node replicated to a node on a different backend, and survived a restart.)
 
 ---
 
@@ -30,10 +36,10 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 ---
 
-## Step 1 — Create three Supabase databases
+## Step 1a — Create two Supabase databases (Manila, Thailand)
 
-For **each** of the three projects (name them e.g. `vfic-mnl`, `vfic-th`, `vfic-kh`; pick a
-region near the branch — Singapore works well for all three):
+For **each** of the two projects (name them `vfic-mnl` and `vfic-th`; Region → Asia-Pacific →
+**Singapore**):
 
 1. [supabase.com](https://supabase.com) → **New project**.
 2. **SQL Editor → New query**, paste and **Run**:
@@ -51,6 +57,22 @@ alter table kv enable row level security;
 
 3. **Project Settings → API** — copy the **Project URL** and the **`service_role`** key
    (not `anon`). You'll paste these into the matching Vercel project in step 2.
+
+On the create-project screen, leave the Security defaults as they come: **Enable Data API**
+must stay ticked (the app reads and writes over `/rest/v1/kv`); *Automatically expose new
+tables* is safe to leave ticked because the SQL above locks `kv` behind RLS with no policy —
+the anon key gets nothing and only `service_role` can read it. The **database password** is
+for direct Postgres connections; it is never pasted into Vercel.
+
+## Step 1b — Create the Upstash database (Cambodia)
+
+1. [upstash.com](https://upstash.com) → **Create Database** (Redis) → free tier, region
+   **Singapore** (or nearest to Phnom Penh).
+2. On the database page open the **REST API** section and copy:
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
+3. No table to create — the app stores its document under a single key
+   (`vfic:db:KH_PHNOMPENH`), created automatically on first write.
 
 ---
 
@@ -79,15 +101,19 @@ SUPABASE_URL=<the vfic-th project URL>
 SUPABASE_SERVICE_ROLE_KEY=<the vfic-th service_role key>
 ```
 
-### `vfic-kh` — Cambodia branch
+### `vfic-kh` — Cambodia branch (Upstash instead of Supabase)
 
 ```
 VFIC_NODE_ID=KH_PHNOMPENH
 VFIC_SYNC_SECRET=61moge1_rZ9v4bBSGpfbQlkjJy0pRpn13kfOzSp8U2g
 VFIC_PEERS=[{"id":"HQ_MANILA","url":"https://vfic-mnl.vercel.app"}]
-SUPABASE_URL=<the vfic-kh project URL>
-SUPABASE_SERVICE_ROLE_KEY=<the vfic-kh service_role key>
+KV_REST_API_URL=<the Upstash REST URL>
+KV_REST_API_TOKEN=<the Upstash REST token>
 ```
+
+> This node has **no** `SUPABASE_*` variables — the Redis pair replaces them. `/api/health`
+> will report `"backend": "kv"` here and `"backend": "supabase"` on the other two; both are
+> persistent and both replicate identically.
 
 > `VFIC_PEERS` must be valid JSON on one line. Substitute your real Vercel URLs — if you use
 > custom domains, use those instead. You can deploy first with placeholder URLs and correct
