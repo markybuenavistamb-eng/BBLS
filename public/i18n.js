@@ -16,7 +16,7 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
       'nav.returns': 'Returns', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
-      'nav.reports': 'Reports', 'nav.accounting': 'Accounting', 'nav.branches': 'Branches & Partners', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
+      'nav.reports': 'Reports', 'nav.accounting': 'Accounting', 'nav.branches': 'Branches & Partners', 'nav.developer': 'Developer Console', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operations', 'nav.section.people': 'People & Comms', 'nav.section.system': 'System',
 
       /* common */
@@ -135,7 +135,7 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',
       'nav.returns': 'Mga Naibalik', 'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
-      'nav.reports': 'Mga Ulat', 'nav.accounting': 'Accounting', 'nav.branches': 'Mga Sangay & Partner', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
+      'nav.reports': 'Mga Ulat', 'nav.accounting': 'Accounting', 'nav.branches': 'Mga Sangay & Partner', 'nav.developer': 'Developer Console', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operasyon', 'nav.section.people': 'Mga Tao at Komunikasyon', 'nav.section.system': 'Sistema',
 
       'common.search': 'Maghanap', 'common.print': 'I-print', 'common.save': 'I-save', 'common.cancel': 'Kanselahin',

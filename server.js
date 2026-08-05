@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const multer = require('multer');
 const QRCode = require('qrcode');
 const db = require('./lib/db');
@@ -229,6 +230,7 @@ app.post('/api/login', (req, res) => {
 app.get('/api/portal/:slug', (req, res) => {
   const p = BRANCH.portalBySlug(req.params.slug);
   if (!p) return res.status(404).json({ error: 'Unknown portal' });
+  if (!p.branch) return res.json({ ...p, label: p.name, country: '', type: 'DEVELOPER', address: '', contact: '' });
   const b = BRANCH.resolve(db.get().settings.branches).find(x => x.key === p.branch) || {};
   res.json({ ...p, label: b.label, country: b.country, type: b.type, address: b.address || '', contact: b.contact || '' });
 });
@@ -1338,6 +1340,68 @@ app.get('/api/roles', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   });
 });
 
+// ---------- replication between deployments ----------
+const NODE = require('./lib/node');
+const SYNC = require('./lib/sync');
+
+// Peer-to-peer endpoint: authenticated by the shared sync secret, not by a user session.
+function requireSyncSecret(req, res, next) {
+  if (!NODE.SYNC_SECRET) return res.status(503).json({ error: 'Sync is not configured on this deployment' });
+  const presented = req.get('x-vfic-sync') || '';
+  const a = Buffer.from(presented);
+  const b = Buffer.from(NODE.SYNC_SECRET);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) return res.status(401).json({ error: 'Invalid sync credentials' });
+  next();
+}
+
+// A peer asks for everything this node owns since their cursor.
+app.get('/api/sync/pull', requireSyncSecret, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(SYNC.changesSince(db.get(), req.query.since));
+});
+
+// A peer pushes its own records to this node (the reverse direction, for firewalled peers).
+app.post('/api/sync/push', requireSyncSecret, (req, res) => {
+  const result = SYNC.applyChanges(db.get(), req.body || {});
+  if (result.applied) db.persist();
+  res.json(result);
+});
+
+// Identity — lets the developer console confirm a node is reachable and which one it is.
+app.get('/api/sync/whoami', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ node: NODE.SELF, sync_enabled: NODE.syncEnabled(), time: new Date().toISOString() });
+});
+
+// Status + manual trigger — Developer Admin only.
+app.get('/api/sync/status', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(SYNC.status(db.get()));
+});
+app.post('/api/sync/run', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
+  const result = await SYNC.runSync(db.get());
+  db.persist();
+  res.json(result);
+});
+
+// Reach out to every peer and report what it says about itself — the network overview.
+app.get('/api/sync/network', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
+  const d = db.get();
+  const state = d.sync_state || {};
+  const peers = await Promise.all(NODE.PEERS.map(async (p) => {
+    const started = Date.now();
+    try {
+      const r = await fetch(`${p.url}/api/sync/whoami`, { headers: { 'x-vfic-sync': NODE.SYNC_SECRET } });
+      const body = await r.json();
+      return { ...p, reachable: r.ok, ms: Date.now() - started, remote: body.node, sync_enabled: body.sync_enabled, ...state[p.id] };
+    } catch (e) {
+      return { ...p, reachable: false, error: e.message, ms: Date.now() - started, ...state[p.id] };
+    }
+  }));
+  res.json({ self: SYNC.status(d), peers });
+});
+
 // ---------- role → module permissions ----------
 
 // What the signed-in user may open — drives the sidebar and client-side routing.
@@ -1423,7 +1487,7 @@ app.get('/api/branches', requireRole(...ADMINS), (req, res) => {
       commission_due: +(revenue * (+b.commission_pct || 0) / 100).toFixed(2)
     };
   });
-  res.json({ branches: withStats, currency: (d.settings.rateCard || {}).currency || 'PHP' });
+  res.json({ branches: withStats, currency: rateCardFor(d, 'HQ_MANILA').currency });
 });
 
 // Edit a partner's commercial details. Master/Developer Admin only.
@@ -1760,7 +1824,23 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
 });
 
 // ---------- accounting: rate cards, invoices/receipts, expenses, profit & loss ----------
+// Every branch keeps its own books: its own rate card, its own invoices and expenses, and
+// its own profit & loss. Head office sees all of them; a branch sees only its own.
 const RATES = require('./lib/rates');
+
+// Which branch's books the caller is working in. HQ admins/accounting may pass ?branch=.
+function accountingBranch(req) {
+  const own = BRANCH.branchForRole(req.user.role);
+  if (own && own !== 'HQ_MANILA') return own;
+  const asked = BRANCH.byKey(String(req.query.branch || req.body?.branch || ''));
+  return asked ? asked.key : 'HQ_MANILA';
+}
+// Rate cards are stored per branch, falling back to the legacy single card.
+function rateCardFor(d, branchKey) {
+  d.settings.rateCards = d.settings.rateCards || {};
+  const stored = d.settings.rateCards[branchKey] || d.settings.rateCard;
+  return RATES.normalizeRateCard(stored);
+}
 
 // Reference data for the rate-card editor.
 app.get('/api/accounting/meta', requireRole(...ACCOUNTING_ROLES), (req, res) => {
@@ -1774,14 +1854,19 @@ app.get('/api/accounting/meta', requireRole(...ACCOUNTING_ROLES), (req, res) => 
 });
 
 app.get('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res) => {
-  res.json(RATES.normalizeRateCard(db.get().settings.rateCard));
+  const branch = accountingBranch(req);
+  res.json({ ...rateCardFor(db.get(), branch), branch, editable: req.user.role === 'DEVELOPER_ADMIN' });
 });
-app.put('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+// Rate cards are commercial policy: only the Developer portal may change them.
+app.put('/api/accounting/rate-card', requireRole('DEVELOPER_ADMIN'), (req, res) => {
   const d = db.get();
   const card = RATES.normalizeRateCard(req.body || {});
   card.updated_at = new Date().toISOString();
   card.updated_by = req.user.name;
-  d.settings.rateCard = card;
+  const branch = accountingBranch(req);
+  d.settings.rateCards = d.settings.rateCards || {};
+  d.settings.rateCards[branch] = card;
+  card.branch = branch;
   db.persist();
   res.json(card);
 });
@@ -1791,7 +1876,7 @@ app.get('/api/accounting/quote/:shipmentId', requireRole(...ACCOUNTING_ROLES), (
   const d = db.get();
   const s = d.shipments.find(x => x.id === +req.params.shipmentId);
   if (!s) return res.status(404).json({ error: 'Not found' });
-  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  const card = rateCardFor(d, (BRANCH.byCountry(s.origin_country) || {}).key || 'HQ_MANILA');
   const boxes = d.boxes.filter(b => b.shipment_id === s.id).map(b => {
     const receiver = d.customers.find(c => c.id === b.receiver_id) || {};
     const region = b.region || receiver.region || null;
@@ -1808,7 +1893,9 @@ app.get('/api/accounting/quote/:shipmentId', requireRole(...ACCOUNTING_ROLES), (
 // ---- invoices / receipts ----
 app.get('/api/accounting/invoices', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
-  let list = (d.invoices || []).slice();
+  const branch = accountingBranch(req);
+  const all = BRANCH.branchForRole(req.user.role) === null && !req.query.branch; // HQ, unfiltered
+  let list = (d.invoices || []).filter(i => all || (i.branch || 'HQ_MANILA') === branch);
   if (req.query.status) list = list.filter(i => i.status === req.query.status);
   list.sort((a, b) => b.issued_at.localeCompare(a.issued_at));
   res.json(list);
@@ -1817,7 +1904,8 @@ app.post('/api/accounting/invoices', requireRole(...ACCOUNTING_ROLES), (req, res
   const d = db.get();
   d.invoices = d.invoices || [];
   const b = req.body || {};
-  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  const branch = accountingBranch(req);
+  const card = rateCardFor(d, branch);
   const lines = (Array.isArray(b.lines) ? b.lines : [])
     .map(l => ({ description: String(l.description || '').trim(), qty: +l.qty || 1, unit_amount: +l.unit_amount || 0 }))
     .filter(l => l.description)
@@ -1831,6 +1919,7 @@ app.post('/api/accounting/invoices', requireRole(...ACCOUNTING_ROLES), (req, res
     shipment_id: b.shipment_id ? +b.shipment_id : null,
     box_order_id: b.box_order_id ? +b.box_order_id : null,
     bill_to: String(b.bill_to).trim(),
+    branch,
     currency: b.currency || card.currency,
     lines,
     total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
@@ -1863,8 +1952,11 @@ app.put('/api/accounting/invoices/:id', requireRole(...ACCOUNTING_ROLES), (req, 
 const EXPENSE_CATEGORIES = ['FREIGHT', 'TRUCKING', 'CUSTOMS', 'WAREHOUSE', 'BOX_PURCHASE', 'SALARIES', 'OTHER'];
 app.get('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
-  const list = (d.expenses || []).slice().sort((a, b) => b.spent_at.localeCompare(a.spent_at));
-  res.json({ expenses: list, categories: EXPENSE_CATEGORIES });
+  const branch = accountingBranch(req);
+  const all = BRANCH.branchForRole(req.user.role) === null && !req.query.branch;
+  const list = (d.expenses || []).filter(e => all || (e.branch || 'HQ_MANILA') === branch)
+    .sort((a, b) => b.spent_at.localeCompare(a.spent_at));
+  res.json({ expenses: list, categories: EXPENSE_CATEGORIES, branch });
 });
 app.post('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
@@ -1878,7 +1970,8 @@ app.post('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res
     category: EXPENSE_CATEGORIES.includes(b.category) ? b.category : 'OTHER',
     description: String(b.description).trim(),
     amount: +amount.toFixed(2),
-    currency: b.currency || RATES.normalizeRateCard(d.settings.rateCard).currency,
+    branch: accountingBranch(req),
+    currency: b.currency || rateCardFor(d, accountingBranch(req)).currency,
     container_id: b.container_id ? +b.container_id : null,
     spent_at: b.spent_at || new Date().toISOString(),
     recorded_by: req.user.name, created_at: new Date().toISOString()
@@ -1903,19 +1996,23 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const to = req.query.to ? new Date(new Date(req.query.to).getTime() + 86400000).toISOString() : '9999';
   const inRange = (iso) => iso && iso >= from && iso < to;
 
-  const invoices = (d.invoices || []).filter(i => i.status !== 'VOID' && inRange(i.issued_at));
+  const branch = accountingBranch(req);
+  const allBooks = BRANCH.branchForRole(req.user.role) === null && !req.query.branch;
+  const inBranch = (r) => allBooks || (r.branch || 'HQ_MANILA') === branch;
+  const invoices = (d.invoices || []).filter(i => i.status !== 'VOID' && inRange(i.issued_at) && inBranch(i));
   const paid = invoices.filter(i => i.status === 'PAID');
   const revenueBilled = +invoices.reduce((n, i) => n + i.total, 0).toFixed(2);
   const revenueCollected = +paid.reduce((n, i) => n + i.total, 0).toFixed(2);
   const receivable = +(revenueBilled - revenueCollected).toFixed(2);
 
-  const expenses = (d.expenses || []).filter(e => inRange(e.spent_at));
+  const expenses = (d.expenses || []).filter(e => inRange(e.spent_at) && inBranch(e));
   const byCategory = {};
   for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
   const totalExpenses = +expenses.reduce((n, e) => n + e.amount, 0).toFixed(2);
 
-  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  const card = rateCardFor(d, accountingBranch(req));
   res.json({
+    branch: allBooks ? 'ALL' : branch,
     currency: card.currency,
     period: { from: req.query.from || null, to: req.query.to || null },
     revenue: { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length },
@@ -2215,7 +2312,7 @@ app.get('/app', (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 
 // Branch portals: /th (Thailand), /kh (Cambodia), /mnl (Manila HQ). Each serves the same
 // application — the slug only brands the sign-in and restricts who may sign in there.
 // All branches share one database, so Manila always sees the consolidated picture.
-app.get(['/th', '/kh', '/mnl'], (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
+app.get(['/th', '/kh', '/mnl', '/dev'], (req, res) => { noCache(res); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 // Serve assets with must-revalidate so a new deploy is picked up immediately (no stale app.js/CSS).
 // ETags still yield cheap 304s when a file is unchanged.
 app.use(express.static(path.join(__dirname, 'public'), {

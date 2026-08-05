@@ -186,14 +186,15 @@ async function boot() {
    /th, /kh and /mnl are branded sign-in doors onto the same VFIC system. Branch staff sign
    in at their own door; the data all lands in one place so Manila sees everything. */
 const PORTAL_SLUG = (() => {
-  const m = /^\/(th|kh|mnl)\/?$/i.exec(location.pathname);
+  const m = /^\/(th|kh|mnl|dev)\/?$/i.exec(location.pathname);
   return m ? m[1].toLowerCase() : null;
 })();
 let PORTAL = null;
 const DEMO_LOGINS = {
   th: 'admin.th@vfic.demo · shipper@vfic.demo',
   kh: 'admin.kh@vfic.demo · cambodia@vfic.demo',
-  mnl: 'admin@vfic.demo · consignee@vfic.demo · warehouse@vfic.demo'
+  mnl: 'admin@vfic.demo · consignee@vfic.demo · warehouse@vfic.demo',
+  dev: 'developer@vfic.demo'
 };
 async function loadPortal() {
   if (!PORTAL_SLUG) return;
@@ -204,7 +205,7 @@ function renderLogin() {
   document.getElementById('preauth').style.display = '';
   document.getElementById('shell').style.display = 'none';
   const p = PORTAL;
-  const otherPortals = [['th', 'Thailand'], ['kh', 'Cambodia'], ['mnl', 'Manila HQ']].filter(([s]) => s !== PORTAL_SLUG);
+  const otherPortals = [['th', 'Thailand'], ['kh', 'Cambodia'], ['mnl', 'Manila HQ'], ['dev', 'Developer']].filter(([s]) => s !== PORTAL_SLUG);
   document.getElementById('view').innerHTML = `
     <div class="login-wrap">
       <div class="login-brandside" style="--hero-img:url('${IMG.hero}')${p ? `;--accent:${p.accent}` : ''}">
@@ -311,6 +312,7 @@ const NAV2 = [
   ['#/accounting', 'nav.accounting', 'chart', 'accounting'],
   { section: 'nav.section.system' },
   ['#/branches', 'nav.branches', 'container', 'branches'],
+  ['#/developer', 'nav.developer', 'gear', 'developer'],
   ['#/scan', 'nav.scan', 'scan', 'scan'],
   ['#/admin', 'nav.admin', 'gear', 'admin']
 ];
@@ -465,6 +467,7 @@ async function route() {
     if (p[0] === 'reports') return pageReports();
     if (p[0] === 'accounting') return pageAccounting(p[1] || 'rates');
     if (p[0] === 'branches') return pageBranches();
+    if (p[0] === 'developer') return pageDeveloper();
     if (p[0] === 'role-modules') return pageRoleModules();
     if (p[0] === 'admin') return pageAdmin();
     if (p[0] === 'scan') return pageScan();
@@ -2085,6 +2088,80 @@ async function retryNotif(id) {
   try { await api('/api/notifications/retry/' + id, { method: 'POST' }); flash('Re-queued — worker will retry shortly'); route(); } catch (e) { showErr(e); }
 }
 
+/* ---------- developer console: the node network ---------- */
+async function pageDeveloper() {
+  view(`<h1>Developer Console</h1><div id="devBody" class="card muted">Contacting nodes…</div>`);
+  let net;
+  try { net = await api('/api/sync/network'); }
+  catch (e) { document.getElementById('devBody').innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  const self = net.self;
+  const totals = Object.entries(self.counts).filter(([, c]) => c.total);
+
+  const peerCard = (p) => `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div>
+          <h2 style="margin:0">${esc(p.label || p.id)}</h2>
+          <div class="muted">${esc(p.url)}</div>
+        </div>
+        <span class="badge ${p.reachable ? 'st-delivered' : 'st-cancelled'}">${p.reachable ? 'ONLINE' : 'UNREACHABLE'}</span>
+      </div>
+      <div class="form-grid" style="margin-top:8px">
+        <div><label>Round trip</label>${p.ms != null ? p.ms + ' ms' : '—'}</div>
+        <div><label>Sync cursor</label>${p.cursor || 0}</div>
+        <div><label>Last successful pull</label>${p.last_ok ? fmtDate(p.last_ok) : '<span class="muted">never</span>'}</div>
+        <div><label>Records applied</label>${p.last_applied != null ? p.last_applied : '—'}</div>
+      </div>
+      ${p.error || p.last_error ? `<div class="error" style="margin-top:6px">${esc(p.error || p.last_error)}</div>` : ''}
+    </div>`;
+
+  document.getElementById('devBody').outerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div>
+          <h2 style="margin:0">This deployment — ${esc(self.node.label)}</h2>
+          <div class="muted">Node <code>${esc(self.node.id)}</code> · ${esc(self.node.type)} · id band ${self.node.idOffset.toLocaleString()}–${(self.node.idOffset + 999999).toLocaleString()}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="badge ${self.enabled ? 'st-delivered' : 'st-created'}">${self.enabled ? 'SYNC ON' : 'SYNC OFF'}</span>
+          <div class="muted" style="margin-top:4px">local revision ${self.rev}</div>
+        </div>
+      </div>
+      ${!self.enabled ? `<div class="note-info" style="margin-top:10px">
+        Replication is off on this deployment. Set <code>VFIC_SYNC_SECRET</code> (the same value on every node)
+        and <code>VFIC_PEERS</code> (e.g. <code>[{"id":"TH_BANGKOK","url":"https://vfic-th.vercel.app"}]</code>),
+        then redeploy. Each node also needs its own <code>VFIC_NODE_ID</code> and its own database.
+      </div>` : ''}
+      <div class="row" style="margin-top:12px;gap:8px">
+        <button onclick="runSyncNow()" ${self.enabled ? '' : 'disabled'}>⟳ Sync now</button>
+        <button class="secondary" onclick="pageDeveloper()">Refresh</button>
+      </div>
+    </div>
+
+    <h2>Peer nodes (${net.peers.length})</h2>
+    ${net.peers.map(peerCard).join('') || '<div class="card muted">No peers configured on this deployment.</div>'}
+
+    <h2>Replicated data on this node</h2>
+    <div class="card table-scroll">
+      <table><tr><th>Collection</th><th>Total</th>${Object.values(NODE_LABELS).map(l => `<th>${esc(l)}</th>`).join('')}</tr>
+      ${totals.map(([coll, c]) => `<tr>
+        <td><b>${esc(coll.replace(/_/g, ' '))}</b></td><td>${c.total}</td>
+        ${Object.keys(NODE_LABELS).map(n => `<td>${c.by_node[n] || 0}</td>`).join('')}
+      </tr>`).join('')}
+      </table>
+      <div class="muted" style="margin-top:8px">Rows owned by another node arrived by replication; this node never edits them.</div>
+    </div>`;
+}
+const NODE_LABELS = { HQ_MANILA: 'Manila HQ', TH_BANGKOK: 'Thailand', KH_PHNOMPENH: 'Cambodia' };
+async function runSyncNow() {
+  try {
+    const r = await api('/api/sync/run', { method: 'POST' });
+    const applied = (r.peers || []).reduce((n, p) => n + (p.applied || 0), 0);
+    flash(r.ok ? `Sync complete — ${applied} record(s) applied` : 'Sync finished with errors', r.ok ? 'success' : 'error');
+    pageDeveloper();
+  } catch (e) { showErr(e); }
+}
+
 /* ---------- roles × modules matrix ---------- */
 async function pageRoleModules() {
   const d = await api('/api/role-modules');
@@ -2204,7 +2281,8 @@ async function pageAccounting(tab) {
 async function renderRateCard() {
   const card = await api('/api/accounting/rate-card');
   const zones = ACCT_META.zones, sizes = ACCT_META.sizes;
-  const cell = (id, val) => `<input id="${id}" type="number" min="0" step="0.01" value="${val || 0}" style="width:110px;padding:5px 7px">`;
+  const editable = !!card.editable;
+  const cell = (id, val) => `<input id="${id}" type="number" min="0" step="0.01" value="${val || 0}" style="width:110px;padding:5px 7px"${editable ? "" : " disabled"}>`;
   const oceanTable = (lvl) => `
     <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[lvl] || lvl)} — price per box</div>
     <div class="table-scroll"><table>
@@ -2218,10 +2296,10 @@ async function renderRateCard() {
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <div><label style="margin:0">Currency</label>
-          <select id="rcCurrency" style="max-width:140px">
+          <select id="rcCurrency" style="max-width:140px"${editable ? "" : " disabled"}>
             ${['PHP', 'USD', 'THB', 'KHR', 'VND'].map(c => `<option ${c === card.currency ? 'selected' : ''}>${c}</option>`).join('')}
           </select></div>
-        <div class="muted">${card.updated_at ? `Last updated ${fmtDate(card.updated_at)} by ${esc(card.updated_by || '')}` : 'Not saved yet'}</div>
+        <div class="muted">Rate card for <b>${esc(NODE_LABELS[card.branch] || card.branch || 'Head office')}</b><br>${card.updated_at ? `Last updated ${fmtDate(card.updated_at)} by ${esc(card.updated_by || '')}` : 'Not saved yet'}</div>
       </div>
 
       <div class="rc-label" style="margin-top:16px">Empty box price <span class="muted" style="font-weight:400">(what a customer pays to buy a box)</span></div>
@@ -2238,7 +2316,9 @@ async function renderRateCard() {
         <tr>${zones.map(z => `<td>${cell('rc_air_' + z.key, card.air[ACCT_META.air_level][z.key])}</td>`).join('')}</tr>
       </table></div>
 
-      <button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
+      ${editable
+        ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>`
+        : `<div class="note-info" style="margin-top:14px">Rate cards are commercial policy and can only be changed from the <b>Developer Console portal</b> (/dev). This is a read-only view of the rates your branch is billed on.</div>`}
     </div>`;
 }
 async function saveRateCard() {
