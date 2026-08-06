@@ -2078,32 +2078,35 @@ app.post('/api/accounting/interbranch/generate', requireRole(...ADMINS, 'ACCOUNT
   const billedBranch = BRANCH.byKey(to_branch);
   const card = rateCardFor(d, from_branch);
 
-  // Boxes from the billed branch's shipments that reached DELIVERED inside the period.
-  const theirShipments = d.shipments.filter(s => s.origin_country === billedBranch.country);
-  const shipmentIds = new Set(theirShipments.map(s => s.id));
-  const deliveredAt = (box) => {
-    const ev = d.status_events.filter(e => e.box_id === box.id && e.to_status === 'DELIVERED')
-      .sort((x, y) => y.created_at.localeCompare(x.created_at))[0];
-    return ev ? ev.created_at : (box.status === 'DELIVERED' ? box.status_updated_at : null);
-  };
-  const byZone = {};
-  let counted = 0;
-  for (const box of d.boxes) {
-    if (!shipmentIds.has(box.shipment_id) || box.status !== 'DELIVERED') continue;
-    const at = deliveredAt(box);
-    if (!at || at < from || at >= to) continue;
-    const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
-    const zone = RATES.zoneForRegion(box.region || receiver.region);
-    if (!zone) continue;
-    byZone[zone] = (byZone[zone] || 0) + 1;
-    counted += 1;
-  }
+  // The charge is ALL-IN per container: one flat fee by container size covering the whole
+  // destination-side service for every box inside it. A container is billable once it has
+  // arrived at destination, so it is counted by its actual arrival date.
+  const ARRIVED_ONWARD = ['ARRIVED', 'AT_CUSTOMS', 'RELEASED', 'STRIPPED'];
+  const ownsContainer = (c) => (c.booked_by_branch
+    ? c.booked_by_branch === to_branch
+    : String(c.origin_port || '').toLowerCase().includes(billedBranch.country.toLowerCase()));
 
-  const lines = Object.entries(byZone).map(([zone, qty]) => {
-    const fee = RATES.handlingFee(card, zone).amount;
+  const billable = d.containers.filter(c => {
+    if (!ownsContainer(c) || !ARRIVED_ONWARD.includes(c.status)) return false;
+    const at = c.actual_arrival;
+    return at && at >= from && at < to;
+  });
+
+  const bySize = {};
+  for (const c of billable) {
+    const size = SM.CONTAINER_SIZES.includes(c.size) ? c.size : 'C40';
+    (bySize[size] = bySize[size] || []).push(c);
+  }
+  const counted = billable.length;
+  const boxesCovered = d.boxes.filter(b => billable.some(c => c.id === b.container_id)).length;
+
+  const lines = Object.entries(bySize).map(([size, list]) => {
+    const fee = RATES.containerFee(card, size);
+    const numbers = list.map(c => c.container_number).join(', ');
     return {
-      description: `Destination handling — ${RATES.ZONE_LABELS[zone]} (${qty} box${qty === 1 ? '' : 'es'} delivered)`,
-      zone, qty, unit_amount: fee, amount: +(qty * fee).toFixed(2)
+      description: `All-in destination handling — ${fee.label} container × ${list.length} (${numbers})`,
+      container_size: size, qty: list.length, unit_amount: fee.amount,
+      amount: +(list.length * fee.amount).toFixed(2)
     };
   }).filter(l => l.qty > 0);
 
@@ -2116,21 +2119,22 @@ app.post('/api/accounting/interbranch/generate', requireRole(...ADMINS, 'ACCOUNT
     if (theirRevenue > 0) {
       lines.push({
         description: `Network commission @ ${pct}% of ${billedBranch.short} billed revenue`,
-        zone: null, qty: 1, unit_amount: +(theirRevenue * pct / 100).toFixed(2), amount: +(theirRevenue * pct / 100).toFixed(2)
+        container_size: null, qty: 1, unit_amount: +(theirRevenue * pct / 100).toFixed(2), amount: +(theirRevenue * pct / 100).toFixed(2)
       });
     }
   }
 
   if (!lines.length) {
-    return res.status(400).json({ error: `Nothing to bill ${billedBranch.short} for that period — no boxes were delivered and no commission is due.` });
+    return res.status(400).json({ error: `Nothing to bill ${billedBranch.short} for that period — no containers arrived and no commission is due.` });
   }
   res.json({
     draft: true, from_branch, to_branch,
     period_from: b.period_from || null, period_to: b.period_to || null,
     currency: card.currency, lines,
     total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
-    boxes_counted: counted,
-    note: counted && !Object.values(byZone).length ? '' : undefined
+    containers_counted: counted,
+    boxes_covered: boxesCovered,
+    containers: billable.map(c => ({ container_number: c.container_number, size: c.size, arrived: c.actual_arrival }))
   });
 });
 
@@ -2145,7 +2149,7 @@ app.post('/api/accounting/interbranch', requireRole(...ADMINS, 'ACCOUNTING'), (r
   const lines = (Array.isArray(b.lines) ? b.lines : [])
     .map(l => ({
       description: String(l.description || '').trim(),
-      zone: l.zone || null, qty: +l.qty || 1, unit_amount: +l.unit_amount || 0,
+      container_size: l.container_size || null, qty: +l.qty || 1, unit_amount: +l.unit_amount || 0,
       amount: +(((+l.qty || 1) * (+l.unit_amount || 0))).toFixed(2)
     }))
     .filter(l => l.description);

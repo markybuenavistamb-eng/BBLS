@@ -23,6 +23,7 @@ const NEXT_STATUS = {
   OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'], RETURNED: ['ASSIGNED'], DELIVERED: [], CANCELLED: []
 };
 const CONTAINER_SIZE_LABELS = { C20: '20 ft', C40: '40 ft', C40HQ: '40 ft HQ' };
+const CONTAINER_SIZE_KEYS = ['C20', 'C40', 'C40HQ'];
 // The 17 official PSGC regions — the single region taxonomy shared by warehouse
 // segregation, trucking dispatch, reports and public tracking (mirrors lib/regions.js).
 const REGION_DEFS = [
@@ -2321,10 +2322,10 @@ async function renderRateCard(branch) {
 
       ${ACCT_META.ocean_levels.map(oceanTable).join('')}
 
-      <div class="rc-label" style="margin-top:12px">Inter-branch handling <span class="muted" style="font-weight:400">(what this branch charges another per delivered box for destination-side work)</span></div>
+      <div class="rc-label" style="margin-top:12px">Inter-branch charge — ALL-IN per container <span class="muted" style="font-weight:400">(one flat fee per container covering the whole destination-side service for every box inside)</span></div>
       <div class="table-scroll"><table>
-        <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
-        <tr>${zones.map(z => `<td>${cell('rc_ib_' + z.key, (card.interbranch_handling || {})[z.key])}</td>`).join('')}</tr>
+        <tr>${CONTAINER_SIZE_KEYS.map(k => `<th>${esc(CONTAINER_SIZE_LABELS[k] || k)}</th>`).join('')}</tr>
+        <tr>${CONTAINER_SIZE_KEYS.map(k => `<td>${cell('rc_ib_' + k, (card.interbranch_container || {})[k])}</td>`).join('')}</tr>
       </table></div>
 
       <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[ACCT_META.air_level] || 'Express Air')} — price per kilo</div>
@@ -2348,7 +2349,7 @@ async function saveRateCard() {
       Object.fromEntries(zones.map(z => [z.key,
         Object.fromEntries(sizes.map(s => [s.key, v(`rc_${lvl}_${z.key}_${s.key}`)]))]))])),
     air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) },
-    interbranch_handling: Object.fromEntries(zones.map(z => [z.key, v('rc_ib_' + z.key)]))
+    interbranch_container: Object.fromEntries(CONTAINER_SIZE_KEYS.map(k => [k, v('rc_ib_' + k)]))
   };
   try {
     await api('/api/accounting/rate-card' + (RC_BRANCH ? '?branch=' + encodeURIComponent(RC_BRANCH) : ''), { method: 'PUT', body });
@@ -2543,8 +2544,9 @@ async function renderInterbranch() {
     ${canIssue ? `
     <details class="collapse card" open><summary>Generate a settlement from delivered boxes</summary>
       <div class="muted" style="font-size:12px;margin:8px 0">
-        Head office bills an origin branch for the destination-side work on boxes it delivered
-        in the period — priced from the Inter-branch handling rates — plus any agreed commission.
+        Head office bills an origin branch an ALL-IN fee per container that arrived in the period,
+        priced by container size — covering customs, stripping, sorting and delivery of every box
+        inside — plus any agreed commission.
       </div>
       <div class="form-grid">
         <div><label>Billing branch</label><select id="ibFrom">${d.branches.map(b => `<option value="${b.key}" ${b.type === 'HQ' ? 'selected' : ''}>${esc(b.label)}</option>`).join('')}</select></div>
@@ -2575,7 +2577,7 @@ async function generateIb() {
     out.innerHTML = `
       <div class="card" style="margin-top:10px">
         <b>Draft settlement — ${esc(money(q.total, q.currency))}</b>
-        <div class="muted">${q.boxes_counted} delivered box(es) in the period</div>
+        <div class="muted">${q.containers_counted} container(s) arrived in the period, covering ${q.boxes_covered} box(es)</div>
         <table style="margin-top:8px">
           <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
           ${q.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, q.currency))}</td><td>${esc(money(l.amount, q.currency))}</td></tr>`).join('')}
