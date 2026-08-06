@@ -823,6 +823,51 @@ app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
   res.json(o);
 });
 
+// ---------- global search ----------
+// One search box over everything an operator might type: a box or shipment number, a
+// container, a person's name or phone. Results are branch-scoped like every other list.
+app.get('/api/search', requireAuth, (req, res) => {
+  const d = db.get();
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (q.length < 2) return res.json({ q, groups: [] });
+  const hit = (v) => v && String(v).toLowerCase().includes(q);
+  const cap = 8;
+
+  const boxes = scopeBoxList(req.user, d.boxes).filter(b => {
+    const r = boxRow(b);
+    return hit(b.box_number) || hit(b.container_box_number) || hit(r.receiver_name) || hit(r.receiver_phone) || hit(r.sender_name);
+  }).slice(0, cap).map(b => {
+    const r = boxRow(b);
+    return { label: b.container_box_number || b.box_number, sub: `${r.receiver_name || ''} · ${SM.FRIENDLY[b.status] || b.status}`, href: '#/boxes/' + b.id };
+  });
+
+  const shipments = scopeShipmentList(req.user, d.shipments).filter(sh => {
+    const sender = d.customers.find(c => c.id === sh.sender_id) || {};
+    return hit(sh.shipment_number) || hit(sender.full_name) || hit(sender.phone_primary);
+  }).slice(0, cap).map(sh => {
+    const sender = d.customers.find(c => c.id === sh.sender_id) || {};
+    return { label: sh.shipment_number, sub: `${sender.full_name || ''} · ${sh.origin_agent || ''}`, href: '#/shipments/' + sh.id };
+  });
+
+  const containers = scopeContainerList(req.user, d.containers)
+    .filter(c => hit(c.container_number) || hit(c.vessel_name) || hit(c.booking_number) || hit(c.load_code))
+    .slice(0, cap)
+    .map(c => ({ label: c.container_number, sub: `${c.load_code || ''} · ${c.status}`, href: '#/containers/' + c.id }));
+
+  const customers = d.customers
+    .filter(c => hit(c.full_name) || hit(c.phone_primary) || hit(c.phone_alternate) || hit(c.email) || hit(c.city_municipality))
+    .slice(0, cap)
+    .map(c => ({ label: c.full_name, sub: `${c.type} · ${c.phone_primary || ''}${c.city_municipality ? ' · ' + c.city_municipality : ''}`, href: '#/customers/' + c.id }));
+
+  const groups = [
+    { key: 'boxes', label: 'Boxes', items: boxes },
+    { key: 'shipments', label: 'Shipments', items: shipments },
+    { key: 'containers', label: 'Containers', items: containers },
+    { key: 'customers', label: 'Customers', items: customers }
+  ].filter(g => g.items.length);
+  res.json({ q, groups, total: groups.reduce((n, g) => n + g.items.length, 0) });
+});
+
 // ---------- boxes ----------
 app.get('/api/boxes', requireAuth, (req, res) => {
   const d = db.get();
@@ -900,7 +945,7 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
 });
 // Undo the last status change — for a mis-clicked Action. Removes the most recent status
 // event and rolls the box back to the prior status, reconciling any side effects.
-app.post('/api/boxes/:id/revert', requireRole(...AGENTS, 'WAREHOUSE'), (req, res) => {
+app.post('/api/boxes/:id/revert', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   const box = d.boxes.find(b => b.id === +req.params.id);
   if (!box) return res.status(404).json({ error: 'Not found' });
@@ -1060,7 +1105,7 @@ app.post('/api/containers/:id/arrive', requireRole(...AGENTS), (req, res) => {
 });
 // Revert / correct a container's status by one step (undo a mis-clicked action). Reverses the
 // box cascade for Depart (IN_TRANSIT→LOADING) and Arrive (ARRIVED→IN_TRANSIT).
-app.post('/api/containers/:id/revert', requireRole(...AGENTS), (req, res) => {
+app.post('/api/containers/:id/revert', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   const c = d.containers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
@@ -1355,6 +1400,40 @@ app.put('/api/settings/bir', requireRole(...ADMINS), (req, res) => {
   }
   db.persist();
   res.json(Object.fromEntries(BIR_FIELDS.map(k => [k, d.settings.bir[k] || ''])));
+});
+
+// Receipt numbering. The Machine Identification No. identifies this deployment and is
+// derived from its node id, so it is stable without anyone typing it. The Serial No. is
+// assigned to a shipment the first time its official receipt is produced, then never changes.
+function machineIdentificationNo(d) {
+  const bir = d.settings.bir || {};
+  if (bir.min) return bir.min;                              // an explicit BIR-issued MIN wins
+  const seed = `${NODE.NODE_ID}:${d.settings.publicBaseUrl || ''}`;
+  const digits = crypto.createHash('sha1').update(seed).digest('hex').replace(/\D/g, '');
+  return (digits + '00000000').slice(0, 8);
+}
+app.get('/api/receipt-meta/:shipmentId', requireAuth, (req, res) => {
+  const d = db.get();
+  const sh = d.shipments.find(x => x.id === +req.params.shipmentId);
+  if (!sh) return res.status(404).json({ error: 'Not found' });
+  const bir = d.settings.bir || {};
+  if (!sh.or_serial_no) {
+    d.seq.or_serial = (d.seq.or_serial || 0) + 1;
+    const prefix = (bir.serial_no || '').trim();
+    sh.or_serial_no = prefix
+      ? `${prefix}-${String(d.seq.or_serial).padStart(6, '0')}`
+      : `${BRANCH.countryCode(sh.origin_country)}${new Date().getFullYear()}-${String(d.seq.or_serial).padStart(6, '0')}`;
+    sh.or_issued_at = new Date().toISOString();
+    db.persist();
+  }
+  res.json({
+    tin: bir.tin || '',
+    accreditation_no: bir.accreditation_no || '',
+    permit_no: bir.permit_no || '',
+    min: machineIdentificationNo(d),
+    serial_no: sh.or_serial_no,
+    issued_at: sh.or_issued_at
+  });
 });
 
 // ---------- rate settings (admin) ----------
@@ -1903,6 +1982,9 @@ app.get('/api/accounting/meta', requireRole(...ACCOUNTING_ROLES), (req, res) => 
     zones: RATES.ZONES,
     sizes: BOXSIZE.BOX_SIZES.map(s => ({ key: s.key, label: s.label, dimensions: s.dimensions })),
     ocean_levels: RATES.OCEAN_LEVELS,
+    container_sizes: RATES.CONTAINER_SIZES,
+    container_size_labels: RATES.CONTAINER_SIZE_LABELS,
+    extra_charges: RATES.EXTRA_CHARGES,
     air_level: RATES.AIR_LEVEL,
     service_level_labels: SM.SERVICE_LEVEL_LABELS
   });
@@ -1920,6 +2002,8 @@ app.put('/api/accounting/rate-card', requireRole('DEVELOPER_ADMIN'), (req, res) 
   card.updated_by = req.user.name;
   const branch = accountingBranch(req);
   d.settings.rateCards = d.settings.rateCards || {};
+  d.settings.rateCardPrev = d.settings.rateCardPrev || {};
+  if (d.settings.rateCards[branch]) d.settings.rateCardPrev[branch] = d.settings.rateCards[branch];
   d.settings.rateCards[branch] = card;
   card.branch = branch;
   db.persist();
@@ -2009,9 +2093,10 @@ app.get('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res)
   const d = db.get();
   const branch = accountingBranch(req);
   const all = BRANCH.branchForRole(req.user.role) === null && !req.query.branch;
-  const list = (d.expenses || []).filter(e => all || (e.branch || 'HQ_MANILA') === branch)
-    .sort((a, b) => b.spent_at.localeCompare(a.spent_at));
-  res.json({ expenses: list, categories: EXPENSE_CATEGORIES, branch });
+  const scoped = (d.expenses || []).filter(e => all || (e.branch || 'HQ_MANILA') === branch);
+  const list = scoped.filter(e => !e.deleted_at).sort((a, b) => b.spent_at.localeCompare(a.spent_at));
+  const deleted = scoped.filter(e => e.deleted_at).sort((a, b) => b.deleted_at.localeCompare(a.deleted_at)).slice(0, 10);
+  res.json({ expenses: list, recently_deleted: deleted, categories: EXPENSE_CATEGORIES, branch });
 });
 app.post('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
@@ -2037,11 +2122,13 @@ app.post('/api/accounting/expenses', requireRole(...ACCOUNTING_ROLES), (req, res
 });
 app.delete('/api/accounting/expenses/:id', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
-  const before = (d.expenses || []).length;
-  d.expenses = (d.expenses || []).filter(x => x.id !== +req.params.id);
-  if (d.expenses.length === before) return res.status(404).json({ error: 'Not found' });
+  const e = (d.expenses || []).find(x => x.id === +req.params.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  // Soft delete: it drops out of the books but can be restored.
+  e.deleted_at = new Date().toISOString();
+  e.deleted_by = req.user.name;
   db.persist();
-  res.json({ ok: true });
+  res.json({ ok: true, id: e.id, restorable: true });
 });
 
 // ---- branch-to-branch invoicing ----
@@ -2049,7 +2136,11 @@ app.delete('/api/accounting/expenses/:id', requireRole(...ACCOUNTING_ROLES), (re
 // boxes an origin branch sent, so it bills that branch per delivered box, plus any agreed
 // commission on the branch's own revenue. The same invoice shows as a receivable to the
 // issuer and a payable to the billed branch, and lands in both P&Ls.
-const IB_STATUSES = ['DRAFT', 'ISSUED', 'PAID', 'DISPUTED', 'VOID'];
+// Full settlement lifecycle. The billed branch acknowledges receipt and remits; the issuing
+// branch confirms the funds actually landed.
+const IB_STATUSES = ['DRAFT', 'ISSUED', 'RECEIVED', 'REMITTED', 'PAID', 'DISPUTED', 'VOID'];
+// What the billed branch may do, versus the issuer.
+const IB_BILLED_ACTIONS = ['RECEIVED', 'REMITTED', 'DISPUTED'];
 
 function ibVisible(user, inv) {
   const own = BRANCH.branchForRole(user.role);
@@ -2131,9 +2222,9 @@ app.post('/api/accounting/interbranch/generate', requireRole(...ADMINS, 'ACCOUNT
   // Optional commission on the billed branch's own customer revenue for the period.
   const pct = +(BRANCH.resolve(d.settings.branches).find(x => x.key === to_branch) || {}).commission_pct || 0;
   if (pct > 0) {
-    const theirRevenue = (d.invoices || [])
-      .filter(i => i.status !== 'VOID' && (i.branch || 'HQ_MANILA') === to_branch && i.issued_at >= from && i.issued_at < to)
-      .reduce((n, i) => n + i.total, 0);
+    const theirRevenue = d.shipments
+      .filter(sh => sh.origin_country === billedBranch.country && sh.created_at >= from && sh.created_at < to)
+      .reduce((n, sh) => n + (+(sh.shipping_fee_amount || 0)), 0);
     if (theirRevenue > 0) {
       lines.push({
         description: `Network commission @ ${pct}% of ${billedBranch.short} billed revenue`,
@@ -2201,21 +2292,77 @@ app.put('/api/accounting/interbranch/:id', requireRole(...ACCOUNTING_ROLES), (re
 
   if (b.status) {
     if (!IB_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid status' });
-    // The billed branch may dispute; only the issuer issues, voids or confirms payment.
-    if (!isIssuer && b.status !== 'DISPUTED') {
-      return res.status(403).json({ error: 'Only the issuing branch can change this settlement — you can raise a dispute instead' });
+    // The billed branch acknowledges, remits or disputes; everything else is the issuer's.
+    if (!isIssuer && !IB_BILLED_ACTIONS.includes(b.status)) {
+      return res.status(403).json({ error: 'Only the issuing branch can do that — you can acknowledge, remit payment or raise a dispute' });
+    }
+    if (isIssuer && IB_BILLED_ACTIONS.includes(b.status) && b.status !== 'DISPUTED' && inv.from_branch === own) {
+      return res.status(403).json({ error: 'Only the branch being billed can acknowledge or remit this settlement' });
     }
     if (b.status === 'DISPUTED' && !String(b.notes || inv.notes || '').trim()) {
       return res.status(400).json({ error: 'Please say what is disputed' });
     }
+    if (b.status === 'REMITTED' && !String(b.settled_reference || inv.settled_reference || '').trim()) {
+      return res.status(400).json({ error: 'Please give the payment reference (bank transfer or receipt number)' });
+    }
+    // Keep the previous state so the action can be undone.
+    inv.history = inv.history || [];
+    inv.history.push({ status: inv.status, at: new Date().toISOString(), by: req.user.name });
     if (b.status === 'ISSUED' && !inv.issued_at) inv.issued_at = new Date().toISOString();
+    if (b.status === 'RECEIVED') inv.received_at = new Date().toISOString();
+    if (b.status === 'REMITTED') inv.remitted_at = new Date().toISOString();
     if (b.status === 'PAID') inv.paid_at = new Date().toISOString();
-    if (b.status === 'DRAFT' || b.status === 'DISPUTED') inv.paid_at = null;
+    if (['DRAFT', 'DISPUTED'].includes(b.status)) { inv.paid_at = null; inv.remitted_at = null; }
     inv.status = b.status;
   }
   for (const k of ['notes', 'settled_reference']) if (k in b) inv[k] = String(b[k] || '').trim();
   db.persist();
   res.json(inv);
+});
+
+// Undo the last status change on a settlement — the accounting equivalent of the box undo.
+app.post('/api/accounting/interbranch/:id/undo', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const inv = (d.interbranch_invoices || []).find(x => x.id === +req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Not found' });
+  if (!ibVisible(req.user, inv)) return res.status(403).json({ error: 'That settlement does not involve your branch' });
+  if (!(inv.history || []).length) return res.status(400).json({ error: 'Nothing to undo — this settlement has not changed since it was created.' });
+  const own = BRANCH.branchForRole(req.user.role);
+  const wasMine = !own || ROLE.isAdmin(req.user.role) || inv.from_branch === own || inv.to_branch === own;
+  if (!wasMine) return res.status(403).json({ error: 'You cannot undo this settlement' });
+  const prev = inv.history.pop();
+  inv.status = prev.status;
+  if (prev.status !== 'PAID') inv.paid_at = null;
+  if (!['REMITTED', 'PAID'].includes(prev.status)) inv.remitted_at = null;
+  if (!['RECEIVED', 'REMITTED', 'PAID'].includes(prev.status)) inv.received_at = null;
+  db.persist();
+  res.json({ ...inv, undone_to: prev.status });
+});
+
+// Restore an expense that was deleted by mistake.
+app.post('/api/accounting/expenses/:id/restore', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const d = db.get();
+  const e = (d.expenses || []).find(x => x.id === +req.params.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  if (!e.deleted_at) return res.status(400).json({ error: 'That expense is not deleted' });
+  delete e.deleted_at; delete e.deleted_by;
+  db.persist();
+  res.json(e);
+});
+
+// Roll the rate card back to the version before the last save.
+app.post('/api/accounting/rate-card/undo', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+  const d = db.get();
+  const branch = accountingBranch(req);
+  d.settings.rateCardPrev = d.settings.rateCardPrev || {};
+  const prev = d.settings.rateCardPrev[branch];
+  if (!prev) return res.status(400).json({ error: 'No earlier version of this rate card to go back to' });
+  d.settings.rateCards = d.settings.rateCards || {};
+  const current = d.settings.rateCards[branch];
+  d.settings.rateCards[branch] = prev;
+  d.settings.rateCardPrev[branch] = current;   // so undo can be undone
+  db.persist();
+  res.json({ ...RATES.normalizeRateCard(prev), branch, editable: true });
 });
 
 // ---- profit & loss ----
@@ -2228,13 +2375,22 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const branch = accountingBranch(req);
   const allBooks = BRANCH.branchForRole(req.user.role) === null && !req.query.branch;
   const inBranch = (r) => allBooks || (r.branch || 'HQ_MANILA') === branch;
-  const invoices = (d.invoices || []).filter(i => i.status !== 'VOID' && inRange(i.issued_at) && inBranch(i));
-  const paid = invoices.filter(i => i.status === 'PAID');
-  const revenueBilled = +invoices.reduce((n, i) => n + i.total, 0).toFixed(2);
-  const revenueCollected = +paid.reduce((n, i) => n + i.total, 0).toFixed(2);
+  // Customer revenue is the shipping fee charged on each shipment; a shipment marked PAID
+  // counts as collected. (Counter receipts are the customer-facing document — see Official
+  // Receipt on a shipment — so there is no separate invoice ledger.)
+  const branchCountry = (BRANCH.byKey(branch) || {}).country;
+  const shipmentsIn = d.shipments.filter(sh => {
+    if (!inRange(sh.created_at)) return false;
+    if (allBooks) return true;
+    return branch === 'HQ_MANILA' ? true : sh.origin_country === branchCountry;
+  });
+  const feeOf = (sh) => +(sh.shipping_fee_amount || 0);
+  const revenueBilled = +shipmentsIn.reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
+  const revenueCollected = +shipmentsIn.filter(sh => sh.payment_status === 'PAID').reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
   const receivable = +(revenueBilled - revenueCollected).toFixed(2);
+  const invoices = shipmentsIn;
 
-  const expenses = (d.expenses || []).filter(e => inRange(e.spent_at) && inBranch(e));
+  const expenses = (d.expenses || []).filter(e => !e.deleted_at && inRange(e.spent_at) && inBranch(e));
   const byCategory = {};
   for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
   const totalExpenses = +expenses.reduce((n, e) => n + e.amount, 0).toFixed(2);
@@ -2274,13 +2430,21 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
 // ---------- dashboard & reports ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const d = db.get();
+  const scopedBoxes = scopeBoxList(req.user, d.boxes, effectiveScope(req));
   const byStatus = {};
   for (const s of SM.BOX_STATUSES) byStatus[s] = 0;
-  for (const b of d.boxes) byStatus[b.status] = (byStatus[b.status] || 0) + 1;
+  for (const x of scopedBoxes) byStatus[x.status] = (byStatus[x.status] || 0) + 1;
+  // Box volume by month, for the dashboard chart.
+  const boxesByMonth = {};
+  for (const x of scopedBoxes) {
+    const k = String(x.created_at || '').slice(0, 7);
+    if (k) boxesByMonth[k] = (boxesByMonth[k] || 0) + 1;
+  }
   const today = new Date().toISOString().slice(0, 10);
   res.json({
-    totalBoxes: d.boxes.length,
+    totalBoxes: scopedBoxes.length,
     byStatus,
+    boxesByMonth,
     returnsCount: byStatus.RETURNED || 0,
     unpaidShipments: d.shipments.filter(s => s.payment_status === 'UNPAID').length,
     inTransitContainers: d.containers.filter(c => c.status === 'IN_TRANSIT').map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })),

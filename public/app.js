@@ -411,6 +411,7 @@ function renderShell() {
   flush();
 
   document.getElementById('nav').innerHTML = html;
+  mountSearch();
   document.getElementById('who').textContent = ME.name;
   const roleLine = ROLE_LABELS[ME.role] || ME.role.replace(/_/g, ' ');
   const branch = MY && MY.branch ? MY.branch.short : (MY && MY.sees_all_branches ? 'All branches' : '');
@@ -427,6 +428,44 @@ function markNav(hash) {
     const nav = a.dataset.nav;
     a.classList.toggle('active', exact ? a === exact : (!nav.includes('?') && hash.split('?')[0].startsWith(nav)));
   });
+}
+
+/* ---------- global search ---------- */
+let SEARCH_T = null;
+function mountSearch() {
+  const host = document.getElementById('searchMount');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="gsearch">
+      <input id="gq" type="search" placeholder="Search box, shipment, container, customer…"
+             autocomplete="off" oninput="onSearchInput()" onkeydown="if(event.key==='Escape')closeSearch()">
+      <div class="gsearch-results" id="gres" style="display:none"></div>
+    </div>`;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.gsearch')) closeSearch();
+  });
+}
+function closeSearch() { const r = document.getElementById('gres'); if (r) r.style.display = 'none'; }
+function onSearchInput() {
+  clearTimeout(SEARCH_T);
+  SEARCH_T = setTimeout(runSearch, 220);
+}
+async function runSearch() {
+  const q = (document.getElementById('gq') || {}).value || '';
+  const box = document.getElementById('gres');
+  if (!box) return;
+  if (q.trim().length < 2) { closeSearch(); return; }
+  try {
+    const d = await api('/api/search?q=' + encodeURIComponent(q));
+    box.style.display = '';
+    box.innerHTML = d.groups.length
+      ? d.groups.map(g => `
+          <div class="gs-group">${esc(g.label)}</div>
+          ${g.items.map(i => `<a class="gs-item" href="${i.href}" onclick="closeSearch()">
+              <div class="gs-label">${esc(i.label)}</div>
+              <div class="gs-sub">${esc(i.sub || '')}</div></a>`).join('')}`).join('')
+      : `<div class="gs-empty">Nothing found for “${esc(q)}”</div>`;
+  } catch (e) { closeSearch(); }
 }
 
 /* ---------- router ---------- */
@@ -456,6 +495,7 @@ async function route() {
     if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
     if (p[0] === 'containers' && p[1]) return pageContainerDetail(+p[1]);
     if (p[0] === 'containers') return pageContainers();
+    if (p[0] === 'origin-warehouse-doc') return pageOriginWarehouseDoc();
     if (p[0] === 'origin-warehouse') return pageOriginWarehouse();
     if (p[0] === 'warehouse') return pageWarehouse();
     if (p[0] === 'trips' && p[1]) return pageTripDetail(+p[1]);
@@ -535,10 +575,71 @@ function scanFeedback(html) {
 async function lookupBox(code) { return api('/api/boxes/lookup/' + encodeURIComponent(code)); }
 
 /* ---------- dashboard ---------- */
+// A horizontal bar chart drawn with plain elements — prints cleanly and needs no library.
+function barChart(rows, { max, fmt = (v) => v } = {}) {
+  const top = max || Math.max(1, ...rows.map(r => r.value));
+  return rows.map(r => `
+    <div class="bar-row">
+      <div class="muted">${esc(r.label)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.round((r.value / top) * 100)}%${r.color ? ';background:' + r.color : ''}"></div></div>
+      <div class="bar-val">${esc(String(fmt(r.value)))}</div>
+    </div>`).join('');
+}
+// Boxes handled per month over the last six months, as a sparkline-style column chart.
+function columnChart(points, { height = 90 } = {}) {
+  const top = Math.max(1, ...points.map(p => p.value));
+  return `<div style="display:flex;align-items:flex-end;gap:8px;height:${height}px;margin-top:6px">
+    ${points.map(p => `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%">
+        <div style="font-size:11px;font-weight:700">${p.value}</div>
+        <div style="width:100%;background:var(--primary);border-radius:4px 4px 0 0;height:${Math.max(2, Math.round((p.value / top) * (height - 22)))}px"></div>
+      </div>`).join('')}
+  </div>
+  <div style="display:flex;gap:8px;margin-top:4px">
+    ${points.map(p => `<div style="flex:1;text-align:center;font-size:10.5px;color:var(--muted)">${esc(p.label)}</div>`).join('')}
+  </div>`;
+}
+
 async function pageDashboard() {
-  const d = await api('/api/dashboard');
+  const [d, pnl] = await Promise.all([
+    api('/api/dashboard'),
+    isAccounting() ? api('/api/accounting/pnl').catch(() => null) : Promise.resolve(null)
+  ]);
   const tiles = PIPELINE.filter(s => s !== 'CANCELLED').map(s =>
     `<a class="tile" href="#/boxes?status=${s}"><div class="num">${d.byStatus[s] || 0}</div><div class="lbl">${esc(STATUS_LABELS[s])}</div></a>`).join('');
+  // Pipeline as a bar chart, and the last six months of box volume.
+  const pipelineRows = PIPELINE.filter(x => x !== 'CANCELLED')
+    .map(x => ({ label: STATUS_LABELS[x], value: d.byStatus[x] || 0 }))
+    .filter(r => r.value > 0);
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - i);
+    const key = dt.toISOString().slice(0, 7);
+    months.push({ key, label: dt.toLocaleDateString('en-PH', { month: 'short' }), value: (d.boxesByMonth || {})[key] || 0 });
+  }
+  const chartsHtml = `
+    <div class="chart-grid">
+      <div class="chart-card">
+        <h3>Pipeline</h3>
+        ${pipelineRows.length ? barChart(pipelineRows) : '<div class="muted">No boxes in the pipeline.</div>'}
+      </div>
+      <div class="chart-card">
+        <h3>Boxes handled — last 6 months</h3>
+        ${columnChart(months)}
+      </div>
+      ${pnl ? `<div class="chart-card">
+        <h3>Profit &amp; Loss ${pnl.branch && pnl.branch !== 'ALL' ? `<span class="muted" style="font-weight:400">· ${esc(NODE_LABELS[pnl.branch] || pnl.branch)}</span>` : ''}</h3>
+        <div class="pnl-line"><span>Revenue billed</span><b>${esc(money(pnl.revenue.billed, pnl.currency))}</b></div>
+        <div class="pnl-line"><span class="muted">Collected</span><span>${esc(money(pnl.revenue.collected, pnl.currency))}</span></div>
+        <div class="pnl-line"><span class="muted">Receivable</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>
+        ${pnl.interbranch && pnl.interbranch.income ? `<div class="pnl-line"><span class="muted">Inter-branch income</span><span>${esc(money(pnl.interbranch.income, pnl.currency))}</span></div>` : ''}
+        <div class="pnl-line"><span>Expenses</span><span class="neg">− ${esc(money(pnl.expenses.total, pnl.currency))}</span></div>
+        ${pnl.interbranch && pnl.interbranch.cost ? `<div class="pnl-line"><span class="muted">Inter-branch charges</span><span class="neg">− ${esc(money(pnl.interbranch.cost, pnl.currency))}</span></div>` : ''}
+        <div class="pnl-line total"><span>Net profit</span>
+          <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>
+        <div style="margin-top:8px"><a href="#/accounting/pnl">Full profit &amp; loss →</a></div>
+      </div>` : ''}
+    </div>`;
+
   view(`
     <h1>${VI.t('dash.title')}</h1>
     <div class="tiles">
@@ -546,6 +647,7 @@ async function pageDashboard() {
       <a class="tile" href="#/returns" style="outline:2px solid var(--red)"><div class="num" style="color:var(--red)">${d.returnsCount}</div><div class="lbl">${VI.t('dash.returns')}</div></a>
       <a class="tile" href="#/reports"><div class="num">${d.unpaidShipments}</div><div class="lbl">${VI.t('dash.unpaid')}</div></a>
     </div>
+    ${chartsHtml}
     <h2>${VI.t('dash.pipeline')}</h2>
     <div class="tiles">${tiles}</div>
     <h2>${VI.t('dash.inTransit')}</h2>
@@ -1695,7 +1797,7 @@ async function pageOriginWarehouse(size, util) {
   view(`
     <div class="row" style="justify-content:space-between">
       <h1>Origin Warehouse${wh.scope ? ` <span class="badge st-created">${esc(wh.scope)}</span>` : ''}</h1>
-      <button class="secondary" onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
+      <a href="#/origin-warehouse-doc"><button class="secondary">📄 Printable document (PDF)</button></a>
     </div>
     <div class="muted" style="margin-bottom:10px">Master list of boxes received at origin and waiting to be stuffed into a container${wh.scope ? ` — ${esc(wh.scope)} only` : ''}.</div>
 
@@ -1801,6 +1903,72 @@ async function pageWarehouse() {
       <td>${regionBadge(b.receiver_region)}</td>
       <td><button class="small" onclick="doStatus(${b.id}, 'SORTED', '', '${esc(b.receiver_region || '')}')">Sort</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing waiting</td></tr>'}
     </table></div>`;
+}
+
+/* Printable origin-warehouse stock report — a proper document, not the screen page. */
+async function pageOriginWarehouseDoc() {
+  const wh = await api('/api/origin-warehouse');
+  const rows = wh.boxes || [];
+  const bySize = {};
+  for (const b of rows) {
+    const k = b.size_category || '—';
+    bySize[k] = bySize[k] || { count: 0, weight: 0, cbm: 0 };
+    bySize[k].count += 1;
+    bySize[k].weight += +(b.weight_kg || 0);
+    bySize[k].cbm += +(b.cbm || 0);
+  }
+  const printedAt = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
+  view(`
+    <style>@page { size: 8.5in 13in; margin: 0.4in; }</style>
+    <div class="row no-print" style="justify-content:space-between">
+      <h1>Origin Warehouse — stock report</h1>
+      <div>
+        <a href="#/origin-warehouse"><button class="secondary">← Back</button></a>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
+      </div>
+    </div>
+
+    <div class="manifest">
+      <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
+      <div class="rc-title">ORIGIN WAREHOUSE STOCK REPORT${wh.scope ? ' — ' + esc(wh.scope.toUpperCase()) : ''}</div>
+      <div class="rc-meta">
+        Printed: <b>${esc(printedAt)}</b> · Prepared by: <b>${esc(ME.name)}</b><br>
+        Boxes awaiting stuffing: <b>${wh.totals.count}</b> ·
+        Total weight: <b>${wh.totals.weight_kg} kg</b> ·
+        Total volume: <b>${wh.totals.cbm} cbm</b>
+      </div>
+
+      <div class="rc-label" style="margin-top:12px">SUMMARY BY BOX SIZE</div>
+      <table class="rc-table">
+        <tr><th>Size</th><th>Boxes</th><th>Weight (kg)</th><th>Volume (cbm)</th></tr>
+        ${Object.entries(bySize).map(([k, v]) => `<tr>
+          <td>${esc(SIZE_LABEL(k))}</td><td>${v.count}</td>
+          <td>${v.weight.toFixed(1)}</td><td>${v.cbm.toFixed(3)}</td></tr>`).join('') || '<tr><td colspan="4">None</td></tr>'}
+        <tr><td><b>TOTAL</b></td><td><b>${wh.totals.count}</b></td>
+          <td><b>${wh.totals.weight_kg}</b></td><td><b>${wh.totals.cbm}</b></td></tr>
+      </table>
+
+      <div class="rc-label" style="margin-top:14px">BOX MASTER LIST (${rows.length})</div>
+      <table class="rc-table">
+        <tr><th>#</th><th>Box number</th><th>Sender</th><th>Receiver</th><th>Destination</th><th>Size</th><th>Kg</th><th>cbm</th><th>Received</th></tr>
+        ${rows.map((b, i) => `<tr>
+          <td>${i + 1}</td>
+          <td><b>${esc(b.box_number)}</b></td>
+          <td>${esc(b.sender_name || '')}</td>
+          <td>${esc(b.receiver_name || '')}</td>
+          <td>${esc(b.receiver_city || '')}${b.region ? ' · ' + esc(REGION_LABELS[b.region] || b.region) : ''}</td>
+          <td>${esc(SIZE_LABEL(b.size_category))}</td>
+          <td>${b.weight_kg || ''}</td>
+          <td>${b.cbm != null ? b.cbm : ''}</td>
+          <td>${fmtDay(b.status_updated_at || b.created_at)}</td>
+        </tr>`).join('') || '<tr><td colspan="9">No boxes waiting.</td></tr>'}
+      </table>
+
+      <div class="rc-sign" style="margin-top:26px">
+        <div><div class="rc-sigline"></div>Prepared by (Warehouse)</div>
+        <div><div class="rc-sigline"></div>Verified by (Branch Manager)</div>
+      </div>
+    </div>`);
 }
 
 /* ---------- trips ---------- */
@@ -2266,7 +2434,7 @@ let ACCT_META = null;
 
 async function pageAccounting(tab) {
   if (!ACCT_META) ACCT_META = await api('/api/accounting/meta');
-  const tabs = [['rates', 'Rate Cards'], ['invoices', 'Billing & Receipts'], ['interbranch', 'Inter-branch'], ['expenses', 'Expenses'], ['pnl', 'Profit & Loss']];
+  const tabs = [['rates', 'Rate Cards'], ['interbranch', 'Inter-branch'], ['expenses', 'Expenses'], ['pnl', 'Profit & Loss']];
   view(`
     <h1>Accounting</h1>
     <div class="row" style="gap:6px;margin-bottom:12px">
@@ -2274,7 +2442,7 @@ async function pageAccounting(tab) {
     </div>
     <div id="acctBody">Loading…</div>`);
   if (tab === 'rates') return renderRateCard();
-  if (tab === 'invoices') return renderInvoices();
+  if (tab === 'invoices') { location.hash = '#/accounting/interbranch'; return; }
   if (tab === 'interbranch') return renderInterbranch();
   if (tab === 'expenses') return renderExpenses();
   return renderPnl();
@@ -2334,8 +2502,17 @@ async function renderRateCard(branch) {
         <tr>${zones.map(z => `<td>${cell('rc_air_' + z.key, card.air[ACCT_META.air_level][z.key])}</td>`).join('')}</tr>
       </table></div>
 
+      <div class="rc-label" style="margin-top:12px">Extra destination charges <span class="muted" style="font-weight:400">(billed on an inter-branch settlement only when they actually occur)</span></div>
+      <div class="table-scroll"><table>
+        <tr><th>Charge</th><th>Unit</th><th>Rate</th></tr>
+        ${(ACCT_META.extra_charges || []).map(x => `<tr>
+          <td>${esc(x.label)}</td><td class="muted">per ${esc(x.unit)}</td>
+          <td>${cell('rc_x_' + x.key, (card.interbranch_extras || {})[x.key])}</td></tr>`).join('')}
+      </table></div>
+
       ${editable
-        ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>`
+        ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
+           <button class="secondary" style="margin-top:14px" onclick="undoRateCard()">↩ Undo last save</button>`
         : `<div class="note-info" style="margin-top:14px">Rate cards are commercial policy and can only be changed from the <b>Developer Console portal</b> (/dev). This is a read-only view of the rates your branch is billed on.</div>`}
     </div>`;
 }
@@ -2349,7 +2526,8 @@ async function saveRateCard() {
       Object.fromEntries(zones.map(z => [z.key,
         Object.fromEntries(sizes.map(s => [s.key, v(`rc_${lvl}_${z.key}_${s.key}`)]))]))])),
     air: { [ACCT_META.air_level]: Object.fromEntries(zones.map(z => [z.key, v('rc_air_' + z.key)])) },
-    interbranch_container: Object.fromEntries(CONTAINER_SIZE_KEYS.map(k => [k, v('rc_ib_' + k)]))
+    interbranch_container: Object.fromEntries(CONTAINER_SIZE_KEYS.map(k => [k, v('rc_ib_' + k)])),
+    interbranch_extras: Object.fromEntries((ACCT_META.extra_charges || []).map(x => [x.key, v('rc_x_' + x.key)]))
   };
   try {
     await api('/api/accounting/rate-card' + (RC_BRANCH ? '?branch=' + encodeURIComponent(RC_BRANCH) : ''), { method: 'PUT', body });
@@ -2513,7 +2691,7 @@ async function renderPnl(from, to) {
 }
 
 /* ---------- branch-to-branch settlements ---------- */
-const IB_BADGE = { DRAFT: 'st-created', ISSUED: 'st-sorted', PAID: 'st-delivered', DISPUTED: 'st-returned', VOID: 'st-cancelled' };
+const IB_BADGE = { DRAFT: 'st-created', ISSUED: 'st-sorted', RECEIVED: 'st-assigned', REMITTED: 'st-loaded', PAID: 'st-delivered', DISPUTED: 'st-returned', VOID: 'st-cancelled' };
 let IB_DRAFT = null;
 
 async function renderInterbranch() {
@@ -2531,8 +2709,11 @@ async function renderInterbranch() {
     <td><span class="badge ${IB_BADGE[i.status]}">${esc(i.status)}</span></td>
     <td class="inline-actions">
       ${i.status === 'DRAFT' && canIssue ? `<button class="small" onclick="setIb(${i.id},'ISSUED')">Issue</button>` : ''}
-      ${i.status === 'ISSUED' && canIssue ? `<button class="small" onclick="setIb(${i.id},'PAID')">Mark settled</button>` : ''}
-      ${['ISSUED','DISPUTED'].includes(i.status) && i.direction === 'PAYABLE' ? `<button class="small secondary" onclick="disputeIb(${i.id})">Dispute</button>` : ''}
+      ${i.status === 'ISSUED' && i.direction !== 'RECEIVABLE' ? `<button class="small" onclick="setIb(${i.id},'RECEIVED')">Acknowledge</button>` : ''}
+      ${['ISSUED','RECEIVED'].includes(i.status) && i.direction !== 'RECEIVABLE' ? `<button class="small" onclick="remitIb(${i.id})">Pay / remit</button>` : ''}
+      ${i.status === 'REMITTED' && canIssue ? `<button class="small" onclick="setIb(${i.id},'PAID')">Confirm received</button>` : ''}
+      ${['ISSUED','RECEIVED','DISPUTED'].includes(i.status) && i.direction !== 'RECEIVABLE' ? `<button class="small secondary" onclick="disputeIb(${i.id})">Dispute</button>` : ''}
+      ${(i.history || []).length ? `<button class="small secondary" onclick="undoIb(${i.id})" title="Undo the last change">↩ Undo</button>` : ''}
       ${i.status !== 'VOID' && canIssue ? `<button class="small secondary danger" onclick="setIb(${i.id},'VOID')">Void</button>` : ''}
     </td></tr>`;
 
@@ -2582,9 +2763,41 @@ async function generateIb() {
           <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
           ${q.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, q.currency))}</td><td>${esc(money(l.amount, q.currency))}</td></tr>`).join('')}
         </table>
+        <div class="rc-label" style="margin-top:12px">Add an extra charge <span class="muted" style="font-weight:400">(only if incurred)</span></div>
+        <div class="row" style="gap:6px;flex-wrap:nowrap">
+          <select id="ibExtra" style="flex:2">${(ACCT_META.extra_charges || []).map(x => `<option value="${x.key}">${esc(x.label)} (per ${esc(x.unit)})</option>`).join('')}</select>
+          <input id="ibExtraQty" type="number" min="1" value="1" style="width:90px" title="Quantity">
+          <button type="button" class="secondary" onclick="addIbExtra()">Add</button>
+        </div>
         <button style="margin-top:10px" onclick="saveIb()">Create this settlement</button>
       </div>`;
   } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+// Append an extra destination charge to the draft, priced from the rate card.
+async function addIbExtra() {
+  if (!IB_DRAFT) return;
+  const key = document.getElementById('ibExtra').value;
+  const qty = Math.max(1, +document.getElementById('ibExtraQty').value || 1);
+  const meta = (ACCT_META.extra_charges || []).find(x => x.key === key) || { label: key, unit: '' };
+  try {
+    const card = await api('/api/accounting/rate-card?branch=' + encodeURIComponent(IB_DRAFT.from_branch));
+    const unit = +((card.interbranch_extras || {})[key] || 0);
+    if (!unit) { showErr(new Error(`No rate is set for “${meta.label}” — set it in Rate Cards first.`)); return; }
+    IB_DRAFT.lines.push({ description: `${meta.label} × ${qty}`, container_size: null, qty, unit_amount: unit, amount: +(qty * unit).toFixed(2) });
+    const total = IB_DRAFT.lines.reduce((n, l) => n + l.amount, 0);
+    flash(`Added ${meta.label} — new total ${money(total, IB_DRAFT.currency)}`);
+    // re-render the preview table
+    const host = document.getElementById('ibPreview');
+    if (host) host.innerHTML = `
+      <div class="card" style="margin-top:10px">
+        <b>Draft settlement — ${esc(money(total, IB_DRAFT.currency))}</b>
+        <table style="margin-top:8px">
+          <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
+          ${IB_DRAFT.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, IB_DRAFT.currency))}</td><td>${esc(money(l.amount, IB_DRAFT.currency))}</td></tr>`).join('')}
+        </table>
+        <button style="margin-top:10px" onclick="saveIb()">Create this settlement</button>
+      </div>`;
+  } catch (e) { showErr(e); }
 }
 async function saveIb() {
   if (!IB_DRAFT) return;
@@ -2598,6 +2811,21 @@ async function saveIb() {
 async function setIb(id, status) {
   if (status === 'VOID' && !confirm('Void this settlement?')) return;
   try { await api('/api/accounting/interbranch/' + id, { method: 'PUT', body: { status } }); flash('Settlement → ' + status); renderInterbranch(); }
+  catch (e) { showErr(e); }
+}
+async function remitIb(id) {
+  const ref = prompt('Payment reference (bank transfer or receipt number):');
+  if (!ref) return;
+  try { await api('/api/accounting/interbranch/' + id, { method: 'PUT', body: { status: 'REMITTED', settled_reference: ref } }); flash('Marked as remitted'); renderInterbranch(); }
+  catch (e) { showErr(e); }
+}
+async function undoIb(id) {
+  try { const r = await api('/api/accounting/interbranch/' + id + '/undo', { method: 'POST' }); flash('Undone — back to ' + r.undone_to); renderInterbranch(); }
+  catch (e) { showErr(e); }
+}
+async function undoRateCard() {
+  if (!confirm('Roll this rate card back to the version before the last save?')) return;
+  try { await api('/api/accounting/rate-card/undo', { method: 'POST' }); flash('Rate card rolled back'); renderRateCard(); }
   catch (e) { showErr(e); }
 }
 async function disputeIb(id) {

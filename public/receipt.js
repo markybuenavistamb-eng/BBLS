@@ -61,7 +61,7 @@ function officialReceiptHtml(s, box, opts = {}) {
   const line = (label, value) => `<div class="or-kv"><span>${esc(label)}</span><b>: ${esc(value == null ? '' : String(value))}</b></div>`;
 
   return `
-  <div class="or-receipt">
+  <div class="or-receipt${opts.cls || ''}">
     <div class="or-top">
       <div class="or-top-left">
         ${barcodeSvg(tracking)}
@@ -143,22 +143,28 @@ function officialReceiptHtml(s, box, opts = {}) {
 
 /* Page: one receipt per box (the sender keeps one per box), or a single shipment receipt. */
 async function pageSenderReceipt(shipmentId) {
+  // receipt-meta assigns the Serial No. on first view and derives the MIN for this deployment.
   const [s, bir] = await Promise.all([
     api('/api/shipments/' + shipmentId),
-    api('/api/settings/bir').catch(() => ({}))
+    api('/api/receipt-meta/' + shipmentId).catch(() => ({}))
   ]);
   const perBox = (hashQuery().get('per') || 'shipment') === 'box';
+  const size = hashQuery().get('size') === '6x4' ? '6x4' : 'legal';
+  document.body.classList.toggle('print-6x4', size === '6x4');
+  const cls = size === '6x4' ? ' or-6x4' : '';
   const docs = perBox && s.boxes.length
-    ? s.boxes.map(b => officialReceiptHtml(s, b, bir))
-    : [officialReceiptHtml(s, null, bir)];
-  const missing = ['accreditation_no', 'min', 'serial_no'].filter(k => !bir[k]);
+    ? s.boxes.map(b => officialReceiptHtml(s, b, { ...bir, cls }))
+    : [officialReceiptHtml(s, null, { ...bir, cls })];
+  // MIN and Serial are generated automatically; only the BIR-issued fields can be missing.
+  const missing = ['accreditation_no'].filter(k => !bir[k]);
   view(`
-    <style>@page { size: 8.5in 13in; margin: 0.35in; }</style>
+    <style>@page { size: ${size === '6x4' ? '6in 4in' : '8.5in 13in'}; margin: ${size === '6x4' ? '0.15in' : '0.35in'}; }</style>
     <div class="row no-print" style="justify-content:space-between">
       <h1>Official Receipt — ${esc(s.shipment_number)}</h1>
       <div>
-        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'shipment' : 'box'}"><button class="secondary">${perBox ? 'One receipt per shipment' : 'One receipt per box'}</button></a>
-        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
+        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'shipment' : 'box'}&size=${size}"><button class="secondary">${perBox ? 'One receipt per shipment' : 'One receipt per box'}</button></a>
+        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'box' : 'shipment'}&size=${size === '6x4' ? 'legal' : '6x4'}"><button class="secondary">${size === '6x4' ? 'Legal 8.5 × 13 in' : 'Small 6 × 4 in'}</button></a>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size ${size === '6x4' ? '6 × 4 in' : 'Legal (8.5 × 13 in)'}">🖨 Print / Save as PDF</button>
       </div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">Sender's copy.</div>
