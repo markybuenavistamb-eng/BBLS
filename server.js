@@ -1339,6 +1339,24 @@ app.put('/api/templates/:key', requireRole(...ADMINS), (req, res) => {
   res.json(d.settings.smsTemplates[req.params.key]);
 });
 
+// ---------- BIR registration details printed on every official receipt ----------
+// These are VFIC's own registration particulars, not secrets — they are required to appear
+// on the face of a Philippine official receipt.
+const BIR_FIELDS = ['tin', 'accreditation_no', 'min', 'serial_no', 'permit_no'];
+app.get('/api/settings/bir', requireAuth, (req, res) => {
+  const bir = db.get().settings.bir || {};
+  res.json(Object.fromEntries(BIR_FIELDS.map(k => [k, bir[k] || ''])));
+});
+app.put('/api/settings/bir', requireRole(...ADMINS), (req, res) => {
+  const d = db.get();
+  d.settings.bir = d.settings.bir || {};
+  for (const k of BIR_FIELDS) {
+    if (k in (req.body || {})) d.settings.bir[k] = String(req.body[k] || '').trim();
+  }
+  db.persist();
+  res.json(Object.fromEntries(BIR_FIELDS.map(k => [k, d.settings.bir[k] || ''])));
+});
+
 // ---------- rate settings (admin) ----------
 app.put('/api/settings/rates', requireRole(...ADMINS), (req, res) => {
   const d = db.get();

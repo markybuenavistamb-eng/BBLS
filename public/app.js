@@ -2675,13 +2675,38 @@ async function renderBoxMovement(filter) {
 }
 
 /* ---------- admin ---------- */
+const BIR_FIELDS = ['tin', 'accreditation_no', 'min', 'serial_no', 'permit_no'];
+async function saveBir() {
+  const body = Object.fromEntries(BIR_FIELDS.map(k => [k, (document.getElementById('bir_' + k) || {}).value || '']));
+  const msg = document.getElementById('birMsg');
+  try {
+    await api('/api/settings/bir', { method: 'PUT', body });
+    if (msg) msg.textContent = 'Saved — these now print on every official receipt.';
+    flash('Receipt details saved');
+  } catch (e) { showErr(e); }
+}
 async function pageAdmin() {
-  const [users, tpl] = await Promise.all([api('/api/users'), api('/api/templates')]);
+  const [users, tpl, bir] = await Promise.all([api('/api/users'), api('/api/templates'), api('/api/settings/bir')]);
   view(`
     <div class="row" style="justify-content:space-between">
       <h1>Admin</h1>
       <a href="#/role-modules"><button class="secondary">🔐 Roles &amp; Modules</button></a>
     </div>
+
+    <h2>Official Receipt details <span class="muted" style="font-size:13px;font-weight:400">(printed on every receipt)</span></h2>
+    <div class="card">
+      <div class="muted" style="margin-bottom:6px">VFIC's BIR registration particulars. Anything left blank prints as “—” on the receipt.</div>
+      <div class="form-grid" id="birForm">
+        <div><label>VAT Reg. TIN</label><input id="bir_tin" placeholder="000-000-000-00000"></div>
+        <div><label>Accreditation No.</label><input id="bir_accreditation_no" placeholder="PR0000000000"></div>
+        <div><label>MIN <span class="muted">(Machine Identification No.)</span></label><input id="bir_min"></div>
+        <div><label>Serial No.</label><input id="bir_serial_no"></div>
+        <div><label>Permit No. <span class="muted">(if any)</span></label><input id="bir_permit_no"></div>
+      </div>
+      <button onclick="saveBir()">Save receipt details</button>
+      <span id="birMsg" class="muted" style="margin-left:8px"></span>
+    </div>
+
     <h2>SMS templates</h2>
     <div class="card">
       <div class="muted">Placeholders: ${tpl.placeholders.map(p => `<code>{${p}}</code>`).join(' ')}</div>
@@ -2711,6 +2736,9 @@ async function pageAdmin() {
       </tr>`).join('')}
       </table>
     </div>`);
+
+  // Fill in the saved BIR particulars.
+  BIR_FIELDS.forEach(k => { const el = document.getElementById('bir_' + k); if (el) el.value = bir[k] || ''; });
 }
 async function saveTemplate(key) {
   try {

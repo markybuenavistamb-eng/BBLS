@@ -69,9 +69,9 @@ function officialReceiptHtml(s, box, opts = {}) {
       </div>
       <div class="or-top-right">
         <div class="or-official">THIS SERVES AS AN OFFICIAL RECEIPT</div>
-        ${line('Accreditation No', opts.accreditation || '—')}
+        ${line('Accreditation No', opts.accreditation_no || '—')}
         ${line('MIN', opts.min || '—')}
-        ${line('Serial No', opts.serial || '—')}
+        ${line('Serial No', opts.serial_no || '—')}
         ${line('Official Receipt No', opts.orNumber || s.shipment_number)}
         ${line('Customer’s Copy', '')}
       </div>
@@ -143,9 +143,15 @@ function officialReceiptHtml(s, box, opts = {}) {
 
 /* Page: one receipt per box (the sender keeps one per box), or a single shipment receipt. */
 async function pageSenderReceipt(shipmentId) {
-  const s = await api('/api/shipments/' + shipmentId);
+  const [s, bir] = await Promise.all([
+    api('/api/shipments/' + shipmentId),
+    api('/api/settings/bir').catch(() => ({}))
+  ]);
   const perBox = (hashQuery().get('per') || 'shipment') === 'box';
-  const docs = perBox && s.boxes.length ? s.boxes.map(b => officialReceiptHtml(s, b)) : [officialReceiptHtml(s, null)];
+  const docs = perBox && s.boxes.length
+    ? s.boxes.map(b => officialReceiptHtml(s, b, bir))
+    : [officialReceiptHtml(s, null, bir)];
+  const missing = ['accreditation_no', 'min', 'serial_no'].filter(k => !bir[k]);
   view(`
     <style>@page { size: 8.5in 13in; margin: 0.35in; }</style>
     <div class="row no-print" style="justify-content:space-between">
@@ -155,6 +161,11 @@ async function pageSenderReceipt(shipmentId) {
         <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
       </div>
     </div>
-    <div class="muted no-print" style="margin-bottom:10px">Sender's copy. Accreditation, MIN, Serial and TIN print as “—” until VFIC's BIR details are set in Admin.</div>
+    <div class="muted no-print" style="margin-bottom:10px">Sender's copy.</div>
+    ${missing.length ? `<div class="note-warn card no-print">
+      Still to be filled in before these receipts are BIR-compliant:
+      <b>${missing.map(k => ({ accreditation_no: 'Accreditation No', min: 'MIN', serial_no: 'Serial No' })[k]).join(', ')}</b>.
+      Set them in <a href="#/admin">Admin → Official Receipt details</a>; they print as “—” until then.
+    </div>` : ''}
     ${docs.join('')}`);
 }
