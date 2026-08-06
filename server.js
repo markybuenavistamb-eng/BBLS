@@ -859,11 +859,60 @@ app.get('/api/search', requireAuth, (req, res) => {
     .slice(0, cap)
     .map(c => ({ label: c.full_name, sub: `${c.type} · ${c.phone_primary || ''}${c.city_municipality ? ' · ' + c.city_municipality : ''}`, href: '#/customers/' + c.id }));
 
+  const scope = branchScope(req.user);
+  const inScope = (country) => !scope || country === scope;
+
+  const trips = d.trips
+    .filter(t => hit(t.trip_number) || hit(t.driver_name) || hit(t.plate_number) || hit(t.trucking_company))
+    .slice(0, cap)
+    .map(t => ({ label: t.trip_number, sub: `${t.driver_name || ''} · ${REGION.LABELS[t.region] || t.region || ''} · ${t.status}`, href: '#/trips/' + t.id }));
+
+  const intake = (d.intake_requests || [])
+    .filter(r => inScope(r.origin_country))
+    .filter(r => hit(r.reference_code) || hit(personName(r.sender)) || hit((r.sender || {}).contact_numbers) || hit((r.sender || {}).email))
+    .slice(0, cap)
+    .map(r => ({ label: r.reference_code, sub: `${personName(r.sender)} · ${r.status}`, href: '#/intake-requests' }));
+
+  const orders = (d.box_orders || [])
+    .filter(o => hit(o.reference_code) || hit((o.contact || {}).name) || hit((o.contact || {}).phone) || hit((o.contact || {}).email))
+    .slice(0, cap)
+    .map(o => ({ label: o.reference_code, sub: `${(o.contact || {}).name || ''} · ${o.total_qty} box(es) · ${o.status}`, href: '#/box-orders' }));
+
+  const settlements = (d.interbranch_invoices || [])
+    .filter(i => ibVisible(req.user, i))
+    .filter(i => hit(i.invoice_number) || hit(i.settled_reference) || hit(i.notes))
+    .slice(0, cap)
+    .map(i => ({ label: i.invoice_number, sub: `${BRANCH.BRANCH_LABELS[i.from_branch] || i.from_branch} → ${BRANCH.BRANCH_LABELS[i.to_branch] || i.to_branch} · ${i.status}`, href: '#/accounting/interbranch' }));
+
+  const expenses = (d.expenses || [])
+    .filter(e => !e.deleted_at)
+    .filter(e => hit(e.description) || hit(e.category) || hit(e.recorded_by))
+    .slice(0, cap)
+    .map(e => ({ label: e.description, sub: `${e.category.replace(/_/g, ' ')} · ${e.currency} ${e.amount}`, href: '#/accounting/expenses' }));
+
+  const senders = (d.sender_accounts || [])
+    .filter(a => hit(a.name) || hit(a.email) || hit(a.phone))
+    .slice(0, cap)
+    .map(a => ({ label: a.name || a.email, sub: `Sender account · ${a.email}`, href: '#/customers' }));
+
+  const staff = ROLE.isAnyAdmin(req.user.role)
+    ? d.users.filter(u => hit(u.name) || hit(u.email) || hit(u.role))
+        .slice(0, cap)
+        .map(u => ({ label: u.name, sub: `${ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role} · ${u.email}`, href: '#/admin' }))
+    : [];
+
   const groups = [
     { key: 'boxes', label: 'Boxes', items: boxes },
     { key: 'shipments', label: 'Shipments', items: shipments },
     { key: 'containers', label: 'Containers', items: containers },
-    { key: 'customers', label: 'Customers', items: customers }
+    { key: 'customers', label: 'Customers', items: customers },
+    { key: 'intake', label: 'Online intake requests', items: intake },
+    { key: 'orders', label: 'Box orders', items: orders },
+    { key: 'trips', label: 'Trips', items: trips },
+    { key: 'settlements', label: 'Inter-branch settlements', items: settlements },
+    { key: 'expenses', label: 'Expenses', items: expenses },
+    { key: 'senders', label: 'Sender accounts', items: senders },
+    { key: 'staff', label: 'Staff', items: staff }
   ].filter(g => g.items.length);
   res.json({ q, groups, total: groups.reduce((n, g) => n + g.items.length, 0) });
 });
@@ -986,6 +1035,12 @@ app.get('/api/containers', requireAuth, (req, res) => {
 app.post('/api/containers', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const b = req.body || {};
   if (!b.container_number) return res.status(400).json({ error: 'Container number is required' });
+  // Containers are booked at origin by a branch. Head office consolidates nothing itself,
+  // so an HQ-side user has no origin to book from.
+  const bookingBranch = BRANCH.branchForRole(req.user.role);
+  if (bookingBranch === 'HQ_MANILA') {
+    return res.status(400).json({ error: 'Containers are booked by the origin branch (Thailand or Cambodia), not by head office.' });
+  }
   // A branch books its own containers: the origin port must be one of its own country's
   // ports, so a Thailand booking can never be filed against Cambodia.
   const scope = branchScope(req.user);
@@ -1928,6 +1983,32 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
     };
   });
 
+  // A mixed load: an even spread of every box size, which is how a consolidation usually
+  // fills — rather than the single-size ideal above. Sizes are added round-robin until either
+  // the usable volume or the payload weight runs out.
+  const sizes = BOXSIZE.BOX_SIZES;
+  const mixCount = Object.fromEntries(sizes.map(s => [s.key, 0]));
+  let mixCbm = 0, mixKg = 0, added = true;
+  while (added) {
+    added = false;
+    for (const s of sizes) {
+      if (mixCbm + s.cbm <= usableCbm && mixKg + s.standard_weight_kg <= cap.payload_kg) {
+        mixCount[s.key] += 1;
+        mixCbm = +(mixCbm + s.cbm).toFixed(3);
+        mixKg = +(mixKg + s.standard_weight_kg).toFixed(1);
+        added = true;
+      }
+    }
+  }
+  const mixed = {
+    boxes: Object.values(mixCount).reduce((n, v) => n + v, 0),
+    by_size: sizes.map(s => ({ size: s.key, label: s.label, count: mixCount[s.key], cbm_each: s.cbm })),
+    used_cbm: mixCbm, used_weight_kg: mixKg,
+    remaining_cbm: +(usableCbm - mixCbm).toFixed(3),
+    remaining_weight_kg: +(cap.payload_kg - mixKg).toFixed(1),
+    limited_by: (usableCbm - mixCbm) < (sizes[0].cbm) ? 'volume' : 'weight'
+  };
+
   // How much of what is actually waiting at the warehouse would fit — largest boxes first,
   // which is how a container is really stuffed.
   const waiting = originWarehouseBoxes(req.user, effectiveScope(req)).sort((a, b) => b.cbm - a.cbm);
@@ -1942,6 +2023,7 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
     container_size: size, container_label: SM.CONTAINER_SIZE_LABELS[size],
     capacity: { ...cap, utilisation: util, usable_cbm: usableCbm },
     per_size,
+    mixed,
     actual: {
       waiting_count: waiting.length,
       fits_count: fits.length,
@@ -1990,9 +2072,19 @@ app.get('/api/accounting/meta', requireRole(...ACCOUNTING_ROLES), (req, res) => 
   });
 });
 
+// Which parts of a rate card apply to a branch. Head office bills branches (inter-branch
+// only); a branch bills customers (customer tariff only).
+function cardSectionsFor(branchKey) {
+  const isHQ = (BRANCH.byKey(branchKey) || {}).type === 'HQ';
+  return { customer: !isHQ, interbranch: isHQ };
+}
 app.get('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const branch = accountingBranch(req);
-  res.json({ ...rateCardFor(db.get(), branch), branch, editable: req.user.role === 'DEVELOPER_ADMIN' });
+  res.json({
+    ...rateCardFor(db.get(), branch), branch,
+    sections: cardSectionsFor(branch),
+    editable: req.user.role === 'DEVELOPER_ADMIN'
+  });
 });
 // Rate cards are commercial policy: only the Developer portal may change them.
 app.put('/api/accounting/rate-card', requireRole('DEVELOPER_ADMIN'), (req, res) => {

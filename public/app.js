@@ -312,7 +312,6 @@ const NAV2 = [
   ['#/reports', 'nav.reports', 'chart', 'reports'],
   ['#/accounting', 'nav.accounting', 'chart', 'accounting'],
   { section: 'nav.section.system' },
-  ['#/branches', 'nav.branches', 'container', 'branches'],
   ['#/developer', 'nav.developer', 'gear', 'developer'],
   ['#/scan', 'nav.scan', 'scan', 'scan'],
   ['#/admin', 'nav.admin', 'gear', 'admin']
@@ -507,7 +506,6 @@ async function route() {
     if (p[0] === 'notifications') return pageNotifications();
     if (p[0] === 'reports') return pageReports();
     if (p[0] === 'accounting') return pageAccounting(p[1] || 'rates');
-    if (p[0] === 'branches') return pageBranches();
     if (p[0] === 'developer') return pageDeveloper();
     if (p[0] === 'role-modules') return pageRoleModules();
     if (p[0] === 'admin') return pageAdmin();
@@ -1535,9 +1533,12 @@ async function pageContainers() {
     (ref.origin_ports || []).map(g =>
       `<optgroup label="${esc(g.group)}">${(g.ports || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('')}</optgroup>`).join('');
   const destOpts = (ref.destination_ports || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  // Containers are booked at origin. A head-office user has no origin to book from.
+  const canBook = canIntake() && (!MY || !MY.branch || MY.branch.key !== "HQ_MANILA");
   view(`
     <h1>Containers</h1>
-    ${canIntake() ? `
+    ${!canBook && canIntake() ? `<div class="note-info" style="margin-bottom:12px">Containers are booked by the origin branch (Thailand or Cambodia). Head office consolidates and tracks them here.</div>` : ""}
+    ${canBook ? `
     <details class="collapse card"><summary>+ Book new container</summary>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
@@ -1834,6 +1835,24 @@ async function pageOriginWarehouse(size, util) {
           <td><span class="badge ${s.limited_by === 'volume' ? 'st-created' : 'st-sorted'}">${esc(s.limited_by)}</span></td>
         </tr>`).join('')}
       </table></div>
+    </div>
+
+    <div class="card">
+      <b>If loaded with a mixed size</b>
+      <div class="muted" style="margin:6px 0 10px">An even spread of every box size — closer to how a real consolidation fills.</div>
+      <div class="table-scroll"><table>
+        <tr><th>Box size</th><th>Volume each</th><th>Boxes</th></tr>
+        ${plan.mixed.by_size.map(m => `<tr>
+          <td><b>${esc(m.label)}</b></td><td>${m.cbm_each} cbm</td><td><b>${m.count}</b></td>
+        </tr>`).join('')}
+        <tr><td><b>TOTAL</b></td><td></td><td><b>${plan.mixed.boxes} boxes</b></td></tr>
+      </table></div>
+      <table style="margin-top:8px">
+        <tr><td>Volume used</td><td style="text-align:right"><b>${plan.mixed.used_cbm} cbm</b> of ${plan.capacity.usable_cbm} usable</td></tr>
+        <tr><td>Weight used</td><td style="text-align:right"><b>${plan.mixed.used_weight_kg.toLocaleString()} kg</b> of ${plan.capacity.payload_kg.toLocaleString()} kg</td></tr>
+        <tr><td>Remaining</td><td style="text-align:right">${plan.mixed.remaining_cbm} cbm · ${plan.mixed.remaining_weight_kg.toLocaleString()} kg</td></tr>
+        <tr><td>Limited by</td><td style="text-align:right"><span class="badge ${plan.mixed.limited_by === 'volume' ? 'st-created' : 'st-sorted'}">${esc(plan.mixed.limited_by)}</span></td></tr>
+      </table>
     </div>
 
     <div class="card">
@@ -2377,57 +2396,6 @@ async function saveRoleModules() {
   } catch (e) { showErr(e); }
 }
 
-/* ---------- branches / business partners ---------- */
-async function pageBranches() {
-  const { branches, currency } = await api('/api/branches');
-  view(`
-    <h1>Branches &amp; Business Partners</h1>
-    <div class="muted" style="margin-bottom:10px">Our Thailand and Cambodia operations run as independent business partners with their own staff, warehouse and shipments — consolidated here for head office. Only Master and Developer Admins can see this view.</div>
-    <div class="tiles">
-      ${branches.map(b => `<div class="tile">
-        <div class="num">${b.shipments}</div>
-        <div class="lbl">${esc(b.short)} shipments<br><span class="muted">${b.boxes} boxes · ${b.staff} staff</span></div>
-      </div>`).join('')}
-    </div>
-    ${branches.map(b => `
-      <div class="card">
-        <div class="row" style="justify-content:space-between;align-items:flex-start">
-          <div>
-            <h2 style="margin:0">${esc(b.label)}</h2>
-            <div class="muted">${esc(b.country)} · <span class="badge ${b.type === 'HQ' ? 'st-delivered' : 'st-created'}">${b.type === 'HQ' ? 'Head Office' : 'Business Partner'}</span></div>
-          </div>
-          <div style="text-align:right">
-            <div><b>${esc(money(b.revenue, currency))}</b><div class="muted">billed revenue</div></div>
-            ${b.type !== 'HQ' ? `<div style="margin-top:6px"><b>${esc(money(b.commission_due, currency))}</b><div class="muted">commission @ ${b.commission_pct || 0}%</div></div>` : ''}
-          </div>
-        </div>
-        <div class="form-grid" style="margin-top:10px">
-          <div><label>Registered partner name</label><input id="br_partner_name_${b.key}" value="${esc(b.partner_name || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
-          <div><label>Tax ID / TIN</label><input id="br_tax_id_${b.key}" value="${esc(b.tax_id || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
-          <div><label>Contact number</label><input id="br_contact_${b.key}" value="${esc(b.contact || '')}"></div>
-          <div><label>Email</label><input id="br_email_${b.key}" value="${esc(b.email || '')}"></div>
-          <div><label>Commission %</label><input id="br_commission_pct_${b.key}" type="number" min="0" max="100" step="0.01" value="${b.commission_pct || 0}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
-          <div><label>Settlement terms</label><input id="br_settlement_terms_${b.key}" value="${esc(b.settlement_terms || '')}" ${b.type === 'HQ' ? 'disabled' : ''}></div>
-        </div>
-        <label>Address</label><input id="br_address_${b.key}" value="${esc(b.address || '')}">
-        <div class="row" style="margin-top:10px;gap:8px">
-          <button onclick="saveBranch('${b.key}')">Save partner details</button>
-          <span class="muted">In transit: <b>${b.in_transit}</b> · Delivered: <b>${b.delivered}</b></span>
-        </div>
-      </div>`).join('')}`);
-}
-async function saveBranch(key) {
-  const g = (f) => (document.getElementById(`br_${f}_${key}`) || {}).value;
-  try {
-    await api('/api/branches/' + key, { method: 'PUT', body: {
-      partner_name: g('partner_name'), tax_id: g('tax_id'), contact: g('contact'),
-      email: g('email'), commission_pct: g('commission_pct'), settlement_terms: g('settlement_terms'),
-      address: g('address')
-    } });
-    flash('Partner details saved');
-  } catch (e) { showErr(e); }
-}
-
 /* ---------- accounting ---------- */
 const money = (v, ccy) => `${ccy || 'PHP'} ${Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 let ACCT_META = null;
@@ -2482,24 +2450,20 @@ async function renderRateCard(branch) {
         <div class="muted">Rate card for <b>${esc(NODE_LABELS[card.branch] || card.branch || 'Head office')}</b><br>${card.updated_at ? `Last updated ${fmtDate(card.updated_at)} by ${esc(card.updated_by || '')}` : 'Not saved yet'}</div>
       </div>
 
+      ${!card.sections || card.sections.customer ? `
       <div class="rc-label" style="margin-top:16px">Empty box price <span class="muted" style="font-weight:400">(what a customer pays to buy a box)</span></div>
       <div class="table-scroll"><table>
         <tr>${sizes.map(s => `<th>${esc(s.label)}<br><span class="muted" style="font-weight:400">${esc(s.dimensions)}</span></th>`).join('')}</tr>
         <tr>${sizes.map(s => `<td>${cell('rc_empty_' + s.key, card.empty_box_price[s.key])}</td>`).join('')}</tr>
       </table></div>
 
-      ${ACCT_META.ocean_levels.map(oceanTable).join('')}
+      ${ACCT_META.ocean_levels.map(oceanTable).join('')}` : ''}
 
+      ${!card.sections || card.sections.interbranch ? `
       <div class="rc-label" style="margin-top:12px">Inter-branch charge — ALL-IN per container <span class="muted" style="font-weight:400">(one flat fee per container covering the whole destination-side service for every box inside)</span></div>
       <div class="table-scroll"><table>
         <tr>${CONTAINER_SIZE_KEYS.map(k => `<th>${esc(CONTAINER_SIZE_LABELS[k] || k)}</th>`).join('')}</tr>
         <tr>${CONTAINER_SIZE_KEYS.map(k => `<td>${cell('rc_ib_' + k, (card.interbranch_container || {})[k])}</td>`).join('')}</tr>
-      </table></div>
-
-      <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[ACCT_META.air_level] || 'Express Air')} — price per kilo</div>
-      <div class="table-scroll"><table>
-        <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
-        <tr>${zones.map(z => `<td>${cell('rc_air_' + z.key, card.air[ACCT_META.air_level][z.key])}</td>`).join('')}</tr>
       </table></div>
 
       <div class="rc-label" style="margin-top:12px">Extra destination charges <span class="muted" style="font-weight:400">(billed on an inter-branch settlement only when they actually occur)</span></div>
@@ -2509,6 +2473,15 @@ async function renderRateCard(branch) {
           <td>${esc(x.label)}</td><td class="muted">per ${esc(x.unit)}</td>
           <td>${cell('rc_x_' + x.key, (card.interbranch_extras || {})[x.key])}</td></tr>`).join('')}
       </table></div>
+
+      ` : ''}
+
+      ${!card.sections || card.sections.customer ? `
+      <div class="rc-label" style="margin-top:12px">${esc(ACCT_META.service_level_labels[ACCT_META.air_level] || 'Express Air')} — price per kilo</div>
+      <div class="table-scroll"><table>
+        <tr>${zones.map(z => `<th>${esc(z.label)}</th>`).join('')}</tr>
+        <tr>${zones.map(z => `<td>${cell('rc_air_' + z.key, card.air[ACCT_META.air_level][z.key])}</td>`).join('')}</tr>
+      </table></div>` : ''}
 
       ${editable
         ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
@@ -2754,24 +2727,64 @@ async function generateIb() {
   out.innerHTML = '<div class="muted">Working…</div>';
   try {
     const q = await api('/api/accounting/interbranch/generate', { method: 'POST', body });
-    IB_DRAFT = { ...body, currency: q.currency, lines: q.lines };
-    out.innerHTML = `
-      <div class="card" style="margin-top:10px">
-        <b>Draft settlement — ${esc(money(q.total, q.currency))}</b>
-        <div class="muted">${q.containers_counted} container(s) arrived in the period, covering ${q.boxes_covered} box(es)</div>
-        <table style="margin-top:8px">
-          <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
-          ${q.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, q.currency))}</td><td>${esc(money(l.amount, q.currency))}</td></tr>`).join('')}
-        </table>
-        <div class="rc-label" style="margin-top:12px">Add an extra charge <span class="muted" style="font-weight:400">(only if incurred)</span></div>
-        <div class="row" style="gap:6px;flex-wrap:nowrap">
-          <select id="ibExtra" style="flex:2">${(ACCT_META.extra_charges || []).map(x => `<option value="${x.key}">${esc(x.label)} (per ${esc(x.unit)})</option>`).join('')}</select>
-          <input id="ibExtraQty" type="number" min="1" value="1" style="width:90px" title="Quantity">
-          <button type="button" class="secondary" onclick="addIbExtra()">Add</button>
-        </div>
-        <button style="margin-top:10px" onclick="saveIb()">Create this settlement</button>
-      </div>`;
+    IB_DRAFT = { ...body, currency: q.currency, lines: q.lines, containers_counted: q.containers_counted, boxes_covered: q.boxes_covered };
+    renderIbPreview();
   } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+// Redraw the draft preview, with a remove button on every line.
+function renderIbPreview() {
+  const host = document.getElementById('ibPreview');
+  if (!host || !IB_DRAFT) return;
+  const total = IB_DRAFT.lines.reduce((n, l) => n + l.amount, 0);
+  host.innerHTML = `
+    <div class="card" style="margin-top:10px">
+      <b>Draft settlement — ${esc(money(total, IB_DRAFT.currency))}</b>
+      ${IB_DRAFT.containers_counted != null ? `<div class="muted">${IB_DRAFT.containers_counted} container(s) arrived, covering ${IB_DRAFT.boxes_covered} box(es)</div>` : ''}
+      <table style="margin-top:8px">
+        <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th><th></th></tr>
+        ${IB_DRAFT.lines.map((l, i) => `<tr>
+          <td>${esc(l.description)}</td><td>${l.qty}</td>
+          <td>${esc(money(l.unit_amount, IB_DRAFT.currency))}</td>
+          <td>${esc(money(l.amount, IB_DRAFT.currency))}</td>
+          <td><button class="small secondary" onclick="removeIbLine(${i})">×</button></td></tr>`).join('')}
+      </table>
+
+      <div class="rc-label" style="margin-top:12px">Add an extra charge <span class="muted" style="font-weight:400">(priced from the rate card)</span></div>
+      <div class="row" style="gap:6px;flex-wrap:nowrap">
+        <select id="ibExtra" style="flex:2">${(ACCT_META.extra_charges || []).map(x => `<option value="${x.key}">${esc(x.label)} (per ${esc(x.unit)})</option>`).join('')}</select>
+        <input id="ibExtraQty" type="number" min="1" value="1" style="width:90px" title="Quantity">
+        <button type="button" class="secondary" onclick="addIbExtra()">Add</button>
+      </div>
+
+      <div class="rc-label" style="margin-top:12px">Add a custom line <span class="muted" style="font-weight:400">(anything not on the rate card)</span></div>
+      <div class="row" style="gap:6px;flex-wrap:nowrap">
+        <input id="ibCustDesc" placeholder="Description" style="flex:2">
+        <input id="ibCustQty" type="number" min="1" value="1" style="width:80px" title="Quantity">
+        <input id="ibCustAmt" type="number" min="0" step="0.01" placeholder="Unit amount" style="width:130px">
+        <button type="button" class="secondary" onclick="addIbCustomLine()">Add</button>
+      </div>
+
+      <button style="margin-top:12px" onclick="saveIb()">Create this settlement</button>
+    </div>`;
+}
+function removeIbLine(i) {
+  if (!IB_DRAFT) return;
+  IB_DRAFT.lines.splice(i, 1);
+  if (!IB_DRAFT.lines.length) { flash('All lines removed — add at least one before creating.', 'error'); }
+  renderIbPreview();
+}
+// A line that is not on the rate card at all.
+function addIbCustomLine() {
+  if (!IB_DRAFT) { showErr(new Error('Preview a settlement first.')); return; }
+  const desc = (document.getElementById('ibCustDesc').value || '').trim();
+  const qty = Math.max(1, +document.getElementById('ibCustQty').value || 1);
+  const unit = +document.getElementById('ibCustAmt').value || 0;
+  if (!desc) { showErr(new Error('Give the line a description.')); return; }
+  if (!unit) { showErr(new Error('Give the line an amount.')); return; }
+  IB_DRAFT.lines.push({ description: desc, container_size: null, qty, unit_amount: unit, amount: +(qty * unit).toFixed(2) });
+  document.getElementById('ibCustDesc').value = '';
+  document.getElementById('ibCustAmt').value = '';
+  renderIbPreview();
 }
 // Append an extra destination charge to the draft, priced from the rate card.
 async function addIbExtra() {
@@ -2786,17 +2799,7 @@ async function addIbExtra() {
     IB_DRAFT.lines.push({ description: `${meta.label} × ${qty}`, container_size: null, qty, unit_amount: unit, amount: +(qty * unit).toFixed(2) });
     const total = IB_DRAFT.lines.reduce((n, l) => n + l.amount, 0);
     flash(`Added ${meta.label} — new total ${money(total, IB_DRAFT.currency)}`);
-    // re-render the preview table
-    const host = document.getElementById('ibPreview');
-    if (host) host.innerHTML = `
-      <div class="card" style="margin-top:10px">
-        <b>Draft settlement — ${esc(money(total, IB_DRAFT.currency))}</b>
-        <table style="margin-top:8px">
-          <tr><th>Line</th><th>Qty</th><th>Unit</th><th>Amount</th></tr>
-          ${IB_DRAFT.lines.map(l => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${esc(money(l.unit_amount, IB_DRAFT.currency))}</td><td>${esc(money(l.amount, IB_DRAFT.currency))}</td></tr>`).join('')}
-        </table>
-        <button style="margin-top:10px" onclick="saveIb()">Create this settlement</button>
-      </div>`;
+    renderIbPreview();
   } catch (e) { showErr(e); }
 }
 async function saveIb() {
