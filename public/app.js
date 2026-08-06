@@ -284,14 +284,17 @@ function toggleNav(open) {
 
 /* ---------- roles (mirrors lib/roles.js) ---------- */
 const R_ADMINS = ['DEVELOPER_ADMIN', 'MASTER_ADMIN'];
+// A branch admin runs their branch's origin operations, so they count as origin staff
+// everywhere a shipper agent does (booking containers, encoding shipments, intake review).
+const R_BRANCH_ADMINS = ['BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH'];
 const R_SHIPPERS = ['SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'];
-const R_AGENTS = R_ADMINS.concat(R_SHIPPERS, ['CONSIGNEE_AGENT']);
+const R_AGENTS = R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS, ['CONSIGNEE_AGENT']);
 const ROLE_LABELS = {
   DEVELOPER_ADMIN: 'Developer Admin', MASTER_ADMIN: 'Master Admin',
   SHIPPER_AGENT_TH: 'Shipper Agent — Thailand', SHIPPER_AGENT_KH: 'Shipper Agent — Cambodia',
   CONSIGNEE_AGENT: 'Consignee Agent (Manila)', WAREHOUSE: 'Warehouse Staff', ACCOUNTING: 'Accounting'
 };
-const isAccounting = () => ME && R_ADMINS.concat(['ACCOUNTING']).includes(ME.role);
+const isAccounting = () => ME && R_ADMINS.concat(R_BRANCH_ADMINS, ['ACCOUNTING']).includes(ME.role);
 
 // Sidebar entries are gated by MODULE (see lib/modules.js), so an admin can switch any
 // module off for a role in Admin → Roles & Modules and it disappears from that role's nav.
@@ -518,7 +521,7 @@ window.addEventListener('hashchange', route);
 const isAdmin = () => ME && R_ADMINS.includes(ME.role);
 const isAgent = () => ME && R_AGENTS.includes(ME.role);
 const canDispatch = () => ME && R_ADMINS.concat(['CONSIGNEE_AGENT']).includes(ME.role);
-const canIntake = () => ME && R_ADMINS.concat(R_SHIPPERS).includes(ME.role);
+const canIntake = () => ME && R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS).includes(ME.role);
 
 /* ---------- QR scanning ---------- */
 function scannerHtml(hint) {
