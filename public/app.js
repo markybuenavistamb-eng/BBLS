@@ -136,7 +136,33 @@ function branchBanner() {
     <span>${esc(b.flag || '')} Viewing <b>${esc(b.label)}</b> only</span>
     <a href="${route}">Show all branches ✕</a></div>`;
 }
-function view(html) { stopScanner(); document.getElementById('view2').innerHTML = branchBanner() + html; }
+// Our own trail of pages visited inside the portal. The browser's history can hold entries
+// from before the app was opened, so Back walks this stack instead — it can never leave.
+// (The app's own hashchange listener re-renders, so goBack only has to set the hash.)
+const NAV_STACK = [];
+let NAV_PREV = location.hash || '#/dashboard';
+let NAV_GOING_BACK = false;
+window.addEventListener('hashchange', () => {
+  if (NAV_GOING_BACK) NAV_GOING_BACK = false;
+  else if (NAV_PREV !== location.hash) {
+    NAV_STACK.push(NAV_PREV);
+    if (NAV_STACK.length > 50) NAV_STACK.shift();
+  }
+  NAV_PREV = location.hash;
+});
+function goBack() {
+  const to = NAV_STACK.pop() || '#/dashboard';
+  if (location.hash === to) { route(); return; }
+  NAV_GOING_BACK = true;
+  location.hash = to;
+}
+// A Back control shown on every page except the dashboard, which is the root.
+function backBar() {
+  const hash = location.hash || '#/dashboard';
+  if (hash.startsWith('#/dashboard') || hash === '#/' || hash === '') return '';
+  return `<div class="back-bar no-print"><button class="secondary small" onclick="goBack()">← ${esc(VI.t('nav.back'))}</button></div>`;
+}
+function view(html) { stopScanner(); document.getElementById('view2').innerHTML = backBar() + branchBanner() + html; }
 function flash(msg, cls = 'success') {
   const el = document.createElement('div');
   el.className = cls;
@@ -382,8 +408,28 @@ function renderShell() {
         <span>${label}</span><span class="chev">${shut ? '▸' : '▾'}</span></button>
       <div class="nav-group-items${shut ? ' hidden' : ''}">${inner}</div>`;
   };
-  const linkFor = ([href, key, ic], suffix = '') =>
-    `<a href="${href}${suffix}" data-nav="${href}${suffix}" title="${esc(VI.t(key))}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span></a>`;
+  // Modules that have tabs or sections inside get a nested submenu in the sidebar, so an
+  // agent can jump straight to the tab they want instead of landing on the module first.
+  const SUBMENUS = {
+    accounting: [['#/accounting/rates', 'sub.rates'], ['#/accounting/interbranch', 'sub.interbranch'],
+                 ['#/accounting/expenses', 'sub.expenses'], ['#/accounting/pnl', 'sub.pnl']],
+    origin_warehouse: [['#/origin-warehouse', 'sub.stock'], ['#/origin-warehouse-doc', 'sub.printable']],
+    reports: [['#/reports?at=rp-box-movement', 'sub.boxmovement'], ['#/reports?at=rp-boxes-per-container', 'sub.percontainer'],
+              ['#/reports?at=rp-delivery-performance', 'sub.delivperf'], ['#/reports?at=rp-failed-reasons', 'sub.failed'],
+              ['#/reports?at=rp-unpaid-shipments', 'sub.unpaid']],
+    shipments: [['#/shipments', 'sub.allshipments'], ['#/shipments/new', 'sub.newintake'], ['#/intake-requests', 'sub.online']],
+    containers: [['#/containers', 'sub.allcontainers'], ['#/containers?at=cnBook', 'sub.bookcontainer']],
+    admin: [['#/admin', 'sub.users'], ['#/role-modules', 'sub.roles']]
+  };
+  const linkFor = ([href, key, ic, moduleKey], suffix = '') => {
+    const subs = !suffix && SUBMENUS[moduleKey];
+    const open = subs && location.hash.startsWith(href);
+    const shut = subs && (closed.has('sub:' + moduleKey) || !open);
+    const main = `<a href="${href}${suffix}" data-nav="${href}${suffix}" title="${esc(VI.t(key))}" onclick="toggleNav(false)">${icon(ic)}<span>${VI.t(key)}</span>${subs ? `<span class="sub-chev" onclick="event.preventDefault();event.stopPropagation();toggleNavGroup('sub:${moduleKey}')">${shut ? '▸' : '▾'}</span>` : ''}</a>`;
+    if (!subs) return main;
+    return main + `<div class="nav-sub${shut ? ' hidden' : ''}">${subs.map(([h, k]) =>
+      `<a href="${h}" data-nav="${h}" onclick="navSub('${h}')"><span>${esc(VI.t(k))}</span></a>`).join('')}</div>`;
+  };
 
   let html = '';
   // Head office view: one collapsible block of operations per branch, each filtered to that
@@ -420,6 +466,21 @@ function renderShell() {
   document.getElementById('whoRole').innerHTML = `${esc(roleLine)}${branch ? `<div class="who-branch">${esc(branch)}</div>` : ''}`;
   document.getElementById('langMount').innerHTML = VI.toggleHtml('renderShell();route()');
   markNav(location.hash || '#/dashboard');
+}
+// A submenu entry can point at a section of an already-open page (?at=…), where changing
+// the hash alone would not re-render. Re-route when the page changes, scroll either way.
+function navSub(href) {
+  toggleNav(false);
+  if (location.hash === href) route().then(() => scrollToSection(href));
+  else setTimeout(() => scrollToSection(href), 60);
+}
+function scrollToSection(href, tries = 12) {
+  const at = (href.split('?at=')[1] || '').split('&')[0];
+  if (!at) return;
+  const el = document.getElementById(at);
+  // Some sections (box movement) load after the page renders, so wait for them.
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  else if (tries > 0) setTimeout(() => scrollToSection(href, tries - 1), 120);
 }
 function markNav(hash) {
   // Branch links carry ?branch=…, so an exact match wins; otherwise fall back to the
@@ -617,6 +678,15 @@ async function pageDashboard() {
     const key = dt.toISOString().slice(0, 7);
     months.push({ key, label: dt.toLocaleDateString('en-PH', { month: 'short' }), value: (d.boxesByMonth || {})[key] || 0 });
   }
+  // Head office consolidates branches that bill in different currencies. Adding THB to USD
+  // would be a meaningless number, so the card lists each currency on its own line.
+  const revenueByCurrencyHtml = (p) => `
+    <div class="pnl-line"><span>Revenue billed</span><span class="muted">by currency</span></div>
+    ${Object.entries(p.by_currency).map(([c, r]) => `
+      <div class="pnl-line"><span class="muted" style="padding-left:10px">${esc(c)} · ${r.shipments} shipment(s)</span>
+        <b>${esc(money(r.billed, c))}</b></div>
+      <div class="pnl-line"><span class="muted" style="padding-left:20px">collected</span>
+        <span class="muted">${esc(money(r.collected, c))}</span></div>`).join('')}`;
   const chartsHtml = `
     <div class="chart-grid">
       <div class="chart-card">
@@ -629,14 +699,15 @@ async function pageDashboard() {
       </div>
       ${pnl ? `<div class="chart-card">
         <h3>Profit &amp; Loss ${pnl.branch && pnl.branch !== 'ALL' ? `<span class="muted" style="font-weight:400">· ${esc(NODE_LABELS[pnl.branch] || pnl.branch)}</span>` : ''}</h3>
+        ${pnl.mixed_currency ? revenueByCurrencyHtml(pnl) : `
         <div class="pnl-line"><span>Revenue billed</span><b>${esc(money(pnl.revenue.billed, pnl.currency))}</b></div>
         <div class="pnl-line"><span class="muted">Collected</span><span>${esc(money(pnl.revenue.collected, pnl.currency))}</span></div>
-        <div class="pnl-line"><span class="muted">Receivable</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>
+        <div class="pnl-line"><span class="muted">Receivable</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>`}
         ${pnl.interbranch && pnl.interbranch.income ? `<div class="pnl-line"><span class="muted">Inter-branch income</span><span>${esc(money(pnl.interbranch.income, pnl.currency))}</span></div>` : ''}
         <div class="pnl-line"><span>Expenses</span><span class="neg">− ${esc(money(pnl.expenses.total, pnl.currency))}</span></div>
         ${pnl.interbranch && pnl.interbranch.cost ? `<div class="pnl-line"><span class="muted">Inter-branch charges</span><span class="neg">− ${esc(money(pnl.interbranch.cost, pnl.currency))}</span></div>` : ''}
-        <div class="pnl-line total"><span>Net profit</span>
-          <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>
+        ${pnl.mixed_currency ? '' : `<div class="pnl-line total"><span>Net profit</span>
+          <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>`}
         <div style="margin-top:8px"><a href="#/accounting/pnl">Full profit &amp; loss →</a></div>
       </div>` : ''}
     </div>`;
@@ -788,9 +859,9 @@ function boxRowHtml() {
         <button class="secondary small" onclick="document.getElementById('boxRow${n}').remove()">Remove</button>
       </div>
       <div class="form-grid">
-        <div><label>Receiver *</label><select id="bxReceiver${n}">${customerOptions('RECEIVER')}</select></div>
-        <div><label>Size</label><select id="bxSize${n}">${sizeSelectOptions()}</select></div>
-        <div><label>Weight (kg)</label><input id="bxWeight${n}" type="number" min="0" step="0.1"></div>
+        <div><label>Receiver *</label><select id="bxReceiver${n}" onchange="quoteShipmentFee()">${customerOptions('RECEIVER')}</select></div>
+        <div><label>Size</label><select id="bxSize${n}" onchange="quoteShipmentFee()">${sizeSelectOptions()}</select></div>
+        <div><label>Weight (kg)</label><input id="bxWeight${n}" type="number" min="0" step="0.1" oninput="quoteShipmentFee()"></div>
         <div><label>L×W×H (cm)</label><div class="row" style="flex-wrap:nowrap;gap:4px">
           <input id="bxL${n}" type="number" placeholder="L"><input id="bxW${n}" type="number" placeholder="W"><input id="bxH${n}" type="number" placeholder="H"></div></div>
       </div>
@@ -853,15 +924,17 @@ async function pageShipmentNew(intakeId) {
       <h2 style="margin-top:0">Sender</h2>
       <div class="form-grid">
         <div><label>Sender *</label><select id="shSender">${customerOptions('SENDER')}</select></div>
-        <div><label>Origin country</label><input id="shOrigin" value="${intake ? esc(intake.origin_country) : 'USA'}"></div>
-        <div><label>Origin branch / agent</label><input id="shAgent" value="${intake ? esc(intake.origin_agent) : ''}"></div>
-        <div><label>Service Level</label><select id="shService">${SERVICE_LEVELS.map(k => `<option value="${k}" ${intake && intake.service_level === k ? 'selected' : ''}>${esc(SERVICE_LEVEL_LABELS[k])}</option>`).join('')}</select></div>
+        <div><label>Origin country</label><select id="shOrigin" onchange="originPicked()">${['Thailand', 'Cambodia'].map(c => `<option ${(intake ? intake.origin_country : myOriginCountry()) === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+        <div><label>Origin branch / agent</label><input id="shAgent" value="${esc(intake ? intake.origin_agent : originCity(myOriginCountry()))}"></div>
+        <div><label>Service Level</label><select id="shService" onchange="quoteShipmentFee()">${SERVICE_LEVELS.map(k => `<option value="${k}" ${intake && intake.service_level === k ? 'selected' : ''}>${esc(SERVICE_LEVEL_LABELS[k])}</option>`).join('')}</select></div>
       </div>
       <details class="collapse"><summary>+ Create new customer (sender or receiver)</summary>${newCustomerFormHtml('nc')}</details>
-      <h2>Fees & documents</h2>
+      <h2>Fees &amp; documents</h2>
+      <div class="muted" style="margin-bottom:8px">The fee is quoted from this branch's rate card — the same figure the sender was shown online. Recalculate after changing a box, or override it by typing.</div>
+      <div id="feeQuote" class="fee-quote">Quoting…</div>
       <div class="form-grid">
         <div><label>Shipping fee</label><input id="shFee" type="number" min="0" step="0.01" value="${intake && intake.shipping_fee_amount != null ? intake.shipping_fee_amount : ''}"></div>
-        <div><label>Currency</label><select id="shCurrency"><option ${intake && intake.currency === 'USD' ? 'selected' : ''}>USD</option><option ${intake && intake.currency === 'CAD' ? 'selected' : ''}>CAD</option><option ${intake && intake.currency === 'AED' ? 'selected' : ''}>AED</option><option ${intake && intake.currency === 'EUR' ? 'selected' : ''}>EUR</option><option ${intake && intake.currency === 'GBP' ? 'selected' : ''}>GBP</option><option ${intake && intake.currency === 'PHP' ? 'selected' : ''}>PHP</option></select></div>
+        <div><label>Currency</label><select id="shCurrency">${['PHP','THB','USD','KHR','VND','EUR','GBP','AED','CAD'].map(c => `<option ${(intake && intake.currency) === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
         <div><label>Payment status</label><select id="shPaid"><option value="UNPAID">UNPAID</option><option value="PAID">PAID</option></select></div>
       </div>
       <div class="form-grid">
@@ -873,11 +946,12 @@ async function pageShipmentNew(intakeId) {
     </div>
     <h2>Boxes</h2>
     <div id="boxRows">${(intake ? intake.boxes : [null]).map(() => boxRowHtml()).join('')}</div>
-    <button class="secondary" onclick="document.getElementById('boxRows').insertAdjacentHTML('beforeend', boxRowHtml())">+ Add another box</button>
+    <button class="secondary" onclick="document.getElementById('boxRows').insertAdjacentHTML('beforeend', boxRowHtml()); quoteShipmentFee();">+ Add another box</button>
     <div class="card">
       <button onclick="createShipment()">Save shipment & generate box numbers + QR</button>
       <div class="muted">Boxes start at CREATED. Confirm physical receipt on the shipment page to notify the sender.</div>
     </div>`);
+  quoteShipmentFee();
 
   if (!intake) return;
   PREFILL_INTAKE = intake;
@@ -919,6 +993,69 @@ async function pageShipmentNew(intakeId) {
       row.querySelector('.itemDesc').value = g.category;
       row.querySelector('.itemQty').value = g.qty;
     });
+  }
+}
+
+// VFIC ships out of two origin lanes. Branch staff only ever encode their own country,
+// so the picker starts on their branch and the office city follows the country.
+const ORIGIN_CITY = { Thailand: 'Bangkok', Cambodia: 'Phnom Penh' };
+const originCity = (country) => ORIGIN_CITY[country] || '';
+function myOriginCountry() {
+  if (!ME) return 'Thailand';
+  if (/_TH$/.test(ME.role)) return 'Thailand';
+  if (/_KH$/.test(ME.role)) return 'Cambodia';
+  return 'Thailand';
+}
+function originPicked() {
+  const agent = document.getElementById('shAgent');
+  const country = (document.getElementById('shOrigin') || {}).value;
+  // Don't stomp a city the agent typed themselves.
+  if (agent && (!agent.value || Object.values(ORIGIN_CITY).includes(agent.value))) agent.value = originCity(country);
+  quoteShipmentFee();
+}
+
+// Price the draft shipment from the branch rate card and fill the fee field, so what the
+// agent records matches what the sender was quoted online.
+let FEE_T = null;
+function quoteShipmentFee() { clearTimeout(FEE_T); FEE_T = setTimeout(runShipmentQuote, 200); }
+async function runShipmentQuote() {
+  const host = document.getElementById('feeQuote');
+  if (!host) return;
+  const boxes = [...document.querySelectorAll('[data-boxrow]')].map(el => {
+    const n = el.dataset.boxrow;
+    return {
+      receiver_id: +(document.getElementById('bxReceiver' + n) || {}).value || null,
+      size_category: (document.getElementById('bxSize' + n) || {}).value,
+      weight_kg: +(document.getElementById('bxWeight' + n) || {}).value || 0
+    };
+  }).filter(b => b.receiver_id);
+  if (!boxes.length) { host.innerHTML = '<span class="muted">Pick a receiver on each box to see the quote.</span>'; return; }
+  try {
+    const q = await api('/api/accounting/quote', { method: 'POST', body: {
+      origin_country: (document.getElementById('shOrigin') || {}).value,
+      service_level: (document.getElementById('shService') || {}).value,
+      boxes
+    } });
+    const fee = document.getElementById('shFee');
+    const ccy = document.getElementById('shCurrency');
+    // Only overwrite the fee while the agent has not typed their own figure.
+    if (fee && !fee.dataset.touched) fee.value = q.total;
+    if (ccy) ccy.value = q.currency;
+    host.innerHTML = `
+      <div class="fq-head">Quote from the <b>${esc(NODE_LABELS[q.branch] || q.branch)}</b> rate card ·
+        ${esc(SERVICE_LEVEL_LABELS[q.service_level] || q.service_level)}</div>
+      <table class="fq-table">
+        <tr><th>#</th><th>Receiver</th><th>Size</th><th>Destination</th><th>Fee</th></tr>
+        ${q.lines.map(l => `<tr>
+          <td>${l.index}</td><td>${esc(l.receiver_name)}</td><td>${esc(SIZE_LABEL(l.size_category))}</td>
+          <td>${l.zone_label ? esc(l.zone_label) : '<span class="muted">no region on receiver</span>'}</td>
+          <td>${l.priced ? esc(money(l.amount, q.currency)) : '<span class="muted">—</span>'}</td>
+        </tr>`).join('')}
+        <tr><td colspan="4"><b>Total</b></td><td><b>${esc(money(q.total, q.currency))}</b></td></tr>
+      </table>
+      ${q.unpriced ? `<div class="muted" style="margin-top:4px">${q.unpriced} box(es) have no destination region yet, so they are not priced.</div>` : ''}`;
+  } catch (e) {
+    host.innerHTML = `<span class="muted">Could not quote: ${esc(e.message)}</span>`;
   }
 }
 
@@ -1121,7 +1258,9 @@ async function pageShipmentDetail(id) {
       <h1>${esc(s.shipment_number)}</h1>
       <div>
         <a href="#/labels/s/${s.id}"><button class="secondary">🖨 Print labels</button></a>
-        <a href="#/sender-receipt/${s.id}"><button class="secondary">🧾 Official receipt</button></a>
+        ${s.payment_status === 'PAID'
+          ? `<a href="#/sender-receipt/${s.id}"><button class="secondary">🧾 Official receipt</button></a>`
+          : `<button class="secondary" disabled title="An official receipt can only be issued once the shipment is paid">🧾 Official receipt (unpaid)</button>`}
         <a href="#/receiving-form/${s.id}"><button class="secondary">🖨 Receiving form</button></a>
         <a href="#/packing-list/${s.id}"><button class="secondary">🖨 Packing list</button></a>
         ${canIntake() && createdBoxes ? `<button onclick="confirmOriginReceipt(${s.id})">✓ Confirm origin receipt (${createdBoxes})</button>` : ''}
@@ -1542,7 +1681,7 @@ async function pageContainers() {
     <h1>Containers</h1>
     ${!canBook && canIntake() ? `<div class="note-info" style="margin-bottom:12px">Containers are booked by the origin branch (Thailand or Cambodia). Head office consolidates and tracks them here.</div>` : ""}
     ${canBook ? `
-    <details class="collapse card"><summary>+ Book new container</summary>
+    <details class="collapse card" id="cnBook" ${hashQuery().get('at') === 'cnBook' ? 'open' : ''}><summary>+ Book new container</summary>
       <div class="form-grid" style="margin-top:8px">
         <div><label>Container number *</label><input id="cnNumber" placeholder="MSCU1234567"></div>
         <div><label>Size</label><select id="cnSize">
@@ -1828,7 +1967,14 @@ async function pageOriginWarehouse(size, util) {
     </div>
 
     <div class="card">
-      <b>How many fit in one ${esc(plan.container_label)} container (if loaded with a single size)</b>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <b id="lpTitle">How many fit in one ${esc(plan.container_label)} container (if loaded with a single size)</b>
+        <div class="seg-toggle" id="lpToggle">
+          <button type="button" class="seg on" data-mix="0" onclick="toggleLoadMix(0)">Single size</button>
+          <button type="button" class="seg" data-mix="1" onclick="toggleLoadMix(1)">Mixed sizes</button>
+        </div>
+      </div>
+      <div id="lpSingle">
       <div class="table-scroll" style="margin-top:8px"><table>
         <tr><th>Box size</th><th>Dimensions</th><th>Volume</th><th>Weight allowance</th><th>Max by volume</th><th>Max by weight</th><th>Fits</th><th>Limited by</th></tr>
         ${plan.per_size.map(s => `<tr>
@@ -1838,10 +1984,9 @@ async function pageOriginWarehouse(size, util) {
           <td><span class="badge ${s.limited_by === 'volume' ? 'st-created' : 'st-sorted'}">${esc(s.limited_by)}</span></td>
         </tr>`).join('')}
       </table></div>
-    </div>
+      </div>
 
-    <div class="card">
-      <b>If loaded with a mixed size</b>
+      <div id="lpMixed" style="display:none">
       <div class="muted" style="margin:6px 0 10px">An even spread of every box size — closer to how a real consolidation fills.</div>
       <div class="table-scroll"><table>
         <tr><th>Box size</th><th>Volume each</th><th>Boxes</th></tr>
@@ -1856,6 +2001,7 @@ async function pageOriginWarehouse(size, util) {
         <tr><td>Remaining</td><td style="text-align:right">${plan.mixed.remaining_cbm} cbm · ${plan.mixed.remaining_weight_kg.toLocaleString()} kg</td></tr>
         <tr><td>Limited by</td><td style="text-align:right"><span class="badge ${plan.mixed.limited_by === 'volume' ? 'st-created' : 'st-sorted'}">${esc(plan.mixed.limited_by)}</span></td></tr>
       </table>
+      </div>
     </div>
 
     <div class="card">
@@ -2642,26 +2788,38 @@ async function renderPnl(from, to) {
         ${from || to ? `<button class="small secondary" onclick="renderPnl()">Clear</button>` : ''}
       </div>
     </div>
+    ${p.mixed_currency ? `
+    <div class="card">
+      <h2 style="margin-top:0">Revenue by currency</h2>
+      <div class="muted" style="margin-bottom:8px">Each branch bills in its own currency, so the consolidated view lists them side by side rather than adding them into one figure.</div>
+      <table>
+        <tr><th>Currency</th><th>Shipments</th><th>Billed</th><th>Collected</th><th>Receivable</th></tr>
+        ${Object.entries(p.by_currency).map(([c, r]) => `<tr>
+          <td><b>${esc(c)}</b></td><td>${r.shipments}</td>
+          <td>${esc(money(r.billed, c))}</td><td>${esc(money(r.collected, c))}</td><td>${esc(money(r.receivable, c))}</td>
+        </tr>`).join('')}
+      </table>
+    </div>` : `
     <div class="tiles">
       <div class="tile"><div class="num">${esc(money(p.revenue.billed, p.currency))}</div><div class="lbl">Revenue billed (${p.revenue.invoice_count} invoices)</div></div>
       <div class="tile"><div class="num">${esc(money(p.revenue.collected, p.currency))}</div><div class="lbl">Collected</div></div>
       <div class="tile"><div class="num">${esc(money(p.revenue.receivable, p.currency))}</div><div class="lbl">Receivable</div></div>
       <div class="tile"><div class="num">${esc(money(p.expenses.total, p.currency))}</div><div class="lbl">Expenses (${p.expenses.count})</div></div>
-    </div>
+    </div>`}
     <div class="card">
-      <h2 style="margin-top:0">Profit &amp; Loss</h2>
+      <h2 style="margin-top:0">Profit &amp; Loss${p.mixed_currency ? ` <span class="muted" style="font-size:13px;font-weight:400">· ${esc(p.currency)} items only</span>` : ''}</h2>
       <table>
-        <tr><td><b>Revenue (billed to customers)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
+        ${p.mixed_currency ? '' : `<tr><td><b>Revenue (billed to customers)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>`}
         ${p.interbranch && p.interbranch.income ? `<tr><td class="muted" style="padding-left:22px">Inter-branch billed to other branches</td><td style="text-align:right" class="muted">${esc(money(p.interbranch.income, p.currency))}</td></tr>` : ''}
         ${p.interbranch && p.interbranch.note ? `<tr><td colspan="2" class="muted" style="font-size:12px">${esc(p.interbranch.note)}</td></tr>` : ''}
         ${cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')}
         ${p.interbranch && p.interbranch.cost ? `<tr><td class="muted" style="padding-left:22px">Inter-branch charges from other branches</td><td style="text-align:right" class="muted">− ${esc(money(p.interbranch.cost, p.currency))}</td></tr>` : ''}
         <tr><td><b>Total costs</b></td><td style="text-align:right">− ${esc(money((p.totals && p.totals.costs) || p.expenses.total, p.currency))}</td></tr>
-        <tr style="border-top:2px solid var(--border)">
+        ${p.mixed_currency ? '' : `<tr style="border-top:2px solid var(--border)">
           <td><b>Net profit (accrual)</b></td>
           <td style="text-align:right;font-weight:800;color:${p.net_profit >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_profit, p.currency))}</td></tr>
         <tr><td><b>Net cash (collected − expenses)</b></td>
-          <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>
+          <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>`}
       </table>
     </div>`;
 }
@@ -2856,7 +3014,7 @@ async function pageReports() {
     ${reports.map(([key, label], i) => {
       const rows = data[i];
       const cols = rows.length ? Object.keys(rows[0]) : [];
-      return `<h2>${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">⬇ CSV</button></a></h2>
+      return `<h2 id="rp-${key}">${esc(label)} <a href="/api/reports/${key}?format=csv" download><button class="small secondary">⬇ CSV</button></a></h2>
       <div class="card table-scroll">
         <table><tr>${cols.map(cl => `<th>${esc(cl.replace(/_/g, ' '))}</th>`).join('')}</tr>
         ${rows.map(rw => `<tr>${cols.map(cl => `<td>${esc(String(rw[cl] == null ? '' : rw[cl]).match(/^\d{4}-\d{2}-\d{2}T/) ? fmtDay(rw[cl]) : rw[cl])}</td>`).join('')}</tr>`).join('') || `<tr><td class="muted">No data</td></tr>`}
@@ -2872,7 +3030,7 @@ async function renderBoxMovement(filter) {
   if (!el) return;
   const rows = await api('/api/reports/box-movement' + (filter ? '?container=' + encodeURIComponent(filter) : ''));
   el.innerHTML = `
-    <h2>Box movement — status timeline per box
+    <h2 id="rp-box-movement">Box movement — status timeline per box
       <a href="/api/reports/box-movement${filter ? '?container=' + encodeURIComponent(filter) + '&' : '?'}format=csv" download><button class="small secondary">⬇ CSV</button></a>
     </h2>
     <div class="card row">
@@ -3001,3 +3159,25 @@ async function pageScan() {
 }
 
 boot();
+
+/* Switch the load plan between the single-size ideal and a mixed load. */
+function toggleLoadMix(mix) {
+  const single = document.getElementById('lpSingle');
+  const mixed = document.getElementById('lpMixed');
+  const title = document.getElementById('lpTitle');
+  if (!single || !mixed) return;
+  const showMixed = !!+mix;
+  mixed.style.display = showMixed ? '' : 'none';
+  single.style.display = showMixed ? 'none' : '';
+  document.querySelectorAll('#lpToggle .seg').forEach(b => b.classList.toggle('on', b.dataset.mix === String(+showMixed)));
+  if (title) {
+    if (!title.dataset.single) title.dataset.single = title.textContent;
+    title.textContent = showMixed
+      ? title.dataset.single.replace('a single size', 'a mixed size')
+      : title.dataset.single;
+  }
+}
+// Once an agent types their own fee, stop overwriting it from the rate card.
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.id === 'shFee') e.target.dataset.touched = '1';
+});

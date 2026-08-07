@@ -149,22 +149,37 @@ async function pageSenderReceipt(shipmentId) {
     api('/api/receipt-meta/' + shipmentId).catch(() => ({}))
   ]);
   const perBox = (hashQuery().get('per') || 'shipment') === 'box';
-  const size = hashQuery().get('size') === '6x4' ? '6x4' : 'legal';
-  document.body.classList.toggle('print-6x4', size === '6x4');
-  const cls = size === '6x4' ? ' or-6x4' : '';
+  // Official receipts print at 6 x 4 in only.
+  const size = '6x4';
+  document.body.classList.add('print-6x4');
+  if (s.payment_status !== 'PAID') {
+    view(`
+      <div class="row no-print" style="justify-content:space-between">
+        <h1>Official Receipt — ${esc(s.shipment_number)}</h1>
+        <a href="#/shipments/${s.id}"><button class="secondary">← Back to shipment</button></a>
+      </div>
+      <div class="card note-warn">
+        <b>This shipment is not paid yet, so no official receipt can be issued.</b>
+        <div class="muted" style="margin-top:6px">
+          An official receipt is a record that payment was received. Mark the shipment
+          <b>PAID</b> on its page, then come back and the receipt will be available.
+        </div>
+      </div>`);
+    return;
+  }
+  const cls = ' or-6x4';
   const docs = perBox && s.boxes.length
     ? s.boxes.map(b => officialReceiptHtml(s, b, { ...bir, cls }))
     : [officialReceiptHtml(s, null, { ...bir, cls })];
   // MIN and Serial are generated automatically; only the BIR-issued fields can be missing.
   const missing = ['accreditation_no'].filter(k => !bir[k]);
   view(`
-    <style>@page { size: ${size === '6x4' ? '6in 4in' : '8.5in 13in'}; margin: ${size === '6x4' ? '0.15in' : '0.35in'}; }</style>
+    <style>@page { size: 6in 4in; margin: 0.15in; }</style>
     <div class="row no-print" style="justify-content:space-between">
       <h1>Official Receipt — ${esc(s.shipment_number)}</h1>
       <div>
-        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'shipment' : 'box'}&size=${size}"><button class="secondary">${perBox ? 'One receipt per shipment' : 'One receipt per box'}</button></a>
-        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'box' : 'shipment'}&size=${size === '6x4' ? 'legal' : '6x4'}"><button class="secondary">${size === '6x4' ? 'Legal 8.5 × 13 in' : 'Small 6 × 4 in'}</button></a>
-        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size ${size === '6x4' ? '6 × 4 in' : 'Legal (8.5 × 13 in)'}">🖨 Print / Save as PDF</button>
+        <a href="#/sender-receipt/${s.id}?per=${perBox ? 'shipment' : 'box'}"><button class="secondary">${perBox ? 'One receipt per shipment' : 'One receipt per box'}</button></a>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size 6 × 4 in">🖨 Print / Save as PDF</button>
       </div>
     </div>
     <div class="muted no-print" style="margin-bottom:10px">Sender's copy.</div>

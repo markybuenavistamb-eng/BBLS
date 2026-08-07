@@ -16,6 +16,15 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
       'nav.returns': 'Returns', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
+      // Sidebar submenus (tabs inside a module)
+      'sub.rates': 'Rate Cards', 'sub.interbranch': 'Inter-branch', 'sub.expenses': 'Expenses', 'sub.pnl': 'Profit & Loss',
+      'sub.stock': 'Stock & load plan', 'sub.printable': 'Printable report',
+      'sub.boxmovement': 'Box movement', 'sub.percontainer': 'Boxes per container', 'sub.delivperf': 'Delivery performance',
+      'sub.failed': 'Failed deliveries', 'sub.unpaid': 'Unpaid shipments',
+      'sub.allshipments': 'All shipments', 'sub.newintake': 'New intake', 'sub.online': 'Online submissions',
+      'sub.allcontainers': 'All containers', 'sub.bookcontainer': 'Book a container',
+      'sub.users': 'Users & settings', 'sub.roles': 'Roles & Modules',
+      'nav.back': 'Back',
       'nav.reports': 'Reports', 'nav.accounting': 'Accounting', 'nav.branches': 'Branches & Partners', 'nav.developer': 'Developer Console', 'nav.scan': 'Scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operations', 'nav.section.people': 'People & Comms', 'nav.section.system': 'System',
 
@@ -135,6 +144,15 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',
       'nav.returns': 'Mga Naibalik', 'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
+      // Mga submenu sa sidebar (mga tab sa loob ng module)
+      'sub.rates': 'Mga Rate Card', 'sub.interbranch': 'Sa pagitan ng sangay', 'sub.expenses': 'Mga Gastos', 'sub.pnl': 'Tubo at Lugi',
+      'sub.stock': 'Stock at load plan', 'sub.printable': 'Ulat na naiimprenta',
+      'sub.boxmovement': 'Galaw ng kahon', 'sub.percontainer': 'Kahon kada container', 'sub.delivperf': 'Bilis ng paghahatid',
+      'sub.failed': 'Hindi naihatid', 'sub.unpaid': 'Hindi pa bayad',
+      'sub.allshipments': 'Lahat ng padala', 'sub.newintake': 'Bagong intake', 'sub.online': 'Mga online na isinumite',
+      'sub.allcontainers': 'Lahat ng container', 'sub.bookcontainer': 'Mag-book ng container',
+      'sub.users': 'Mga user at setting', 'sub.roles': 'Mga Role at Module',
+      'nav.back': 'Bumalik',
       'nav.reports': 'Mga Ulat', 'nav.accounting': 'Accounting', 'nav.branches': 'Mga Sangay & Partner', 'nav.developer': 'Developer Console', 'nav.scan': 'I-scan', 'nav.admin': 'Admin',
       'nav.section.ops': 'Operasyon', 'nav.section.people': 'Mga Tao at Komunikasyon', 'nav.section.system': 'Sistema',
 

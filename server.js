@@ -2102,6 +2102,35 @@ app.put('/api/accounting/rate-card', requireRole('DEVELOPER_ADMIN'), (req, res) 
   res.json(card);
 });
 
+// Quote a shipment that does not exist yet — used by New Shipment Intake so the fee an agent
+// records is the same figure the sender was quoted on the online form.
+app.post('/api/accounting/quote', requireRole(...ACCOUNTING_ROLES, ...SHIPPERS), (req, res) => {
+  const d = db.get();
+  const b = req.body || {};
+  const branchKey = (BRANCH.byCountry(String(b.origin_country || '').trim()) || {}).key
+    || BRANCH.branchForRole(req.user.role) || 'HQ_MANILA';
+  const card = rateCardFor(d, branchKey);
+  const level = SM.SERVICE_LEVELS.includes(b.service_level) ? b.service_level : 'OCEAN_ECONOMY';
+  const lines = (Array.isArray(b.boxes) ? b.boxes : []).map((bx, i) => {
+    // The destination zone comes from the receiver on file, or a region passed directly.
+    const receiver = d.customers.find(c => c.id === +bx.receiver_id) || {};
+    const region = bx.region || receiver.region || null;
+    const zone = RATES.zoneForRegion(region);
+    const p = RATES.priceBox({ card, service_level: level, zone, size_category: bx.size_category, weight_kg: bx.weight_kg });
+    return {
+      index: i + 1, size_category: bx.size_category, weight_kg: +bx.weight_kg || 0,
+      receiver_name: receiver.full_name || '', region, zone,
+      zone_label: zone ? RATES.ZONE_LABELS[zone] : null,
+      amount: p.amount, basis: p.basis, priced: !!zone
+    };
+  });
+  res.json({
+    branch: branchKey, currency: card.currency, service_level: level,
+    lines, total: +lines.reduce((n, l) => n + l.amount, 0).toFixed(2),
+    unpriced: lines.filter(l => !l.priced).length
+  });
+});
+
 // Quote a shipment from the current rate card (per box + total).
 app.get('/api/accounting/quote/:shipmentId', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
@@ -2482,6 +2511,19 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const receivable = +(revenueBilled - revenueCollected).toFixed(2);
   const invoices = shipmentsIn;
 
+  // Each branch bills in its own currency, so a consolidated view cannot add them into one
+  // figure without an FX rate VFIC has not set. Report the split instead of a false total.
+  const byCurrency = {};
+  for (const sh of shipmentsIn) {
+    const ccy = sh.currency || rateCardFor(d, (BRANCH.byCountry(sh.origin_country) || {}).key || 'HQ_MANILA').currency;
+    const row = byCurrency[ccy] || (byCurrency[ccy] = { billed: 0, collected: 0, receivable: 0, shipments: 0 });
+    row.billed = +(row.billed + feeOf(sh)).toFixed(2);
+    if (sh.payment_status === 'PAID') row.collected = +(row.collected + feeOf(sh)).toFixed(2);
+    row.receivable = +(row.billed - row.collected).toFixed(2);
+    row.shipments += 1;
+  }
+  const mixedCurrency = Object.keys(byCurrency).length > 1;
+
   const expenses = (d.expenses || []).filter(e => !e.deleted_at && inRange(e.spent_at) && inBranch(e));
   const byCategory = {};
   for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
@@ -2503,6 +2545,9 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     currency: card.currency,
     period: { from: req.query.from || null, to: req.query.to || null },
     revenue: { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length },
+    // Present when the rows span more than one currency — the single totals above are then
+    // only a count, not money, and the UI shows this breakdown instead.
+    by_currency: byCurrency, mixed_currency: mixedCurrency,
     expenses: { total: totalExpenses, by_category: byCategory, count: expenses.length },
     interbranch: {
       income: ibIncome, cost: ibCost,

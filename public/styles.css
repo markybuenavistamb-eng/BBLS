@@ -802,3 +802,30 @@ label.sub { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 
 .or-6x4 .or-warrant { font-size: 6.5px; }
 @page vfic6x4 { size: 6in 4in; margin: 0.15in; }
 body.print-6x4 .or-receipt { page: vfic6x4; }
+
+/* ---------- back button ---------- */
+.back-bar { margin-bottom: 10px; }
+
+/* ---------- sidebar submenu ---------- */
+.nav-sub { margin: 2px 0 4px 30px; display: flex; flex-direction: column; gap: 1px; }
+.nav-sub.hidden { display: none; }
+.nav-sub a { padding: 6px 10px; font-size: 13px; color: #b9bec4; border-radius: 7px; }
+.nav-sub a:hover { background: rgba(255,255,255,.06); color: #fff; }
+.nav-sub a.active { background: var(--chrome-800); color: #fff; box-shadow: inset 3px 0 0 var(--gold); }
+.sub-chev { margin-left: auto; font-size: 12px; line-height: 1; color: #9aa0a8; padding: 4px 2px 4px 8px; border-radius: 5px; }
+.sub-chev:hover { color: #fff; }
+.app-shell.nav-collapsed .nav-sub, .app-shell.nav-collapsed .sub-chev { display: none; }
+
+/* ---------- fee quote on New Shipment Intake ---------- */
+.fee-quote { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; }
+.fq-head { font-weight: 700; margin-bottom: 6px; }
+.fq-table { width: 100%; background: transparent; }
+.fq-table th, .fq-table td { padding: 4px 6px; font-size: 12.5px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.fq-table th { background: transparent; }
+
+/* ---------- segmented toggle (e.g. load plan: single vs mixed sizes) ---------- */
+.seg-toggle { display: inline-flex; background: #e9edf3; border-radius: 9px; padding: 3px; gap: 2px; }
+.seg-toggle .seg { background: transparent; color: var(--muted); border: 0; margin: 0; padding: 6px 13px; font-size: 13px; font-weight: 700; border-radius: 7px; cursor: pointer; }
+.seg-toggle .seg:hover { color: var(--text); background: rgba(255,255,255,.6); }
+.seg-toggle .seg.on { background: var(--primary); color: #fff; }
+.seg-toggle .seg.on:hover { background: var(--primary); }
