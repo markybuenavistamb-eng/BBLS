@@ -2043,6 +2043,12 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
 // Every branch keeps its own books: its own rate card, its own invoices and expenses, and
 // its own profit & loss. Head office sees all of them; a branch sees only its own.
 const RATES = require('./lib/rates');
+const FX = require('./lib/fx');
+
+// The BSP reference rates head office converts branch revenue with.
+function fxFor(d) {
+  return FX.normalizeFx(d.settings.fx);
+}
 
 // Which branch's books the caller is working in. HQ admins/accounting may pass ?branch=.
 function accountingBranch(req) {
@@ -2486,6 +2492,57 @@ app.post('/api/accounting/rate-card/undo', requireRole('DEVELOPER_ADMIN'), (req,
   res.json({ ...RATES.normalizeRateCard(prev), branch, editable: true });
 });
 
+// ---- BSP reference exchange rates ----
+// Head office converts branch revenue to pesos with these. Any accounting user can read
+// them (they appear on the consolidated P&L); only the Developer edits them, the same rule
+// the rate cards follow.
+app.get('/api/accounting/fx', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+  const fx = fxFor(db.get());
+  res.json({
+    ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES,
+    editable: req.user.role === 'DEVELOPER_ADMIN'
+  });
+});
+
+app.put('/api/accounting/fx', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+  const d = db.get();
+  const b = req.body || {};
+  const rates = {};
+  for (const c of FX.CURRENCIES) {
+    const n = Number((b.rates || {})[c]);
+    if (isFinite(n) && n > 0) rates[c] = n;
+  }
+  if (!Object.keys(rates).length) return res.status(400).json({ error: 'No usable rates were sent' });
+  d.settings.fx = FX.normalizeFx({
+    ...fxFor(d), rates: { ...fxFor(d).rates, ...rates },
+    as_of: String(b.as_of || '').slice(0, 10) || fxFor(d).as_of,
+    source: b.source || undefined,
+    updated_at: new Date().toISOString(), updated_by: req.user.name
+  });
+  db.persist();
+  const fx = fxFor(d);
+  res.json({ ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true });
+});
+
+// Pull today's bulletin straight from BSP. Best-effort: on any failure the stored rates are
+// left exactly as they were and the reason is reported, so VFIC can key them in instead.
+app.post('/api/accounting/fx/refresh', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
+  const result = await FX.refreshFromBsp();
+  if (!result.ok) return res.status(502).json({ error: result.error, source_url: FX.BSP_PAGE });
+  const d = db.get();
+  d.settings.fx = FX.normalizeFx({
+    ...fxFor(d), rates: { ...fxFor(d).rates, ...result.rates },
+    as_of: result.as_of, source: 'BSP Reference Exchange Rate Bulletin',
+    updated_at: new Date().toISOString(), updated_by: req.user.name + ' (from BSP)'
+  });
+  db.persist();
+  const fx = fxFor(d);
+  res.json({
+    ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true,
+    fetched: Object.keys(result.rates), bulletin_url: result.url
+  });
+});
+
 // ---- profit & loss ----
 app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const d = db.get();
@@ -2494,25 +2551,27 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const inRange = (iso) => iso && iso >= from && iso < to;
 
   const branch = accountingBranch(req);
-  const allBooks = BRANCH.branchForRole(req.user.role) === null && !req.query.branch;
+  // The group roll-up is an oversight view, so only the roles that oversee the whole network
+  // get it. VFIC's own accountant in Manila works on head office's books, not the group's.
+  const allBooks = BRANCH.seesAllBranches(req.user.role) && !req.query.branch;
   const inBranch = (r) => allBooks || (r.branch || 'HQ_MANILA') === branch;
+  // Manila head office does not book what the branches bill their senders — that revenue,
+  // and the receivable behind it, belongs to the branch that raised it. HQ's own income is
+  // the inter-branch settlements it issues, set against its local Philippine costs.
+  const hqBooks = !allBooks && branch === 'HQ_MANILA';
   // Customer revenue is the shipping fee charged on each shipment; a shipment marked PAID
   // counts as collected. (Counter receipts are the customer-facing document — see Official
   // Receipt on a shipment — so there is no separate invoice ledger.)
   const branchCountry = (BRANCH.byKey(branch) || {}).country;
-  const shipmentsIn = d.shipments.filter(sh => {
+  const shipmentsIn = hqBooks ? [] : d.shipments.filter(sh => {
     if (!inRange(sh.created_at)) return false;
-    if (allBooks) return true;
-    return branch === 'HQ_MANILA' ? true : sh.origin_country === branchCountry;
+    return allBooks || sh.origin_country === branchCountry;
   });
   const feeOf = (sh) => +(sh.shipping_fee_amount || 0);
-  const revenueBilled = +shipmentsIn.reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
-  const revenueCollected = +shipmentsIn.filter(sh => sh.payment_status === 'PAID').reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
-  const receivable = +(revenueBilled - revenueCollected).toFixed(2);
   const invoices = shipmentsIn;
+  const card0 = rateCardFor(d, accountingBranch(req));
 
-  // Each branch bills in its own currency, so a consolidated view cannot add them into one
-  // figure without an FX rate VFIC has not set. Report the split instead of a false total.
+  // Each branch bills in its own currency, so split the revenue by currency first.
   const byCurrency = {};
   for (const sh of shipmentsIn) {
     const ccy = sh.currency || rateCardFor(d, (BRANCH.byCountry(sh.origin_country) || {}).key || 'HQ_MANILA').currency;
@@ -2523,43 +2582,93 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     row.shipments += 1;
   }
   const mixedCurrency = Object.keys(byCurrency).length > 1;
+  // With more than one currency in view, convert each to pesos at the BSP reference rate so
+  // head office gets one PHP total. Every line carries the rate it was converted at.
+  const consolidated = mixedCurrency ? FX.consolidate(byCurrency, fxFor(d)) : null;
+  const revenueBilled = consolidated
+    ? consolidated.totals.billed
+    : +shipmentsIn.reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
+  const revenueCollected = consolidated
+    ? consolidated.totals.collected
+    : +shipmentsIn.filter(sh => sh.payment_status === 'PAID').reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
+  const receivable = +(revenueBilled - revenueCollected).toFixed(2);
+
+  // Everything on this statement is stated in one currency: pesos for a consolidated view,
+  // the branch's own currency otherwise. Anything recorded in another is converted at the
+  // BSP reference rate rather than added as if it were the same money.
+  const fx = fxFor(d);
+  const reportCcy = mixedCurrency ? 'PHP' : card0.currency;
+  const inReportCcy = (amount, ccy) => FX.convert(amount, ccy || reportCcy, reportCcy, fx);
 
   const expenses = (d.expenses || []).filter(e => !e.deleted_at && inRange(e.spent_at) && inBranch(e));
+  const expenseAmount = (e) => {
+    const c = inReportCcy(e.amount, e.currency);
+    return c.converted ? c.amount : 0;
+  };
   const byCategory = {};
-  for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + e.amount).toFixed(2);
-  const totalExpenses = +expenses.reduce((n, e) => n + e.amount, 0).toFixed(2);
+  for (const e of expenses) byCategory[e.category] = +((byCategory[e.category] || 0) + expenseAmount(e)).toFixed(2);
+  const totalExpenses = +expenses.reduce((n, e) => n + expenseAmount(e), 0).toFixed(2);
+  const unconvertedExpenses = expenses.filter(e => !inReportCcy(e.amount, e.currency).converted).length;
 
   // Branch-to-branch settlements: money this branch has billed another (income) and money
   // another branch has billed it (cost). Drafts are excluded — only issued/paid count.
   const ibLive = (d.interbranch_invoices || [])
     .filter(i => ['ISSUED', 'PAID', 'DISPUTED'].includes(i.status))
     .filter(i => inRange(i.issued_at || i.created_at));
-  const ibIncome = allBooks ? 0 : +ibLive.filter(i => i.from_branch === branch).reduce((n, i) => n + i.total, 0).toFixed(2);
-  const ibCost = allBooks ? 0 : +ibLive.filter(i => i.to_branch === branch).reduce((n, i) => n + i.total, 0).toFixed(2);
+  // Head office bills its branches in pesos, so restate each settlement in the currency this
+  // statement is written in — otherwise Thailand's books would read PHP figures as baht.
+  const ibAmount = (i) => {
+    const c = inReportCcy(i.total, i.currency || 'PHP');
+    return c.converted ? c.amount : 0;
+  };
+  const ibSum = (list) => +list.reduce((n, i) => n + ibAmount(i), 0).toFixed(2);
+  const ibOut = ibLive.filter(i => i.from_branch === branch);
+  const ibIn = ibLive.filter(i => i.to_branch === branch);
+  const ibIncome = allBooks ? 0 : ibSum(ibOut);
+  const ibCost = allBooks ? 0 : ibSum(ibIn);
+  const unconvertedSettlements = allBooks ? 0
+    : [...ibOut, ...ibIn].filter(i => !inReportCcy(i.total, i.currency || 'PHP').converted).length;
 
-  const card = rateCardFor(d, accountingBranch(req));
+  // Head office's revenue line *is* the settlements it issued, so its receivable is the
+  // settlements the branches have not paid yet — not anything owed by a branch's senders.
+  const ibCollected = ibSum(ibOut.filter(i => i.status === 'PAID'));
+  const revenue = hqBooks
+    ? { billed: ibIncome, collected: ibCollected, receivable: +(ibIncome - ibCollected).toFixed(2), invoice_count: ibOut.length }
+    : { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length };
+
+  // Guard against counting the settlements twice: for HQ they are already the revenue line.
   const totalCosts = +(totalExpenses + ibCost).toFixed(2);
-  const totalIncome = +(revenueBilled + ibIncome).toFixed(2);
+  const totalIncome = +(revenue.billed + (hqBooks ? 0 : ibIncome)).toFixed(2);
   res.json({
     branch: allBooks ? 'ALL' : branch,
-    currency: card.currency,
+    // Whose books these are, so the statement can name its own revenue line correctly.
+    books: allBooks ? 'GROUP' : (hqBooks ? 'HQ' : 'BRANCH'),
+    // A consolidated view is stated in pesos; a single branch in its own currency.
+    currency: mixedCurrency ? 'PHP' : card0.currency,
     period: { from: req.query.from || null, to: req.query.to || null },
-    revenue: { billed: revenueBilled, collected: revenueCollected, receivable, invoice_count: invoices.length },
-    // Present when the rows span more than one currency — the single totals above are then
-    // only a count, not money, and the UI shows this breakdown instead.
-    by_currency: byCurrency, mixed_currency: mixedCurrency,
+    revenue,
+    // Present when the rows span more than one currency: what each currency contributed and
+    // the BSP rate it was converted at, so the peso total above can be checked line by line.
+    by_currency: byCurrency, mixed_currency: mixedCurrency, consolidated,
+    unconverted_expenses: unconvertedExpenses, unconverted_settlements: unconvertedSettlements,
+    // Named whenever a figure on this statement was converted, so the page can say so.
+    fx_note: (mixedCurrency || (!allBooks && ibLive.some(i => (i.currency || 'PHP') !== reportCcy && (i.from_branch === branch || i.to_branch === branch))))
+      ? { source: fx.source, source_url: fx.source_url, as_of: fx.as_of, age_days: FX.ageInDays(fx) } : null,
     expenses: { total: totalExpenses, by_category: byCategory, count: expenses.length },
     interbranch: {
-      income: ibIncome, cost: ibCost,
-      note: allBooks ? 'Excluded from the consolidated view — inter-branch charges net to zero across the group.' : null
+      // For head office the settlements are the revenue line itself, so don't repeat them.
+      income: hqBooks ? 0 : ibIncome, cost: ibCost,
+      note: allBooks
+        ? 'Excluded from the consolidated view — inter-branch charges net to zero across the group.'
+        : (hqBooks ? 'Head office bills the origin branches per container; that is the revenue line above. What a branch bills its own senders stays in that branch’s books.' : null)
     },
     totals: { income: totalIncome, costs: totalCosts },
     net_profit: +(totalIncome - totalCosts).toFixed(2),
-    // Cash actually moved: collected customer invoices and settled inter-branch ones.
-    net_cash: +(revenueCollected
-      + (allBooks ? 0 : ibLive.filter(i => i.from_branch === branch && i.status === 'PAID').reduce((n, i) => n + i.total, 0))
+    // Cash actually moved: settlements paid in, less expenses and settlements paid out.
+    net_cash: +(revenue.collected
+      + (allBooks || hqBooks ? 0 : ibCollected)
       - totalExpenses
-      - (allBooks ? 0 : ibLive.filter(i => i.to_branch === branch && i.status === 'PAID').reduce((n, i) => n + i.total, 0))
+      - (allBooks ? 0 : ibSum(ibIn.filter(i => i.status === 'PAID')))
     ).toFixed(2)
   });
 });

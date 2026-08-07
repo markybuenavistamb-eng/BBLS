@@ -104,7 +104,7 @@ function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION
 
 // Endpoints that can be narrowed to a single branch. When head office is viewing a branch
 // block in the sidebar (#/shipments?branch=TH_BANGKOK), the filter rides along automatically.
-const BRANCH_FILTERABLE = ['/api/shipments', '/api/boxes', '/api/containers', '/api/intake-requests', '/api/origin-warehouse'];
+const BRANCH_FILTERABLE = ['/api/shipments', '/api/boxes', '/api/containers', '/api/intake-requests', '/api/origin-warehouse', '/api/accounting/pnl'];
 function withBranchFilter(path) {
   const branch = new URLSearchParams(location.hash.split('?')[1] || '').get('branch');
   if (!branch) return path;
@@ -315,6 +315,8 @@ const R_ADMINS = ['DEVELOPER_ADMIN', 'MASTER_ADMIN'];
 const R_BRANCH_ADMINS = ['BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH'];
 const R_SHIPPERS = ['SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'];
 const R_AGENTS = R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS, ['CONSIGNEE_AGENT']);
+// Rate cards and BSP exchange rates are the Developer's to edit.
+const isDeveloper = () => ME && ME.role === 'DEVELOPER_ADMIN';
 const ROLE_LABELS = {
   DEVELOPER_ADMIN: 'Developer Admin', MASTER_ADMIN: 'Master Admin',
   SHIPPER_AGENT_TH: 'Shipper Agent — Thailand', SHIPPER_AGENT_KH: 'Shipper Agent — Cambodia',
@@ -678,15 +680,20 @@ async function pageDashboard() {
     const key = dt.toISOString().slice(0, 7);
     months.push({ key, label: dt.toLocaleDateString('en-PH', { month: 'short' }), value: (d.boxesByMonth || {})[key] || 0 });
   }
-  // Head office consolidates branches that bill in different currencies. Adding THB to USD
-  // would be a meaningless number, so the card lists each currency on its own line.
-  const revenueByCurrencyHtml = (p) => `
-    <div class="pnl-line"><span>Revenue billed</span><span class="muted">by currency</span></div>
-    ${Object.entries(p.by_currency).map(([c, r]) => `
-      <div class="pnl-line"><span class="muted" style="padding-left:10px">${esc(c)} · ${r.shipments} shipment(s)</span>
-        <b>${esc(money(r.billed, c))}</b></div>
-      <div class="pnl-line"><span class="muted" style="padding-left:20px">collected</span>
-        <span class="muted">${esc(money(r.collected, c))}</span></div>`).join('')}`;
+  // Head office consolidates branches that bill in different currencies, so the peso total
+  // is shown with the branch amounts that make it up and the BSP rate used.
+  const revenueByCurrencyHtml = (p) => {
+    const c = p.consolidated;
+    if (!c) return '';
+    return `
+    ${c.lines.map(l => `
+      <div class="pnl-line"><span class="muted" style="padding-left:10px">${esc(money(l.billed, l.currency))}${l.converted ? ` <span style="opacity:.7">× ${l.rate}</span>` : ''}</span>
+        <span>${l.converted ? esc(money(l.php.billed, 'PHP')) : '<span class="muted">no rate</span>'}</span></div>`).join('')}
+    <div class="pnl-line"><span>Revenue billed</span><b>${esc(money(p.revenue.billed, 'PHP'))}</b></div>
+    <div class="pnl-line"><span class="muted">Collected</span><span>${esc(money(p.revenue.collected, 'PHP'))}</span></div>
+    <div class="pnl-line"><span class="muted">Receivable</span><span>${esc(money(p.revenue.receivable, 'PHP'))}</span></div>
+    <div class="pnl-line"><span class="muted" style="font-size:11.5px">BSP rate, ${esc(c.as_of)}</span><span></span></div>`;
+  };
   const chartsHtml = `
     <div class="chart-grid">
       <div class="chart-card">
@@ -700,14 +707,14 @@ async function pageDashboard() {
       ${pnl ? `<div class="chart-card">
         <h3>Profit &amp; Loss ${pnl.branch && pnl.branch !== 'ALL' ? `<span class="muted" style="font-weight:400">· ${esc(NODE_LABELS[pnl.branch] || pnl.branch)}</span>` : ''}</h3>
         ${pnl.mixed_currency ? revenueByCurrencyHtml(pnl) : `
-        <div class="pnl-line"><span>Revenue billed</span><b>${esc(money(pnl.revenue.billed, pnl.currency))}</b></div>
-        <div class="pnl-line"><span class="muted">Collected</span><span>${esc(money(pnl.revenue.collected, pnl.currency))}</span></div>
-        <div class="pnl-line"><span class="muted">Receivable</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>`}
+        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Settlements issued' : 'Revenue billed'}</span><b>${esc(money(pnl.revenue.billed, pnl.currency))}</b></div>
+        <div class="pnl-line"><span class="muted">${pnl.books === 'HQ' ? 'Settled by branches' : 'Collected'}</span><span>${esc(money(pnl.revenue.collected, pnl.currency))}</span></div>
+        <div class="pnl-line"><span class="muted">${pnl.books === 'HQ' ? 'Due from branches' : 'Receivable'}</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>`}
         ${pnl.interbranch && pnl.interbranch.income ? `<div class="pnl-line"><span class="muted">Inter-branch income</span><span>${esc(money(pnl.interbranch.income, pnl.currency))}</span></div>` : ''}
-        <div class="pnl-line"><span>Expenses</span><span class="neg">− ${esc(money(pnl.expenses.total, pnl.currency))}</span></div>
+        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Local PH expenses' : 'Expenses'}</span><span class="neg">− ${esc(money(pnl.expenses.total, pnl.currency))}</span></div>
         ${pnl.interbranch && pnl.interbranch.cost ? `<div class="pnl-line"><span class="muted">Inter-branch charges</span><span class="neg">− ${esc(money(pnl.interbranch.cost, pnl.currency))}</span></div>` : ''}
-        ${pnl.mixed_currency ? '' : `<div class="pnl-line total"><span>Net profit</span>
-          <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>`}
+        <div class="pnl-line total"><span>Net profit</span>
+          <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>
         <div style="margin-top:8px"><a href="#/accounting/pnl">Full profit &amp; loss →</a></div>
       </div>` : ''}
     </div>`;
@@ -2636,7 +2643,78 @@ async function renderRateCard(branch) {
         ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
            <button class="secondary" style="margin-top:14px" onclick="undoRateCard()">↩ Undo last save</button>`
         : `<div class="note-info" style="margin-top:14px">Rate cards are commercial policy and can only be changed from the <b>Developer Console portal</b> (/dev). This is a read-only view of the rates your branch is billed on.</div>`}
+    </div>
+    <div id="fxCard"></div>`;
+  renderFxCard();
+}
+
+/* ---------- BSP exchange rates ---------- */
+// Head office states the group's books in pesos, so it needs a peso rate for every currency
+// a branch bills in. VFIC takes those from the BSP Reference Exchange Rate Bulletin.
+async function renderFxCard() {
+  const host = document.getElementById('fxCard');
+  if (!host) return;
+  let fx;
+  try { fx = await api('/api/accounting/fx'); } catch (e) { host.innerHTML = ''; return; }
+  const stale = fx.age_days != null && fx.age_days > 7;
+  const cell = (c) => `<td>${c === 'PHP'
+    ? '<span class="muted">base</span>'
+    : `<input id="fx_${c}" type="number" min="0" step="0.0001" value="${fx.rates[c] || ''}" style="width:110px;padding:5px 7px"${fx.editable ? '' : ' disabled'}>`}</td>`;
+  host.innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:flex-end">
+        <div>
+          <h2 style="margin:0">Exchange rates <span class="muted" style="font-size:13px;font-weight:400">· pesos per 1 unit</span></h2>
+          <div class="muted" style="font-size:12.5px;margin-top:4px">
+            Source: <a href="${esc(fx.source_url)}" target="_blank" rel="noopener">${esc(fx.source)}</a>.
+            Used to state the head-office consolidated books in pesos.
+          </div>
+        </div>
+        <div class="muted" style="text-align:right;font-size:12.5px">
+          Bulletin date <b>${esc(fx.as_of)}</b>${fx.age_days != null ? ` · ${fx.age_days} day(s) old` : ''}<br>
+          ${fx.updated_at ? `Saved ${fmtDate(fx.updated_at)} by ${esc(fx.updated_by || '')}` : 'Starting figures — not yet updated'}
+        </div>
+      </div>
+      ${stale ? `<div class="note-warn" style="margin-top:10px">These rates are ${fx.age_days} days old. BSP publishes a new bulletin every banking day.</div>` : ''}
+      <div class="table-scroll" style="margin-top:10px"><table>
+        <tr>${fx.currencies.map(c => `<th>${esc(c)}</th>`).join('')}</tr>
+        <tr>${fx.currencies.map(cell).join('')}</tr>
+      </table></div>
+      ${fx.editable ? `
+      <div class="row" style="gap:8px;align-items:flex-end;margin-top:12px">
+        <div><label style="margin:0">Bulletin date</label><input id="fxAsOf" type="date" value="${esc(fx.as_of)}" style="max-width:180px"></div>
+        <button onclick="saveFx()">Save rates</button>
+        <button class="secondary" onclick="refreshFx(this)">↻ Fetch from BSP</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        “Fetch from BSP” reads the latest bulletin from bsp.gov.ph. If BSP is unreachable or its
+        page has changed, nothing is overwritten — key the figures in by hand instead.
+      </div>` : `<div class="note-info" style="margin-top:12px">Exchange rates follow the same rule as rate cards: only the <b>Developer Console portal</b> (/dev) can change them.</div>`}
     </div>`;
+}
+async function saveFx() {
+  const fx = await api('/api/accounting/fx');
+  const rates = {};
+  for (const c of fx.currencies) {
+    const el = document.getElementById('fx_' + c);
+    if (el && el.value !== '') rates[c] = +el.value;
+  }
+  try {
+    await api('/api/accounting/fx', { method: 'PUT', body: { rates, as_of: (document.getElementById('fxAsOf') || {}).value } });
+    flash('Exchange rates saved');
+    renderFxCard();
+  } catch (e) { showErr(e); }
+}
+async function refreshFx(btn) {
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Reading BSP…';
+  try {
+    const fx = await api('/api/accounting/fx/refresh', { method: 'POST' });
+    flash(`Rates updated from the BSP bulletin of ${fx.as_of} (${(fx.fetched || []).join(', ')})`);
+    renderFxCard();
+  } catch (e) {
+    showErr(e);
+  } finally { btn.disabled = false; btn.textContent = label; }
 }
 async function saveRateCard() {
   const zones = ACCT_META.zones, sizes = ACCT_META.sizes;
@@ -2782,45 +2860,93 @@ async function renderPnl(from, to) {
   document.getElementById('acctBody').innerHTML = `
     <div class="card">
       <div class="row" style="gap:8px;align-items:flex-end">
+        ${(MY && MY.sees_all_branches) ? `<div><label style="margin:0">Books</label>
+          <select style="max-width:260px" onchange="pnlBranch(this.value)">
+            <option value="">Whole group (consolidated)</option>
+            ${(MY.branches || []).map(b => `<option value="${esc(b.key)}"${b.key === p.branch ? ' selected' : ''}>${esc(b.flag || '')} ${esc(b.label)}</option>`).join('')}
+          </select></div>` : ''}
         <div><label style="margin:0">From</label><input id="pnlFrom" type="date" value="${from || ''}"></div>
         <div><label style="margin:0">To</label><input id="pnlTo" type="date" value="${to || ''}"></div>
         <button class="small" onclick="renderPnl(pnlFrom.value, pnlTo.value)">Apply</button>
         ${from || to ? `<button class="small secondary" onclick="renderPnl()">Clear</button>` : ''}
       </div>
     </div>
-    ${p.mixed_currency ? `
-    <div class="card">
-      <h2 style="margin-top:0">Revenue by currency</h2>
-      <div class="muted" style="margin-bottom:8px">Each branch bills in its own currency, so the consolidated view lists them side by side rather than adding them into one figure.</div>
-      <table>
-        <tr><th>Currency</th><th>Shipments</th><th>Billed</th><th>Collected</th><th>Receivable</th></tr>
-        ${Object.entries(p.by_currency).map(([c, r]) => `<tr>
-          <td><b>${esc(c)}</b></td><td>${r.shipments}</td>
-          <td>${esc(money(r.billed, c))}</td><td>${esc(money(r.collected, c))}</td><td>${esc(money(r.receivable, c))}</td>
-        </tr>`).join('')}
-      </table>
-    </div>` : `
+    ${p.books === 'HQ' ? `<div class="note-info" style="margin-bottom:12px">
+      Head office books the <b>inter-branch settlements it issues</b> against its <b>local Philippine costs</b>.
+      What Thailand and Cambodia bill their own senders — and anything still owed on it — stays in those branches' books.
+    </div>` : ''}
     <div class="tiles">
-      <div class="tile"><div class="num">${esc(money(p.revenue.billed, p.currency))}</div><div class="lbl">Revenue billed (${p.revenue.invoice_count} invoices)</div></div>
-      <div class="tile"><div class="num">${esc(money(p.revenue.collected, p.currency))}</div><div class="lbl">Collected</div></div>
-      <div class="tile"><div class="num">${esc(money(p.revenue.receivable, p.currency))}</div><div class="lbl">Receivable</div></div>
-      <div class="tile"><div class="num">${esc(money(p.expenses.total, p.currency))}</div><div class="lbl">Expenses (${p.expenses.count})</div></div>
-    </div>`}
+      <div class="tile"><div class="num">${esc(money(p.revenue.billed, p.currency))}</div><div class="lbl">${p.books === 'HQ' ? `Settlements issued (${p.revenue.invoice_count})` : `Revenue billed (${p.revenue.invoice_count} invoices)`}</div></div>
+      <div class="tile"><div class="num">${esc(money(p.revenue.collected, p.currency))}</div><div class="lbl">${p.books === 'HQ' ? 'Settled by branches' : 'Collected'}</div></div>
+      <div class="tile"><div class="num">${esc(money(p.revenue.receivable, p.currency))}</div><div class="lbl">${p.books === 'HQ' ? 'Due from branches' : 'Receivable'}</div></div>
+      <div class="tile"><div class="num">${esc(money(p.expenses.total, p.currency))}</div><div class="lbl">${p.books === 'HQ' ? `Local PH expenses (${p.expenses.count})` : `Expenses (${p.expenses.count})`}</div></div>
+    </div>
+    ${p.mixed_currency ? fxBreakdownHtml(p.consolidated, p) : ''}
+    ${!p.mixed_currency && p.fx_note ? `<div class="muted" style="margin:-4px 0 12px;font-size:12.5px">
+      Inter-branch settlements are billed in pesos and shown here in ${esc(p.currency)}, converted at the
+      <a href="${esc(p.fx_note.source_url)}" target="_blank" rel="noopener">${esc(p.fx_note.source)}</a> rate of ${esc(p.fx_note.as_of)}.
+      ${p.unconverted_settlements ? `<b>${p.unconverted_settlements} settlement(s) have no rate and are left out.</b>` : ''}
+    </div>` : ''}
     <div class="card">
-      <h2 style="margin-top:0">Profit &amp; Loss${p.mixed_currency ? ` <span class="muted" style="font-size:13px;font-weight:400">· ${esc(p.currency)} items only</span>` : ''}</h2>
+      <h2 style="margin-top:0">Profit &amp; Loss${p.mixed_currency ? ` <span class="muted" style="font-size:13px;font-weight:400">· converted to PHP</span>` : ''}</h2>
       <table>
-        ${p.mixed_currency ? '' : `<tr><td><b>Revenue (billed to customers)</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>`}
+        <tr><td><b>${p.books === 'HQ' ? 'Revenue (inter-branch settlements issued)' : 'Revenue (billed to customers)'}</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
         ${p.interbranch && p.interbranch.income ? `<tr><td class="muted" style="padding-left:22px">Inter-branch billed to other branches</td><td style="text-align:right" class="muted">${esc(money(p.interbranch.income, p.currency))}</td></tr>` : ''}
-        ${p.interbranch && p.interbranch.note ? `<tr><td colspan="2" class="muted" style="font-size:12px">${esc(p.interbranch.note)}</td></tr>` : ''}
-        ${cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')}
+        <tr><td><b>${p.books === 'HQ' ? 'Local Philippine costs' : 'Costs'}</b></td><td></td></tr>
+        ${cat.length ? cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')
+          : `<tr><td class="muted" style="padding-left:22px">No expenses recorded in this period</td><td style="text-align:right" class="muted">− ${esc(money(0, p.currency))}</td></tr>`}
         ${p.interbranch && p.interbranch.cost ? `<tr><td class="muted" style="padding-left:22px">Inter-branch charges from other branches</td><td style="text-align:right" class="muted">− ${esc(money(p.interbranch.cost, p.currency))}</td></tr>` : ''}
         <tr><td><b>Total costs</b></td><td style="text-align:right">− ${esc(money((p.totals && p.totals.costs) || p.expenses.total, p.currency))}</td></tr>
-        ${p.mixed_currency ? '' : `<tr style="border-top:2px solid var(--border)">
+        <tr style="border-top:2px solid var(--border)">
           <td><b>Net profit (accrual)</b></td>
           <td style="text-align:right;font-weight:800;color:${p.net_profit >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_profit, p.currency))}</td></tr>
         <tr><td><b>Net cash (collected − expenses)</b></td>
-          <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>`}
+          <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>
       </table>
+      ${p.interbranch && p.interbranch.note ? `<div class="muted" style="font-size:12px;margin-top:10px">${esc(p.interbranch.note)}</div>` : ''}
+    </div>`;
+}
+
+// Switch which set of books the statement shows. It rides on the same ?branch= the rest of
+// the portal uses, so the "Viewing … only" banner stays truthful.
+function pnlBranch(key) {
+  location.hash = '#/accounting/pnl' + (key ? '?branch=' + encodeURIComponent(key) : '');
+}
+
+// The conversion behind a consolidated peso total: what each branch currency contributed,
+// at which BSP rate. Shown so the PHP figure can be checked line by line rather than trusted.
+function fxBreakdownHtml(c, p) {
+  if (!c) return '';
+  const stale = c.age_days != null && c.age_days > 7;
+  return `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:baseline">
+        <h2 style="margin:0">Converted to pesos</h2>
+        <span class="muted" style="font-size:12.5px">
+          <a href="${esc(c.source_url)}" target="_blank" rel="noopener">${esc(c.source)}</a> · as of ${esc(c.as_of)}
+        </span>
+      </div>
+      <div class="muted" style="margin:6px 0 10px">Each branch bills in its own currency. Revenue is converted at the BSP reference rate to give one peso total.</div>
+      <div class="table-scroll"><table>
+        <tr><th>Currency</th><th>Shipments</th><th>Billed</th><th>BSP rate</th><th>Billed (PHP)</th><th>Collected (PHP)</th></tr>
+        ${c.lines.map(l => `<tr>
+          <td><b>${esc(l.currency)}</b></td><td>${l.shipments == null ? '' : l.shipments}</td>
+          <td>${esc(money(l.billed, l.currency))}</td>
+          <td>${l.converted ? esc('₱ ' + l.rate.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) + ' / ' + l.currency) : '<span class="muted">no rate</span>'}</td>
+          <td>${l.converted ? esc(money(l.php.billed, 'PHP')) : '<span class="muted">—</span>'}</td>
+          <td>${l.converted ? esc(money(l.php.collected, 'PHP')) : '<span class="muted">—</span>'}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid var(--border)">
+          <td colspan="4"><b>Total</b></td>
+          <td><b>${esc(money(c.totals.billed, 'PHP'))}</b></td>
+          <td><b>${esc(money(c.totals.collected, 'PHP'))}</b></td></tr>
+      </table></div>
+      ${c.unconverted.length ? `<div class="note-warn" style="margin-top:10px">
+        No BSP rate on file for <b>${esc(c.unconverted.join(', '))}</b>, so ${c.unconverted.length > 1 ? 'those currencies are' : 'that currency is'} left out of the peso total.</div>` : ''}
+      ${p && p.unconverted_expenses ? `<div class="note-warn" style="margin-top:10px">
+        ${p.unconverted_expenses} expense(s) are in a currency with no BSP rate and are left out of the peso total.</div>` : ''}
+      ${stale ? `<div class="note-warn" style="margin-top:10px">
+        These rates are ${c.age_days} days old. ${isDeveloper() ? 'Refresh them in <a href="#/accounting/rates">Rate Cards → Exchange rates</a>.' : 'Ask the Developer to refresh them.'}</div>` : ''}
     </div>`;
 }
 
