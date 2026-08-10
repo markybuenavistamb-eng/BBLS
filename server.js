@@ -31,7 +31,14 @@ app.use((req, _res, next) => { req.cookies = sess.parseCookies(req.headers.cooki
 // Load the DB doc from the store before any API/file handler, and flush after mutations.
 // Scoped to /api and /files so static assets (images/css/js) never hit the KV store.
 app.use(['/api', '/files'], async (req, res, next) => {
-  try { await db.load(); } catch (e) { return res.status(503).json({ error: 'Storage temporarily unavailable' }); }
+  // /api/health diagnoses storage, so it must not be gated behind storage working — that is
+  // exactly when it is needed. It runs its own probe and reports why the store is failing.
+  if (req.path === '/health') return next();
+  try { await db.load(); } catch (e) {
+    // Surface the cause in the deployment log; the response stays generic on purpose.
+    console.error('Storage load failed:', require('./lib/store').classifyError(e).reason, '·', e.message);
+    return res.status(503).json({ error: 'Storage temporarily unavailable', health: '/api/health' });
+  }
   const sendJson = res.json.bind(res);
   res.json = (body) => {
     (async () => {
@@ -493,17 +500,23 @@ app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...ROLE.BRANCH_ADM
 });
 
 // ---------- health (public: report the storage backend so persistence can be verified; no secrets) ----------
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const store = require('./lib/store');
   res.set('Cache-Control', 'no-store');
+  // Actually read from the store. The old check only asked whether a cloud backend was
+  // configured, so a deployment whose every query failed still reported itself connected.
+  const probe = await store.probe();
   const checks = {
-    database_connected: !store.ephemeral,
+    database_connected: probe.ok && !store.ephemeral,
     node_id_set: !!process.env.VFIC_NODE_ID,
     sync_secret_set: !!NODE.SYNC_SECRET,
     peers_configured: NODE.PEERS.length > 0
   };
   res.json({
     ok: true,
+    // Present only when the store is unreachable: a classified reason and the fix, so a
+    // broken deployment explains itself instead of returning a bare 503.
+    storage_error: probe.ok ? null : { reason: probe.reason, fix: probe.fix },
     // Which deployment this is, so each node can be identified at a glance after release.
     node: { id: NODE.SELF.id, label: NODE.SELF.label, type: NODE.SELF.type, id_band: `${NODE.SELF.idOffset}–${NODE.SELF.idOffset + 999999}` },
     backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
