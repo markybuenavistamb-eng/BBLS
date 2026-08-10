@@ -877,7 +877,92 @@ function boxRowHtml() {
       <label>Packing list — itemized contents (printed on the Packing List document)</label>
       <div id="items${n}">${itemRowHtml()}</div>
       <button type="button" class="secondary small" onclick="document.getElementById('items${n}').insertAdjacentHTML('beforeend', itemRowHtml())">+ Add item</button>
+      ${bocGoodsHtml(n)}
     </div>`;
+}
+
+// Page 1 of BOC Form BB-IS-001 ticks a Type of Availment and a Type of Sender. Neither can
+// be derived from the customer record, so a walk-in shipment printed both blocks empty.
+// Prefilled from the online booking when there is one.
+function bocDeclarationHtml(intake) {
+  const boc = (intake && intake.boc) || intake || {};
+  const availment = boc.availment_type || '';
+  const senderType = boc.sender_type || '';
+  const avail = (typeof BOC_AVAILMENT !== 'undefined' ? BOC_AVAILMENT : []);
+  const qfwa = (typeof BOC_SENDER_QFWA !== 'undefined' ? BOC_SENDER_QFWA : []);
+  const nqfwa = (typeof BOC_SENDER_NQFWA !== 'undefined' ? BOC_SENDER_NQFWA : []);
+  const opt = (k, label, sel) => `<option value="${esc(k)}" ${sel === k ? 'selected' : ''}>${esc(label)}</option>`;
+  return `
+    <div class="card">
+      <h2 style="margin-top:0">Customs declaration <span class="muted" style="font-size:13px;font-weight:400">· BOC Form BB-IS-001 page 1</span></h2>
+      <div class="muted" style="margin-bottom:8px">
+        These two boxes are ticked on the printed Information Sheet. They cannot be worked out from the
+        sender's record, so a walk-in needs them set here — the same way the online form asks the sender.
+      </div>
+      <div class="form-grid">
+        <div><label>Type of availment</label>
+          <select id="shAvailment">
+            <option value="">— not declared —</option>
+            ${avail.filter(a => a.group).map(a => opt(a.key, 'Balikbayan Box privilege — ' + a.label, availment)).join('')}
+            ${opt('DE_MINIMIS', 'De Minimis Value', availment)}
+            ${opt('NONE', 'None', availment)}
+          </select></div>
+        <div><label>Type of sender</label>
+          <select id="shSenderType">
+            <option value="">— not declared —</option>
+            ${qfwa.map(t => opt(t.key, 'QFWA — ' + t.label, senderType)).join('')}
+            ${nqfwa.map(t => opt(t.key, 'NQFWA — ' + t.label, senderType)).join('')}
+          </select></div>
+      </div>
+    </div>`;
+}
+
+// The BOC packing list prints a fixed table of goods categories with a quantity against
+// each. An online booking collects them from the sender; a walk-in encoded here had no way
+// to record them, so its printed packing list came out blank. Same categories, same order,
+// so both routes produce an identical page 2.
+function bocGoodsHtml(n) {
+  const cats = (typeof BOC_GOODS !== 'undefined' ? BOC_GOODS : []);
+  const half = Math.ceil(cats.length / 2);
+  const col = (list, offset) => list.map((c, i) => `
+    <div class="goods-row">
+      <span>${esc(c)}</span>
+      <input type="number" min="0" step="1" class="bxGoods" data-goodsbox="${n}" data-cat="${esc(c)}"
+             aria-label="${esc(c)} quantity"${c === 'Others' ? ` oninput="toggleOthers(${n})"` : ''}>
+    </div>`).join('');
+  return `
+    <details class="collapse" style="margin-top:10px">
+      <summary>Declared goods for the BOC packing list <span class="muted">(quantity per category)</span></summary>
+      <div class="muted" style="margin:6px 0 8px">
+        Printed on BOC Form BB-IS-001 page 2. Leave blank any category the box does not contain.
+      </div>
+      <div class="goods-grid">
+        <div>${col(cats.slice(0, half), 0)}</div>
+        <div>${col(cats.slice(half), half)}</div>
+      </div>
+      <div id="othersWrap${n}" style="display:none;margin-top:8px">
+        <label>“Others” — specify</label>
+        <input id="bxOthers${n}" placeholder="What the Others quantity covers">
+      </div>
+    </details>`;
+}
+// "Others" only means something with a description attached.
+function toggleOthers(n) {
+  const qty = document.querySelector(`.bxGoods[data-goodsbox="${n}"][data-cat="Others"]`);
+  const wrap = document.getElementById('othersWrap' + n);
+  if (wrap) wrap.style.display = (qty && +qty.value > 0) ? '' : 'none';
+}
+// Collect one box's declared goods in the shape the printed packing list reads.
+function collectBoxGoods(n) {
+  const spec = (document.getElementById('bxOthers' + n) || {}).value || '';
+  return [...document.querySelectorAll(`.bxGoods[data-goodsbox="${n}"]`)]
+    .map(i => {
+      const qty = parseInt(i.value, 10) || 0;
+      const g = { category: i.dataset.cat, qty };
+      if (i.dataset.cat === 'Others' && qty > 0 && spec.trim()) g.specify = spec.trim();
+      return g;
+    })
+    .filter(g => g.qty > 0);
 }
 function itemRowHtml() {
   return `
@@ -951,6 +1036,7 @@ async function pageShipmentNew(intakeId) {
           ${intake && intake.passport_file ? '<div class="muted">Already on file from the online submission — only attach a new one to replace it.</div>' : ''}</div>
       </div>
     </div>
+    ${bocDeclarationHtml(intake)}
     <h2>Boxes</h2>
     <div id="boxRows">${(intake ? intake.boxes : [null]).map(() => boxRowHtml()).join('')}</div>
     <button class="secondary" onclick="document.getElementById('boxRows').insertAdjacentHTML('beforeend', boxRowHtml()); quoteShipmentFee();">+ Add another box</button>
@@ -990,6 +1076,17 @@ async function pageShipmentNew(intakeId) {
     document.getElementById('bxReceiver' + n).innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
     document.getElementById('bxSize' + n).value = bx.size_category;
     if (bx.weight_kg) document.getElementById('bxWeight' + n).value = bx.weight_kg;
+    // Show the sender's declared goods in the same grid the agent would type into, so the
+    // quantities can be checked against the physical box and corrected before saving.
+    for (const g of (bx.goods || [])) {
+      const cell = document.querySelector(`.bxGoods[data-goodsbox="${n}"][data-cat="${(g.category || '').replace(/"/g, '\\"')}"]`);
+      if (cell) cell.value = g.qty;
+      if (g.category === 'Others' && g.specify) {
+        const spec = document.getElementById('bxOthers' + n);
+        if (spec) spec.value = g.specify;
+      }
+    }
+    toggleOthers(n);
     // BOC goods checklist → the encoder's itemized packing list rows
     document.getElementById('bxContents' + n).value = (bx.goods || []).map(g => g.category).join(', ');
     document.getElementById('bxInstr' + n).value = bx.special_instructions || '';
@@ -1220,7 +1317,14 @@ async function createShipment() {
         weight_kg: $('bxWeight').value, length_cm: $('bxL').value, width_cm: $('bxW').value, height_cm: $('bxH').value,
         declared_contents: $('bxContents').value, special_instructions: $('bxInstr').value,
         packing_list_items: collectItems('items' + n),
-        boc: src ? { receiver: src.receiver, goods: src.goods } : null,
+        // Goods typed here win over the online booking's, since the agent has the box in
+        // front of them; the booking's list is the starting point, not the final word.
+        boc: (() => {
+          const goods = collectBoxGoods(n);
+          const receiver = src ? src.receiver : null;
+          const merged = { receiver, goods: goods.length ? goods : (src ? src.goods : []) };
+          return (merged.receiver || (merged.goods && merged.goods.length)) ? merged : null;
+        })(),
         total_value_php: src ? src.total_value_php : null
       };
     });
@@ -1238,14 +1342,21 @@ async function createShipment() {
         sender_id: +shSender.value, origin_country: shOrigin.value, origin_agent: shAgent.value,
         service_level: shService.value, collection: (PREFILL_INTAKE && PREFILL_INTAKE.collection) || null, shipping_fee_amount: shFee.value || null, currency: shCurrency.value,
         payment_status: shPaid.value, receiving_form_file, packing_list_file, passport_file, boxes,
-        boc: PREFILL_INTAKE ? {
-          availment_type: PREFILL_INTAKE.availment_type,
-          sender_type: PREFILL_INTAKE.sender_type,
-          sender: PREFILL_INTAKE.sender,
-          pickup: PREFILL_INTAKE.pickup,
-          total_value_php: PREFILL_INTAKE.total_value_php,
-          reference_code: PREFILL_INTAKE.reference_code
-        } : null
+        // Built for a walk-in too, not just an online booking — otherwise the printed
+        // Information Sheet has no availment or sender type ticked. What the agent selects
+        // overrides the booking, since they are looking at the sender's documents.
+        boc: (() => {
+          const availment_type = (document.getElementById('shAvailment') || {}).value || (PREFILL_INTAKE ? PREFILL_INTAKE.availment_type : '') || '';
+          const sender_type = (document.getElementById('shSenderType') || {}).value || (PREFILL_INTAKE ? PREFILL_INTAKE.sender_type : '') || '';
+          const base = PREFILL_INTAKE ? {
+            sender: PREFILL_INTAKE.sender,
+            pickup: PREFILL_INTAKE.pickup,
+            total_value_php: PREFILL_INTAKE.total_value_php,
+            reference_code: PREFILL_INTAKE.reference_code
+          } : {};
+          if (!availment_type && !sender_type && !PREFILL_INTAKE) return null;
+          return { ...base, availment_type, sender_type };
+        })()
       }
     });
     if (PREFILL_INTAKE) {
