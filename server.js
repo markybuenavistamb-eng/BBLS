@@ -526,7 +526,14 @@ app.get('/api/health', async (req, res) => {
     backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
     persistent: !store.ephemeral,            // false = data resets on cold start (no cloud DB yet)
     // Uploads (passport/ID scans, POD photos) are stored separately from the database.
-    files: { backend: storage.fileBackend, persistent: !storage.ephemeral },
+    // blob_vars lists the *names* of any BLOB-related variables this deployment can see —
+    // never their values. It separates "the store was never connected" from "it was
+    // connected but the token arrived under a name the app does not read".
+    files: {
+      backend: storage.fileBackend,
+      persistent: !storage.ephemeral,
+      blob_vars: Object.keys(process.env).filter(k => /BLOB/i.test(k)).sort()
+    },
     replication: {
       enabled: NODE.syncEnabled(), peers: NODE.PEERS.map(p => p.id),
       // Names a secret that exists but cannot be used, which otherwise only shows up as an
