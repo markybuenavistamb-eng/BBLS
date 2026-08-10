@@ -511,7 +511,10 @@ app.get('/api/health', async (req, res) => {
     database_connected: probe.ok && !store.ephemeral,
     node_id_set: !!process.env.VFIC_NODE_ID,
     sync_secret_set: !!NODE.SYNC_SECRET && !secretIssue,
-    peers_configured: NODE.PEERS.length > 0
+    peers_configured: NODE.PEERS.length > 0,
+    // Uploads on ephemeral /tmp look like they saved, then disappear with the instance —
+    // an ID scan lost hours after intake, which is worse than an upload that fails outright.
+    file_storage_persistent: !storage.ephemeral
   };
   res.json({
     ok: true,
@@ -522,6 +525,8 @@ app.get('/api/health', async (req, res) => {
     node: { id: NODE.SELF.id, label: NODE.SELF.label, type: NODE.SELF.type, id_band: `${NODE.SELF.idOffset}–${NODE.SELF.idOffset + 999999}` },
     backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
     persistent: !store.ephemeral,            // false = data resets on cold start (no cloud DB yet)
+    // Uploads (passport/ID scans, POD photos) are stored separately from the database.
+    files: { backend: storage.fileBackend, persistent: !storage.ephemeral },
     replication: {
       enabled: NODE.syncEnabled(), peers: NODE.PEERS.map(p => p.id),
       // Names a secret that exists but cannot be used, which otherwise only shows up as an
