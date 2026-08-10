@@ -64,6 +64,23 @@ tables* is safe to leave ticked because the SQL above locks `kv` behind RLS with
 the anon key gets nothing and only `service_role` can read it. The **database password** is
 for direct Postgres connections; it is never pasted into Vercel.
 
+### Check it before going further
+
+Prove the credentials work from your own machine first — it is much easier to debug here
+than after a deploy. Copy `.env.example` to `.env`, fill in the two Supabase values, and run:
+
+```bash
+npm run check-store
+```
+
+It reports the backend it selected, reads the stored document, and round-trips a scratch row
+to prove writes work, then deletes it. It never prints a key — only whether one is set, its
+length and last four characters — so the output is safe to share. Common failures come back
+with the fix attached (missing `kv` table, `anon` key used instead of `service_role`, paused
+project, wrong URL).
+
+`.env` is in `.gitignore`, so it stays on your machine and never reaches GitHub.
+
 ## Step 1b — Create the Upstash database (Cambodia)
 
 1. [upstash.com](https://upstash.com) → **Create Database** (Redis) → free tier, region

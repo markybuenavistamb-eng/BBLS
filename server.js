@@ -1,3 +1,7 @@
+// Read .env before anything else, so modules that pick their backend at require time
+// (lib/store, lib/node) see the local configuration. No-op on Vercel.
+require('./lib/env').load();
+
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
