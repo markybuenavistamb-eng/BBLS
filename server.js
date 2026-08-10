@@ -516,7 +516,7 @@ app.get('/api/health', async (req, res) => {
     ok: true,
     // Present only when the store is unreachable: a classified reason and the fix, so a
     // broken deployment explains itself instead of returning a bare 503.
-    storage_error: probe.ok ? null : { reason: probe.reason, fix: probe.fix },
+    storage_error: probe.ok ? null : { reason: probe.reason, fix: probe.fix, notes: probe.notes || [] },
     // Which deployment this is, so each node can be identified at a glance after release.
     node: { id: NODE.SELF.id, label: NODE.SELF.label, type: NODE.SELF.type, id_band: `${NODE.SELF.idOffset}–${NODE.SELF.idOffset + 999999}` },
     backend: store.backend,                 // 'supabase' | 'kv' | 'ephemeral-tmp' | 'filesystem'
