@@ -71,19 +71,33 @@ for direct Postgres connections; it is never pasted into Vercel.
 ### Check it before going further
 
 Prove the credentials work from your own machine first — it is much easier to debug here
-than after a deploy. Copy `.env.example` to `.env`, fill in the two Supabase values, and run:
+than after a deploy. Keep one env file per node so you are never editing a shared file
+between checks:
 
 ```bash
-npm run check-store
+cp .env.example .env.mnl     # fill in the vfic-mnl URL + service_role key
+cp .env.example .env.th      # fill in the vfic-th URL + service_role key
+
+npm run check-store -- --env .env.mnl
+npm run check-store -- --env .env.th
 ```
 
-It reports the backend it selected, reads the stored document, and round-trips a scratch row
-to prove writes work, then deletes it. It never prints a key — only whether one is set, its
-length and last four characters — so the output is safe to share. Common failures come back
-with the fix attached (missing `kv` table, `anon` key used instead of `service_role`, paused
-project, wrong URL).
+Each run reports the backend it selected, reads the stored document, and round-trips a
+scratch row to prove writes work before deleting it. It never prints a key — only whether
+one is set, its length and last four characters — so the output is safe to paste anywhere.
+Common failures come back with the fix attached (missing `kv` table, `anon` key used instead
+of `service_role`, paused project, wrong URL).
 
-`.env` is in `.gitignore`, so it stays on your machine and never reaches GitHub.
+Set `VFIC_NODE_ID` in each file too (`HQ_MANILA`, `TH_BANGKOK`), so the check confirms the
+node identity and id band alongside the connection.
+
+> **Handling the keys.** A `service_role` key bypasses row-level security completely — with
+> the schema above it *is* the database, and that database holds staff password hashes,
+> customer addresses and uploaded ID scans. Treat one like a root password: paste it only
+> into your own `.env.*` file and the matching Vercel project. Every `.env*` file is
+> gitignored (only `.env.example` is tracked). If a key is ever pasted somewhere it should
+> not be — a chat, an issue, a screenshot — rotate it in Supabase → Project Settings → API
+> Keys rather than hoping it went unread.
 
 ## Step 1b — Create the Upstash database (Cambodia)
 

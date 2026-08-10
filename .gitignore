@@ -4,10 +4,11 @@ node_modules/
 # local data store & uploads (KV + Blob hold these in production)
 data/
 
-# secrets & env
-.env
-.env.local
-.env.*.local
+# secrets & env — ignore every .env variant (.env, .env.mnl, .env.th, .env.kh, …)
+# and re-admit only the committed template. A per-node file holds a service_role key,
+# which bypasses row-level security entirely; none of them may reach git.
+.env*
+!.env.example
 
 # vercel / logs / os
 .vercel
