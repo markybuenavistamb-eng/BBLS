@@ -157,6 +157,34 @@ KV_REST_API_TOKEN=<the Upstash REST token>
 
 ---
 
+## Step 2b — One Vercel Blob store, shared by all three
+
+Uploads (passport/ID scans, POD photos) are stored outside the database. Create **one** Blob
+store and connect **all three** projects to it — not one store per project.
+
+The reason is that a file is addressed by an opaque key (`TH_BANGKOK/intake/<ts>-<name>`)
+which is saved inside the shipment or intake record. Those records replicate, so an ID
+uploaded at a branch arrives at head office as a key — and head office resolves that key
+against whatever store *its* token points at. With separate stores, Manila cannot open any
+document uploaded at a branch, which is exactly when it needs to.
+
+1. **Storage → Create Database → Blob**, name it `vfic-files`.
+2. **Projects → Connect Project** for each of `vfic-mnl`, `vfic-th`, `vfic-kh`, with
+   **Production** ticked.
+3. Connecting the store may supply only `BLOB_STORE_ID` and `BLOB_WEBHOOK_PUBLIC_KEY`. The
+   app needs the read/write token, so check each project for **`BLOB_READ_WRITE_TOKEN`** and
+   add it by hand if it is absent: open the store → **Tokens** (or *Read-Write Token* /
+   *Connect* panel) → copy the token, then add it to each project's environment variables as
+   `BLOB_READ_WRITE_TOKEN`.
+4. Redeploy all three — a token added after a build does not reach that build.
+
+`npm run check-nodes` reports `Uploads: blob` once this is right, and names which BLOB
+variables a deployment can actually see when it is not.
+
+> Until this is done the app falls back to `/tmp`, where an upload **appears to succeed and
+> then disappears** when the instance recycles. Do not take real customer intake before
+> `check-nodes` shows `Uploads: blob` on all three.
+
 ## Step 3 — Verify each node
 
 Check all three at once from your machine:
