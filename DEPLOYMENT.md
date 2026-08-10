@@ -22,17 +22,21 @@ node replicated to a node on a different backend, and survived a restart.)
 
 ## Shared secret
 
-Every node must present the **same** sync secret. One has been generated for you:
-
-```
-61moge1_rZ9v4bBSGpfbQlkjJy0pRpn13kfOzSp8U2g
-```
-
-Treat it like a password. If you'd rather mint your own:
+Every node must present the **same** sync secret — it is what authorises one deployment to
+pull data from another. Generate it yourself and keep it out of this file:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
+
+Treat the output like a password: paste it straight into each Vercel project's
+`VFIC_SYNC_SECRET` variable and nowhere else. Anyone holding it can read or inject records
+across the whole network, so it must never be committed — this repo is the one place it
+should not live.
+
+> An earlier draft of this file had a generated secret written into it in plain text, which
+> put it in git history. If you already deployed with that value, mint a new one with the
+> command above and update `VFIC_SYNC_SECRET` on all three projects.
 
 ---
 
@@ -102,7 +106,7 @@ then deploy.
 
 ```
 VFIC_NODE_ID=HQ_MANILA
-VFIC_SYNC_SECRET=61moge1_rZ9v4bBSGpfbQlkjJy0pRpn13kfOzSp8U2g
+VFIC_SYNC_SECRET=<the secret you generated above — the SAME value on all three>
 VFIC_PEERS=[{"id":"TH_BANGKOK","url":"https://vfic-th.vercel.app"},{"id":"KH_PHNOMPENH","url":"https://vfic-kh.vercel.app"}]
 SUPABASE_URL=<the vfic-mnl project URL>
 SUPABASE_SERVICE_ROLE_KEY=<the vfic-mnl service_role key>
@@ -112,7 +116,7 @@ SUPABASE_SERVICE_ROLE_KEY=<the vfic-mnl service_role key>
 
 ```
 VFIC_NODE_ID=TH_BANGKOK
-VFIC_SYNC_SECRET=61moge1_rZ9v4bBSGpfbQlkjJy0pRpn13kfOzSp8U2g
+VFIC_SYNC_SECRET=<the secret you generated above — the SAME value on all three>
 VFIC_PEERS=[{"id":"HQ_MANILA","url":"https://vfic-mnl.vercel.app"}]
 SUPABASE_URL=<the vfic-th project URL>
 SUPABASE_SERVICE_ROLE_KEY=<the vfic-th service_role key>
@@ -122,7 +126,7 @@ SUPABASE_SERVICE_ROLE_KEY=<the vfic-th service_role key>
 
 ```
 VFIC_NODE_ID=KH_PHNOMPENH
-VFIC_SYNC_SECRET=61moge1_rZ9v4bBSGpfbQlkjJy0pRpn13kfOzSp8U2g
+VFIC_SYNC_SECRET=<the secret you generated above — the SAME value on all three>
 VFIC_PEERS=[{"id":"HQ_MANILA","url":"https://vfic-mnl.vercel.app"}]
 KV_REST_API_URL=<the Upstash REST URL>
 KV_REST_API_TOKEN=<the Upstash REST token>
@@ -141,7 +145,19 @@ KV_REST_API_TOKEN=<the Upstash REST token>
 
 ## Step 3 — Verify each node
 
-Every deployment self-checks. Open (or `curl`) on each:
+Check all three at once from your machine:
+
+```bash
+npm run check-nodes -- https://vfic-mnl.vercel.app https://vfic-th.vercel.app https://vfic-kh.vercel.app
+```
+
+It reads each deployment's `/api/health` and reports what is wrong and how to fix it, then
+cross-checks the network for the faults no single node can see — most importantly **two
+projects sharing a `VFIC_NODE_ID`**, which would make them mint colliding record ids and
+mis-assign ownership during replication. It sends no credentials; `/api/health` is
+unauthenticated and returns only booleans about what is configured.
+
+Or check one deployment by hand:
 
 ```bash
 curl https://vfic-th.vercel.app/api/health
