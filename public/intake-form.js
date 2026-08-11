@@ -17,6 +17,27 @@ let ORIGIN_COUNTRIES = ['Thailand', 'Cambodia', 'Vietnam'];
 // Shipping tariff for the sender's country — ocean is per box by size and destination zone,
 // air is per kilo by zone. Loaded with the box sizes and refreshed when the country changes.
 let RATES_OCEAN = null, RATES_AIR = null, REGION_ZONE = {}, SHIP_CCY = '', BRANCH_CITY = '';
+// A branch deployment answers for its own country, so the form shows it rather than asks.
+let ORIGIN_LOCKED = false, PHONE_FMT = null;
+// The shipping estimate last shown to the sender, submitted with the booking so the agent
+// records the same figure rather than working it out again.
+let QUOTED_TOTAL = null;
+
+// Tell the sender what a valid number looks like where they are, mobile and landline apart.
+function phoneHintHtml() {
+  if (!PHONE_FMT) return 'Include your country code, e.g. +66 812345678';
+  return `Starts <b>${esc(PHONE_FMT.dial_code)}</b> · ${esc(PHONE_FMT.mobile.hint)} · ${esc(PHONE_FMT.landline.hint)}`
+    + (PHONE_FMT.note ? ` <span class="muted">${esc(PHONE_FMT.note)}</span>` : '');
+}
+// Put the dialling code in the field so it is never left off, without overwriting a number
+// the sender already started typing.
+function seedPhoneCode() {
+  const el = gid('sPhone');
+  if (!el || !PHONE_FMT) return;
+  if (!el.value.trim()) el.value = PHONE_FMT.dial_code + ' ';
+  const hint = gid('phoneHint');
+  if (hint) hint.innerHTML = phoneHintHtml();
+}
 
 async function loadBoxSizes(country) {
   try {
@@ -34,6 +55,8 @@ async function loadBoxSizes(country) {
     REGION_ZONE = d.region_zone || {};
     SHIP_CCY = d.currency || '';
     BRANCH_CITY = d.branch_city || '';
+    ORIGIN_LOCKED = !!d.origin_country_locked;
+    PHONE_FMT = d.phone_format || null;
   } catch (e) { BOX_SIZES = []; }
 }
 
@@ -81,6 +104,7 @@ function quoteBox(n) {
 
 // Show each box's fee and the shipment total.
 function renderQuotes() {
+  QUOTED_TOTAL = null;
   let total = 0, priced = 0, boxes = 0;
   document.querySelectorAll('.box-block').forEach(el => {
     const n = el.dataset.box;
@@ -97,6 +121,9 @@ function renderQuotes() {
       out.innerHTML = `Shipping fee: <b>${esc(shipMoney(q.amount))}</b> <span class="muted">(${esc(q.basis)})</span>`;
     }
   });
+  // Remember the figure actually shown, so the booking carries it to the agent and the two
+  // can be compared rather than re-derived. Only a fully priced shipment counts as quoted.
+  if (priced && priced === boxes) QUOTED_TOTAL = +total.toFixed(2);
   const box = gid('feeTotal');
   if (box) {
     box.innerHTML = priced
@@ -113,6 +140,7 @@ async function onOriginCountryChange() {
   await loadBoxSizes(country);
   const agent = gid('oAgent');
   if (agent && BRANCH_CITY && !agent.dataset.touched) agent.value = BRANCH_CITY;
+  seedPhoneCode();
   renderQuotes();
 }
 const peso = (v) => 'Php ' + Number(v || 0).toLocaleString('en-PH');
@@ -462,7 +490,9 @@ function renderForm() {
         <div><label>Suffix *</label><input id="sSuf" placeholder="Jr., III, or N/A" required></div>
       </div>
       <div class="form-grid">
-        <div><label>Contact Number/s *</label><input id="sPhone" required></div>
+        <div><label>Contact Number/s *</label>
+          <input id="sPhone" required placeholder="${esc(PHONE_FMT ? PHONE_FMT.dial_code + ' ' + PHONE_FMT.mobile.example : '')}">
+          <div class="muted" style="font-size:12px;margin-top:4px" id="phoneHint">${phoneHintHtml()}</div></div>
         <div><label>Email Address <span class="muted">(if any)</span></label><input id="sEmail" type="email"></div>
       </div>
 
@@ -481,10 +511,15 @@ function renderForm() {
 
       <div class="form-grid">
         <div><label>Sending From (branch / city) *</label><input id="oAgent" required oninput="this.dataset.touched=1"></div>
-        <div><label>Country *</label><select id="sCountry" required onchange="onOriginCountryChange()">
-          <option value="">— select country —</option>
-          ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
-        </select></div>
+        <div><label>Country *</label>
+          ${ORIGIN_LOCKED
+            ? `<input id="sCountry" value="${esc(ORIGIN_COUNTRIES[0])}" readonly class="locked-field" aria-readonly="true">
+               <div class="muted" style="font-size:12px;margin-top:4px">This is the ${esc(ORIGIN_COUNTRIES[0])} booking site, so your country is already set.</div>`
+            : `<select id="sCountry" required onchange="onOriginCountryChange()">
+                 <option value="">— select country —</option>
+                 ${ORIGIN_COUNTRIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+               </select>`}
+        </div>
         <div><label>Service Level *</label><select id="oLevel" required onchange="renderQuotes()">
           ${SERVICE_LEVELS.map(k => `<option value="${k}">${esc(SERVICE_LEVEL_LABELS[k] || k)}</option>`).join('')}
         </select></div>
@@ -692,6 +727,9 @@ async function submitIntake() {
     fd.append('service_level', serviceLevel);
     fd.append('collection', collection);
     fd.append('total_value_php', val('sTotalValue'));
+    // What the sender was quoted on screen, and in which currency.
+    if (QUOTED_TOTAL != null) fd.append('quoted_fee_amount', String(QUOTED_TOTAL));
+    if (SHIP_CCY) fd.append('currency', SHIP_CCY);
     fd.append('pickup', JSON.stringify(pickup));
     fd.append('boxes', JSON.stringify(boxes));
     fd.append('passport_file', passportInput.files[0]);
@@ -858,7 +896,13 @@ mountToggle();
   const signedInCountry = SENDER && SENDER.country;
   if (signedInCountry) await loadBoxSizes(signedInCountry);
   renderForm();
-  if (signedInCountry) {
+  if (ORIGIN_LOCKED) {
+    // Nothing to choose: fill in what the choice would have driven — the office city, the
+    // dialling code, and the quotes, which are already priced from this branch's card.
+    const agent = gid('oAgent');
+    if (agent && BRANCH_CITY && !agent.dataset.touched) agent.value = BRANCH_CITY;
+    seedPhoneCode();
+  } else if (signedInCountry) {
     const c = gid('sCountry');
     if (c) { c.value = signedInCountry; await onOriginCountryChange(); }
   }

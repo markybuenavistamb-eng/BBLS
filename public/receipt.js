@@ -32,13 +32,20 @@ function barcodeSvg(value, { height = 54, narrow = 1.6, wide = 4 } = {}) {
     <g fill="#000">${bars.join('')}</g></svg>`;
 }
 
-const orMoney = (v) => Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Amounts on a VFIC receipt are not always pesos — Bangkok bills THB and Phnom Penh USD —
+// so the currency has to be on the document. A receipt showing a bare "3,402.00" is not a
+// record of what was paid.
+const orMoney = (v, ccy) => (ccy ? ccy + ' ' : '')
+  + Number(v || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const orDate = (iso) => iso ? new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
 const orDay = (iso) => iso ? new Date(iso).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', month: 'numeric', day: 'numeric', year: 'numeric' }) : '';
 
 /* Build one official receipt for a shipment (optionally for a single box). */
 function officialReceiptHtml(s, box, opts = {}) {
   const VAT_RATE = 0.12;
+  // Freight and VAT are billed in the origin branch's currency; the declared value of the
+  // contents is a peso figure by definition (BOC declares in PHP).
+  const ccy = s.currency || 'PHP';
   const boxes = box ? [box] : (s.boxes || []);
   const receiver = (box && box.receiver) || (boxes[0] && boxes[0].receiver) || {};
   const sender = s.sender || {};
@@ -112,19 +119,19 @@ function officialReceiptHtml(s, box, opts = {}) {
         ${line('No. of Item(s)', boxes.length)}
         ${line('Volume Wt', volumeWt.toFixed(2))}
         ${line('Actual Wt', actualWt.toFixed(2))}
-        ${line('Declared Value', orMoney(declaredValue))}
+        ${line('Declared Value', orMoney(declaredValue, 'PHP'))}
 
         <div class="or-vat">
-          ${line('VATable(Freight)', orMoney(net))}
-          ${line('VATable(Valuation)', orMoney(0))}
-          ${line('VAT-Exempt', orMoney(0))}
-          ${line('VAT Zero-Rated', orMoney(0))}
-          ${line('Discount', orMoney(0))}
-          ${line('Total Sales', orMoney(net))}
-          ${line('12% VAT', orMoney(vat))}
+          ${line('VATable(Freight)', orMoney(net, ccy))}
+          ${line('VATable(Valuation)', orMoney(0, ccy))}
+          ${line('VAT-Exempt', orMoney(0, ccy))}
+          ${line('VAT Zero-Rated', orMoney(0, ccy))}
+          ${line('Discount', orMoney(0, ccy))}
+          ${line('Total Sales', orMoney(net, ccy))}
+          ${line('12% VAT', orMoney(vat, ccy))}
         </div>
         <div class="or-due">
-          <div class="or-kv or-amount"><span>Amount Due</span><b>: ${esc(orMoney(gross))}</b></div>
+          <div class="or-kv or-amount"><span>Amount Due</span><b>: ${esc(orMoney(gross, ccy))}</b></div>
           ${line('Mode', s.payment_status === 'PAID' ? (opts.mode || 'CASH') : 'UNPAID')}
         </div>
       </div>

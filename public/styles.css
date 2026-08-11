@@ -829,3 +829,7 @@ body.print-6x4 .or-receipt { page: vfic6x4; }
 .seg-toggle .seg:hover { color: var(--text); background: rgba(255,255,255,.6); }
 .seg-toggle .seg.on { background: var(--primary); color: #fff; }
 .seg-toggle .seg.on:hover { background: var(--primary); }
+
+/* A field whose value is decided by the site itself (e.g. country on a branch booking
+   site) — shown so the sender can read it, but not something they choose. */
+.locked-field { background: #eef2f7; color: var(--muted); cursor: default; }

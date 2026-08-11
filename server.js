@@ -425,6 +425,11 @@ app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIP
   if (!b.passport_file) return res.status(400).json({ error: 'A scanned/soft copy of the sender\'s passport or government ID is required' });
   if (b.service_type && !SM.SERVICE_TYPES.includes(b.service_type)) return res.status(400).json({ error: 'Invalid service type' });
   if (b.service_level && !SM.SERVICE_LEVELS.includes(b.service_level)) return res.status(400).json({ error: 'Invalid service level' });
+  // Enforced here as well as in the form: saving is what mints box numbers and QR tokens,
+  // and an unpriced shipment can never be receipted or collected on.
+  if (!(+b.shipping_fee_amount > 0)) {
+    return res.status(400).json({ error: 'A shipping fee is required before box numbers can be generated' });
+  }
   for (const bx of b.boxes) {
     if (!d.customers.find(c => c.id === +bx.receiver_id)) return res.status(400).json({ error: 'Every box needs a valid receiver' });
     if (bx.size_category && !SM.SIZE_CATEGORIES.includes(bx.size_category)) return res.status(400).json({ error: 'Invalid size category' });
@@ -549,9 +554,14 @@ app.get('/api/health', async (req, res) => {
 // ---------- box sizes (public: booking form + staff app share this single source of truth) ----------
 app.get('/api/box-sizes', (req, res) => {
   const d = db.get();
-  // A customer buying empty boxes is quoted from their own country's branch rate card, in
-  // that branch's currency. Unknown/absent country falls back to head office.
-  const branchKey = (BRANCH.byCountry(String(req.query.country || '').trim()) || {}).key || 'HQ_MANILA';
+  // A branch deployment only ever serves senders in its own country, so it answers for that
+  // country whether or not the form asked — the booking form then has nothing to choose and
+  // nothing to get wrong, and the prices and currency are its branch's from the first paint.
+  // Head office still offers the full list, since it is not tied to one origin lane.
+  const ownCountry = NODE.SELF.type === 'BRANCH' ? NODE.SELF.country : null;
+  const askedCountry = String(req.query.country || '').trim();
+  const country = ownCountry || askedCountry;
+  const branchKey = (BRANCH.byCountry(country) || {}).key || 'HQ_MANILA';
   const card = rateCardFor(d, branchKey);
   const prices = Object.fromEntries(BOXSIZE.SIZE_KEYS.map(k => [k, +(card.empty_box_price[k] || 0)]));
   res.json({
@@ -561,7 +571,12 @@ app.get('/api/box-sizes', (req, res) => {
     excess_charge_currency: d.settings.excessWeightChargeCurrency || 'PHP',
     max_box_value_php: d.settings.maxBoxValuePhp != null ? d.settings.maxBoxValuePhp : 10000,
     service_levels: SM.SERVICE_LEVELS,
-    origin_countries: REF.ORIGIN_COUNTRIES,
+    // One entry on a branch deployment: the form shows it as fixed text rather than a choice.
+    origin_countries: ownCountry ? [ownCountry] : REF.ORIGIN_COUNTRIES,
+    origin_country: country || null,
+    origin_country_locked: !!ownCountry,
+    // What a valid phone number looks like where this sender is, mobile vs landline.
+    phone_format: REF.phoneFormatFor(country),
     // empty-box pricing for the selected country
     empty_box_prices: prices,
     currency: card.currency,
@@ -729,7 +744,12 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
       origin_country, origin_agent, service_level, collection,
       pickup,
       total_value_php: +total_value_php || 0,
-      currency: b.currency || 'USD',
+      // The shipping estimate the sender was actually shown, kept so the agent records that
+      // same figure instead of re-deriving one that might not match what was promised.
+      shipping_fee_amount: b.quoted_fee_amount != null && b.quoted_fee_amount !== ''
+        ? +b.quoted_fee_amount : null,
+      quoted_online: b.quoted_fee_amount != null && b.quoted_fee_amount !== '',
+      currency: b.currency || rateCardFor(d, (BRANCH.byCountry(origin_country) || {}).key || 'HQ_MANILA').currency,
       payment_status: b.payment_status === 'PAID' ? 'PAID' : 'UNPAID',
       passport_file: '/files/' + passportKey,
       // Automated ID check + the staff decision that follows it.

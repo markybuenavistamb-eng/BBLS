@@ -232,7 +232,13 @@ function renderLogin() {
   document.getElementById('preauth').style.display = '';
   document.getElementById('shell').style.display = 'none';
   const p = PORTAL;
-  const otherPortals = [['th', 'Thailand'], ['kh', 'Cambodia'], ['mnl', 'Manila HQ'], ['dev', 'Developer']].filter(([s]) => s !== PORTAL_SLUG);
+  // A branch deployment is that branch's own site. Listing the other countries' portals
+  // there advertises the rest of the network to anyone who reaches the sign-in page, and
+  // the links do not even work — those portals live on different deployments. Head office
+  // keeps the pair it actually hosts.
+  const HQ_PORTALS = [['mnl', 'Manila HQ'], ['dev', 'Developer']];
+  const hostedHere = PORTAL && ['HQ', 'DEVELOPER'].includes(PORTAL.type);
+  const otherPortals = (hostedHere ? HQ_PORTALS : []).filter(([s]) => s !== PORTAL_SLUG);
   document.getElementById('view').innerHTML = `
     <div class="login-wrap">
       <div class="login-brandside" style="--hero-img:url('${IMG.hero}')${p ? `;--accent:${p.accent}` : ''}">
@@ -274,10 +280,10 @@ function renderLogin() {
             <b>${VI.t('login.demo')}</b> (${VI.t('login.password_is')} <code>demo1234</code>):<br>
             ${esc(DEMO_LOGINS[PORTAL_SLUG] || 'admin@vfic.demo · shipper@vfic.demo · consignee@vfic.demo · warehouse@vfic.demo')}
           </div>
-          <div style="margin-top:12px;font-size:13px;text-align:center">
+          ${otherPortals.length ? `<div style="margin-top:12px;font-size:13px;text-align:center">
             <span class="muted">Other portals:</span>
-            ${otherPortals.map(([s, n]) => `<a href="/${s}" style="margin-left:8px">${n}</a>`).join('')}
-          </div>
+            ${otherPortals.map(([s, n]) => `<a href="/${s}" style="margin-left:8px">${esc(n)}</a>`).join('')}
+          </div>` : ''}
           <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:13px">
             <a href="/">${VI.t('login.home')}</a>
             <a href="/track.html">${VI.t('login.track')} →</a>
@@ -1049,6 +1055,16 @@ async function pageShipmentNew(intakeId) {
   if (!intake) return;
   PREFILL_INTAKE = intake;
 
+  // The sender was shown a figure online and is expecting to pay it. Put that exact amount
+  // in the fee field and mark it as set by hand, so the rate-card quote cannot silently
+  // replace it — the agent can still overtype it, which is the point of showing both.
+  if (intake.shipping_fee_amount != null) {
+    const fee = document.getElementById('shFee');
+    if (fee) { fee.value = intake.shipping_fee_amount; fee.dataset.touched = '1'; }
+    const ccy = document.getElementById('shCurrency');
+    if (ccy && intake.currency) ccy.value = intake.currency;
+  }
+
   const s = intake.sender || {};
   const senderCustomer = await createOrMatchCustomer({
     full_name: personName(s), type: 'SENDER',
@@ -1118,6 +1134,23 @@ function originPicked() {
   quoteShipmentFee();
 }
 
+// When the shipment came from an online booking, the sender already saw a price. Show it
+// next to the rate-card figure so the agent is charging what was promised — and say so
+// plainly when the two disagree, rather than letting one quietly win.
+function onlineQuoteNoteHtml(q) {
+  const quoted = PREFILL_INTAKE && PREFILL_INTAKE.shipping_fee_amount;
+  if (quoted == null) return '';
+  const ccy = (PREFILL_INTAKE && PREFILL_INTAKE.currency) || q.currency;
+  const same = Math.abs(+quoted - +q.total) < 0.01;
+  return `<div class="${same ? 'muted' : 'note-warn'}" style="margin-top:8px;font-size:12.5px">
+    Sender was quoted <b>${esc(money(quoted, ccy))}</b> online.
+    ${same
+      ? 'The rate card agrees — the fee below is what they were promised.'
+      : `The rate card now says <b>${esc(money(q.total, q.currency))}</b>. The fee below is set to the quoted figure;
+         change it only if the boxes differ from what was booked.`}
+  </div>`;
+}
+
 // Price the draft shipment from the branch rate card and fill the fee field, so what the
 // agent records matches what the sender was quoted online.
 let FEE_T = null;
@@ -1157,7 +1190,8 @@ async function runShipmentQuote() {
         </tr>`).join('')}
         <tr><td colspan="4"><b>Total</b></td><td><b>${esc(money(q.total, q.currency))}</b></td></tr>
       </table>
-      ${q.unpriced ? `<div class="muted" style="margin-top:4px">${q.unpriced} box(es) have no destination region yet, so they are not priced.</div>` : ''}`;
+      ${q.unpriced ? `<div class="muted" style="margin-top:4px">${q.unpriced} box(es) have no destination region yet, so they are not priced.</div>` : ''}
+      ${onlineQuoteNoteHtml(q)}`;
   } catch (e) {
     host.innerHTML = `<span class="muted">Could not quote: ${esc(e.message)}</span>`;
   }
@@ -1331,6 +1365,9 @@ async function createShipment() {
     if (!boxes.length) throw new Error('Add at least one box');
     if (boxes.some(b => !b.receiver_id)) throw new Error('Every box needs a receiver');
     if (!+shSender.value) throw new Error('Select a sender');
+    // Box numbers and QR codes are what the sender walks away with, and an unpriced
+    // shipment cannot be receipted or collected on later. Settle the fee before minting them.
+    if (!(+shFee.value > 0)) throw new Error('Enter the shipping fee before generating box numbers — a shipment cannot be saved unpriced.');
     const [receiving_form_file, packing_list_file, uploadedPassport] = await Promise.all([
       uploadIfAny('fReceiving'), uploadIfAny('fPacking'), uploadIfAny('fPassport')
     ]);
@@ -1391,10 +1428,11 @@ async function pageShipmentDetail(id) {
       <div><label>Fee</label>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'} ${payBadge(s.payment_status)}
         ${canIntake() ? `<button class="small secondary" onclick="togglePayment(${s.id}, '${s.payment_status === 'PAID' ? 'UNPAID' : 'PAID'}')">Mark ${s.payment_status === 'PAID' ? 'unpaid' : 'paid'}</button>` : ''}</div>
       <div><label>Documents</label>
-        ${s.receiving_form_file ? `<a href="${esc(s.receiving_form_file)}" target="_blank">Receiving form</a> · ` : ''}
-        ${s.packing_list_file ? `<a href="${esc(s.packing_list_file)}" target="_blank">Packing list</a> · ` : ''}
-        ${s.passport_file ? `<a href="${esc(s.passport_file)}" target="_blank">Passport/ID</a>` : ''}
+        ${s.passport_file ? `<a href="${esc(s.passport_file)}" target="_blank" rel="noopener"><button class="small secondary">🪪 View passport / ID</button></a> ` : ''}
+        ${s.receiving_form_file ? `<a href="${esc(s.receiving_form_file)}" target="_blank" rel="noopener"><button class="small secondary">📄 Receiving form</button></a> ` : ''}
+        ${s.packing_list_file ? `<a href="${esc(s.packing_list_file)}" target="_blank" rel="noopener"><button class="small secondary">📄 Packing list</button></a>` : ''}
         ${!s.receiving_form_file && !s.packing_list_file && !s.passport_file ? '<span class="muted">None uploaded</span>' : ''}
+        ${s.passport_file ? '<div class="muted" style="font-size:12px;margin-top:4px">Opens in a new tab. Only signed-in staff can fetch it — the file is never served by a public link.</div>' : ''}
       </div>
       <div><label>Created</label>${fmtDate(s.created_at)}</div>
     </div>
