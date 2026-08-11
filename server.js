@@ -101,23 +101,42 @@ function effectiveScope(req) {
   const asked = BRANCH.byKey(String(req.query.branch || ''));
   return asked && asked.type !== 'HQ' ? asked.country : null;
 }
+// Seeing every shipment across both origin portals is a head-office admin capability.
+// Manila's warehouse, delivery and accounting staff work the Philippine end, so their views
+// begin when a box sails; one still sitting in a Bangkok warehouse is the branch's business.
+function shippedOnly(user) { return user ? ROLE.shippedCargoOnly(user.role) : false; }
+
 function scopeShipmentList(user, shipments, scopeOverride) {
   const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
-  return scope ? shipments.filter(s => s.origin_country === scope) : shipments;
+  let list = scope ? shipments.filter(s => s.origin_country === scope) : shipments;
+  if (shippedOnly(user)) {
+    // A shipment appears once any of its boxes has left origin.
+    const d = db.get();
+    const sailed = new Set(d.boxes.filter(b => SM.hasShipped(b.status)).map(b => b.shipment_id));
+    list = list.filter(s => sailed.has(s.id));
+  }
+  return list;
 }
 // Boxes inherit their branch from the parent shipment.
 function scopeBoxList(user, boxes, scopeOverride) {
   const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
-  if (!scope) return boxes;
-  const d = db.get();
-  const ok = new Set(d.shipments.filter(s => s.origin_country === scope).map(s => s.id));
-  return boxes.filter(b => ok.has(b.shipment_id));
+  let list = boxes;
+  if (scope) {
+    const d = db.get();
+    const ok = new Set(d.shipments.filter(s => s.origin_country === scope).map(s => s.id));
+    list = list.filter(b => ok.has(b.shipment_id));
+  }
+  if (shippedOnly(user)) list = list.filter(b => SM.hasShipped(b.status));
+  return list;
 }
 // A container belongs to the branch whose country it sails from.
 function scopeContainerList(user, containers, scopeOverride) {
   const scope = scopeOverride !== undefined ? scopeOverride : branchScope(user);
-  if (!scope) return containers;
-  return containers.filter(c => String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase()));
+  let list = containers;
+  if (scope) list = list.filter(c => String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase()));
+  // A container being stuffed at origin is not yet Manila's concern.
+  if (shippedOnly(user)) list = list.filter(c => SM.containerHasShipped(c.status));
+  return list;
 }
 
 // ---------- per-record branch guards ----------
@@ -136,17 +155,28 @@ function outOfScope(req, res, country) {
 }
 // Look up a record and enforce scope in one step. Returns null when the caller may not have
 // it (a response has already been sent), so handlers read: `const s = getShipment(...); if (!s) return;`
+// Not-yet-sailed cargo is invisible to Manila's operational staff by the same rule as the
+// lists — otherwise the record could still be opened by id.
+function notYetShipped(req, res, shipped) {
+  if (!shippedOnly(req.user) || shipped) return false;
+  res.status(404).json({ error: 'Not found' });
+  return true;
+}
 function getShipment(req, res, id) {
-  const s = db.get().shipments.find(x => x.id === +id);
+  const d = db.get();
+  const s = d.shipments.find(x => x.id === +id);
   if (!s) { res.status(404).json({ error: 'Shipment not found' }); return null; }
-  return outOfScope(req, res, s.origin_country) ? null : s;
+  if (outOfScope(req, res, s.origin_country)) return null;
+  const sailed = d.boxes.some(b => b.shipment_id === s.id && SM.hasShipped(b.status));
+  return notYetShipped(req, res, sailed) ? null : s;
 }
 function getBox(req, res, id) {
   const d = db.get();
   const b = d.boxes.find(x => x.id === +id);
   if (!b) { res.status(404).json({ error: 'Box not found' }); return null; }
   const parent = d.shipments.find(s => s.id === b.shipment_id) || {};
-  return outOfScope(req, res, parent.origin_country) ? null : b;
+  if (outOfScope(req, res, parent.origin_country)) return null;
+  return notYetShipped(req, res, SM.hasShipped(b.status)) ? null : b;
 }
 // A container belongs to the branch whose country it sails from.
 function getContainer(req, res, id) {
@@ -157,12 +187,13 @@ function getContainer(req, res, id) {
     res.status(404).json({ error: 'Not found' });
     return null;
   }
-  return c;
+  return notYetShipped(req, res, SM.containerHasShipped(c.status)) ? null : c;
 }
 function getIntakeRequest(req, res, id) {
   const r = db.get().intake_requests.find(x => x.id === +id);
   if (!r) { res.status(404).json({ error: 'Request not found' }); return null; }
-  return outOfScope(req, res, r.origin_country) ? null : r;
+  if (outOfScope(req, res, r.origin_country)) return null;
+  return notYetShipped(req, res, false) ? null : r;
 }
 
 // ---------- shared serializers ----------
@@ -821,7 +852,9 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
 app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   const scope = effectiveScope(req);
-  let list = d.intake_requests.filter(r => !scope || r.origin_country === scope);
+  // Online bookings waiting to be encoded are origin-side work by definition, so Manila's
+  // delivery and accounting staff see none of them.
+  let list = shippedOnly(req.user) ? [] : d.intake_requests.filter(r => !scope || r.origin_country === scope);
   if (req.query.status) list = list.filter(r => r.status === req.query.status);
   list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
   res.json(list.map(r => ({
@@ -1065,9 +1098,10 @@ app.get('/api/boxes/lookup/:key', requireAuth, (req, res) => {
   const needle = (tokenMatch ? tokenMatch[1] : key).toLowerCase();
   const box = d.boxes.find(b => b.qr_token.toLowerCase() === needle || b.box_number.toLowerCase() === needle);
   if (!box) return res.status(404).json({ error: 'No box matches that code' });
-  // Scanning a code is still a read of that record, so the same branch rule applies.
+  // Scanning a code is still a read of that record, so the same rules apply.
   const parent = d.shipments.find(x => x.id === box.shipment_id) || {};
   if (outOfScope(req, res, parent.origin_country)) return;
+  if (notYetShipped(req, res, SM.hasShipped(box.status))) return;
   res.json(boxDetail(box));
 });
 app.put('/api/boxes/:id', requireRole(...AGENTS), (req, res) => {
@@ -2843,13 +2877,16 @@ app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
   // Every report reads straight off these collections, so scope them once here rather than
   // in each case — a branch's report must never count another branch's boxes, and a new
   // report added later is scoped by construction.
+  // Built unconditionally: a null branch scope does not mean "sees everything" any more —
+  // Manila's operational staff have no branch but are still limited to cargo that has sailed,
+  // and that limit lives inside these same helpers.
   const scope = effectiveScope(req);
-  const d = scope ? {
+  const d = {
     ...base,
     shipments: scopeShipmentList(req.user, base.shipments, scope),
     boxes: scopeBoxList(req.user, base.boxes, scope),
     containers: scopeContainerList(req.user, base.containers, scope)
-  } : base;
+  };
   let rows = [];
   switch (req.params.name) {
     case 'boxes-per-container':
