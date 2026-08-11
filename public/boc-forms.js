@@ -168,8 +168,13 @@ function bocPackingList(s, box, boxNo, boxTotal) {
   const phAddress = [r.street_address, r.barangay, r.city_municipality, r.region].filter(Boolean).join(', ')
     || [legacy.address_line, legacy.barangay, legacy.city_municipality, legacy.province].filter(Boolean).join(', ');
 
-  const goodsRows = (list, offset) => list.map((cat, i) => `
-    <tr><td>${esc(cat)}</td><td class="boc-qty">${qtyOf(cat) || '&nbsp;'}</td></tr>`).join('');
+  // "Others" is only meaningful with the sender's description beside it — a quantity against
+  // a bare "Others" tells a customs examiner nothing about what is in the box.
+  const othersSpec = (goods.find(g => g.category === 'Others') || {}).specify || '';
+  const goodsRows = (list, offset) => list.map((cat, i) => {
+    const label = (cat === 'Others' && othersSpec) ? `Others — ${othersSpec}` : cat;
+    return `<tr><td>${esc(label)}</td><td class="boc-qty">${qtyOf(cat) || '&nbsp;'}</td></tr>`;
+  }).join('');
 
   return `
   <div class="boc-page">

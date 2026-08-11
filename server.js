@@ -282,15 +282,20 @@ const CONTAINER_PREV = {
   AT_CUSTOMS: 'ARRIVED', RELEASED: 'AT_CUSTOMS', STRIPPED: 'RELEASED'
 };
 
-// Next automatic load code (C1, C2, …) — always monotonic above the highest existing code,
-// so it never collides even if a container was removed.
-function nextLoadCode(d) {
+// Next automatic load code, counted per origin: TH-C1, TH-C2 … alongside KH-C1, KH-C2.
+// Each branch loads its own containers, so a single shared sequence made Bangkok's and
+// Phnom Penh's codes interleave and a bare "C4" meant nothing without asking whose it was.
+// Monotonic above the highest existing code for that origin, so it never collides even
+// after a container is removed. Legacy bare codes (C1) still count toward head office.
+function nextLoadCode(d, originCountry) {
+  const prefix = BRANCH.countryCode(originCountry) || 'VF';
+  const re = new RegExp(`^${prefix}-C(\\d+)$`);
   let max = 0;
   for (const c of d.containers) {
-    const m = /^C(\d+)$/.exec(String(c.load_code || ''));
+    const m = re.exec(String(c.load_code || ''));
     if (m) max = Math.max(max, +m[1]);
   }
-  return `C${max + 1}`;
+  return `${prefix}-C${max + 1}`;
 }
 
 // ---------- auth routes ----------
@@ -1216,7 +1221,8 @@ app.post('/api/containers', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHI
     // Short code appended to each loaded box's number so you can see, at a glance,
     // which container a box travelled in (e.g. VF-2026-000013-01/C1). Always assigned
     // automatically in sequence — the client cannot set it.
-    load_code: nextLoadCode(db.get()),
+    // Sequenced per origin, so Bangkok's and Phnom Penh's codes never interleave.
+    load_code: nextLoadCode(db.get(), scope || REF.countryForOriginPort(originPort)),
     load_plan_notes: '',
     status: 'BOOKING', created_at: new Date().toISOString()
   };
@@ -1599,25 +1605,42 @@ app.put('/api/templates/:key', requireRole(...ADMINS), (req, res) => {
 // These are VFIC's own registration particulars, not secrets — they are required to appear
 // on the face of a Philippine official receipt.
 const BIR_FIELDS = ['tin', 'accreditation_no', 'min', 'serial_no', 'permit_no'];
+// Held per branch, because each one issues its own receipts under its own registration.
+// Falls back to the original single set so receipts printed before the split keep their
+// details, and so a branch that has not filled its own in still prints head office's.
+function birFor(d, branchKey) {
+  d.settings.birByBranch = d.settings.birByBranch || {};
+  const own = d.settings.birByBranch[branchKey];
+  const base = d.settings.bir || {};
+  return Object.fromEntries(BIR_FIELDS.map(k => [k, (own && own[k]) || base[k] || '']));
+}
 app.get('/api/settings/bir', requireAuth, (req, res) => {
-  const bir = db.get().settings.bir || {};
-  res.json(Object.fromEntries(BIR_FIELDS.map(k => [k, bir[k] || ''])));
+  const branch = accountingBranch(req);
+  res.json({
+    ...birFor(db.get(), branch),
+    branch,
+    editable: ROLE.isAnyAdmin(req.user.role)
+  });
 });
-app.put('/api/settings/bir', requireRole(...ADMINS), (req, res) => {
+app.put('/api/settings/bir', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const d = db.get();
-  d.settings.bir = d.settings.bir || {};
+  // accountingBranch pins a branch admin to their own branch, so they can only ever write
+  // their own receipt details — head office edits any branch by passing ?branch=.
+  const branch = accountingBranch(req);
+  d.settings.birByBranch = d.settings.birByBranch || {};
+  const rec = d.settings.birByBranch[branch] || (d.settings.birByBranch[branch] = {});
   for (const k of BIR_FIELDS) {
-    if (k in (req.body || {})) d.settings.bir[k] = String(req.body[k] || '').trim();
+    if (k in (req.body || {})) rec[k] = String(req.body[k] || '').trim();
   }
   db.persist();
-  res.json(Object.fromEntries(BIR_FIELDS.map(k => [k, d.settings.bir[k] || ''])));
+  res.json({ ...birFor(d, branch), branch, editable: true });
 });
 
 // Receipt numbering. The Machine Identification No. identifies this deployment and is
 // derived from its node id, so it is stable without anyone typing it. The Serial No. is
 // assigned to a shipment the first time its official receipt is produced, then never changes.
-function machineIdentificationNo(d) {
-  const bir = d.settings.bir || {};
+function machineIdentificationNo(d, branchKey) {
+  const bir = birFor(d, branchKey || 'HQ_MANILA');
   if (bir.min) return bir.min;                              // an explicit BIR-issued MIN wins
   const seed = `${NODE.NODE_ID}:${d.settings.publicBaseUrl || ''}`;
   const digits = crypto.createHash('sha1').update(seed).digest('hex').replace(/\D/g, '');
@@ -1625,9 +1648,11 @@ function machineIdentificationNo(d) {
 }
 app.get('/api/receipt-meta/:shipmentId', requireAuth, (req, res) => {
   const d = db.get();
-  const sh = d.shipments.find(x => x.id === +req.params.shipmentId);
-  if (!sh) return res.status(404).json({ error: 'Not found' });
-  const bir = d.settings.bir || {};
+  const sh = getShipment(req, res, req.params.shipmentId);
+  if (!sh) return;
+  // A receipt carries the registration of the branch that issued it, not head office's.
+  const issuingBranch = (BRANCH.byCountry(sh.origin_country) || {}).key || 'HQ_MANILA';
+  const bir = birFor(d, issuingBranch);
   if (!sh.or_serial_no) {
     d.seq.or_serial = (d.seq.or_serial || 0) + 1;
     const prefix = (bir.serial_no || '').trim();
@@ -1641,7 +1666,7 @@ app.get('/api/receipt-meta/:shipmentId', requireAuth, (req, res) => {
     tin: bir.tin || '',
     accreditation_no: bir.accreditation_no || '',
     permit_no: bir.permit_no || '',
-    min: machineIdentificationNo(d),
+    min: machineIdentificationNo(d, issuingBranch),
     serial_no: sh.or_serial_no,
     issued_at: sh.or_issued_at
   });
@@ -1763,23 +1788,34 @@ app.get('/api/my-modules', requireAuth, (req, res) => {
 });
 
 // The full role × module matrix (Admin → Roles & Modules).
-app.get('/api/role-modules', requireRole(...ADMINS), (req, res) => {
+app.get('/api/role-modules', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const d = db.get();
+  // A branch admin manages only their own branch's roles, so they are shown only those —
+  // the matrix is network-wide and the rest is not theirs to change.
+  const editable = ROLE.manageableRoles(req.user.role);
+  const visible = ROLE.isBranchAdmin(req.user.role)
+    ? ROLE.ROLES.filter(r => editable.includes(r.key))
+    : ROLE.ROLES;
   res.json({
     modules: MODULES.MODULES,
-    roles: ROLE.ROLES,
-    matrix: MODULES.matrix(ROLE.ROLE_KEYS, d.settings.roleModules),
+    roles: visible,
+    matrix: MODULES.matrix(visible.map(r => r.key), d.settings.roleModules),
     locked: MODULES.LOCKED,
-    defaults: MODULES.DEFAULTS
+    defaults: MODULES.DEFAULTS,
+    editable_roles: editable
   });
 });
-app.put('/api/role-modules', requireRole(...ADMINS), (req, res) => {
+app.put('/api/role-modules', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const d = db.get();
   const incoming = (req.body || {}).matrix;
   if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'A matrix of role → modules is required' });
-  const next = {};
+  // Merge rather than replace. A branch admin submits only the roles they can see, and a
+  // wholesale replace would silently reset every other role to its defaults.
+  const next = { ...(d.settings.roleModules || {}) };
+  const allowed = ROLE.manageableRoles(req.user.role);
   for (const role of ROLE.ROLE_KEYS) {
     if (!Array.isArray(incoming[role])) continue;
+    if (!allowed.includes(role)) continue;   // not this admin's role to change
     const picked = incoming[role].filter(k => MODULES.MODULE_KEYS.includes(k));
     next[role] = [...new Set([...picked, ...(MODULES.LOCKED[role] || [])])];
   }
@@ -2201,9 +2237,14 @@ app.get('/api/origin-warehouse/load-plan', requireRole(...ADMINS, ...ROLE.BRANCH
 const RATES = require('./lib/rates');
 const FX = require('./lib/fx');
 
-// The BSP reference rates head office converts branch revenue with.
-function fxFor(d) {
-  return FX.normalizeFx(d.settings.fx);
+// Reference exchange rates, held per branch. Each branch keeps its own books and settles
+// head office's peso charges in its own currency, so it keeps its own rate table and its own
+// bulletin date rather than inheriting whatever Manila last saved. Falls back to the shared
+// table for a branch that has not set its own.
+function fxFor(d, branchKey) {
+  d.settings.fxByBranch = d.settings.fxByBranch || {};
+  const own = branchKey && d.settings.fxByBranch[branchKey];
+  return FX.normalizeFx(own || d.settings.fx);
 }
 
 // Which branch's books the caller is working in. HQ admins/accounting may pass ?branch=.
@@ -2245,11 +2286,11 @@ app.get('/api/accounting/rate-card', requireRole(...ACCOUNTING_ROLES), (req, res
   res.json({
     ...rateCardFor(db.get(), branch), branch,
     sections: cardSectionsFor(branch),
-    editable: req.user.role === 'DEVELOPER_ADMIN'
+    editable: ROLE.isAnyAdmin(req.user.role)
   });
 });
 // Rate cards are commercial policy: only the Developer portal may change them.
-app.put('/api/accounting/rate-card', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+app.put('/api/accounting/rate-card', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS), (req, res) => {
   const d = db.get();
   const card = RATES.normalizeRateCard(req.body || {});
   card.updated_at = new Date().toISOString();
@@ -2634,7 +2675,7 @@ app.post('/api/accounting/expenses/:id/restore', requireRole(...ACCOUNTING_ROLES
 });
 
 // Roll the rate card back to the version before the last save.
-app.post('/api/accounting/rate-card/undo', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+app.post('/api/accounting/rate-card/undo', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS), (req, res) => {
   const d = db.get();
   const branch = accountingBranch(req);
   d.settings.rateCardPrev = d.settings.rateCardPrev || {};
@@ -2653,48 +2694,57 @@ app.post('/api/accounting/rate-card/undo', requireRole('DEVELOPER_ADMIN'), (req,
 // them (they appear on the consolidated P&L); only the Developer edits them, the same rule
 // the rate cards follow.
 app.get('/api/accounting/fx', requireRole(...ACCOUNTING_ROLES), (req, res) => {
-  const fx = fxFor(db.get());
+  const branch = accountingBranch(req);
+  const fx = fxFor(db.get(), branch);
   res.json({
-    ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES,
-    editable: req.user.role === 'DEVELOPER_ADMIN'
+    ...fx, branch, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES,
+    editable: ROLE.isAnyAdmin(req.user.role)
   });
 });
 
-app.put('/api/accounting/fx', requireRole('DEVELOPER_ADMIN'), (req, res) => {
+app.put('/api/accounting/fx', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const d = db.get();
   const b = req.body || {};
+  // accountingBranch pins a branch admin to their own branch, so a branch can only ever
+  // write its own rate table — never another branch's, and never head office's.
+  const branch = accountingBranch(req);
   const rates = {};
   for (const c of FX.CURRENCIES) {
     const n = Number((b.rates || {})[c]);
     if (isFinite(n) && n > 0) rates[c] = n;
   }
   if (!Object.keys(rates).length) return res.status(400).json({ error: 'No usable rates were sent' });
-  d.settings.fx = FX.normalizeFx({
-    ...fxFor(d), rates: { ...fxFor(d).rates, ...rates },
-    as_of: String(b.as_of || '').slice(0, 10) || fxFor(d).as_of,
+  const current = fxFor(d, branch);
+  d.settings.fxByBranch = d.settings.fxByBranch || {};
+  d.settings.fxByBranch[branch] = FX.normalizeFx({
+    ...current, rates: { ...current.rates, ...rates },
+    as_of: String(b.as_of || '').slice(0, 10) || current.as_of,
     source: b.source || undefined,
     updated_at: new Date().toISOString(), updated_by: req.user.name
   });
   db.persist();
-  const fx = fxFor(d);
-  res.json({ ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true });
+  const fx = fxFor(d, branch);
+  res.json({ ...fx, branch, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true });
 });
 
 // Pull today's bulletin straight from BSP. Best-effort: on any failure the stored rates are
 // left exactly as they were and the reason is reported, so VFIC can key them in instead.
-app.post('/api/accounting/fx/refresh', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
+app.post('/api/accounting/fx/refresh', requireRole(...ROLE.ANY_ADMIN), async (req, res) => {
   const result = await FX.refreshFromBsp();
   if (!result.ok) return res.status(502).json({ error: result.error, source_url: FX.BSP_PAGE });
   const d = db.get();
-  d.settings.fx = FX.normalizeFx({
-    ...fxFor(d), rates: { ...fxFor(d).rates, ...result.rates },
+  const branch = accountingBranch(req);
+  const current = fxFor(d, branch);
+  d.settings.fxByBranch = d.settings.fxByBranch || {};
+  d.settings.fxByBranch[branch] = FX.normalizeFx({
+    ...current, rates: { ...current.rates, ...result.rates },
     as_of: result.as_of, source: 'BSP Reference Exchange Rate Bulletin',
     updated_at: new Date().toISOString(), updated_by: req.user.name + ' (from BSP)'
   });
   db.persist();
-  const fx = fxFor(d);
+  const fx = fxFor(d, branch);
   res.json({
-    ...fx, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true,
+    ...fx, branch, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true,
     fetched: Object.keys(result.rates), bulletin_url: result.url
   });
 });
@@ -2740,7 +2790,7 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const mixedCurrency = Object.keys(byCurrency).length > 1;
   // With more than one currency in view, convert each to pesos at the BSP reference rate so
   // head office gets one PHP total. Every line carries the rate it was converted at.
-  const consolidated = mixedCurrency ? FX.consolidate(byCurrency, fxFor(d)) : null;
+  const consolidated = mixedCurrency ? FX.consolidate(byCurrency, fxFor(d, branch)) : null;
   const revenueBilled = consolidated
     ? consolidated.totals.billed
     : +shipmentsIn.reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
@@ -2752,7 +2802,7 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   // Everything on this statement is stated in one currency: pesos for a consolidated view,
   // the branch's own currency otherwise. Anything recorded in another is converted at the
   // BSP reference rate rather than added as if it were the same money.
-  const fx = fxFor(d);
+  const fx = fxFor(d, branch);
   const reportCcy = mixedCurrency ? 'PHP' : card0.currency;
   const inReportCcy = (amount, ccy) => FX.convert(amount, ccy || reportCcy, reportCcy, fx);
 

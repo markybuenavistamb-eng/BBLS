@@ -323,6 +323,8 @@ const R_SHIPPERS = ['SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'];
 const R_AGENTS = R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS, ['CONSIGNEE_AGENT']);
 // Rate cards and BSP exchange rates are the Developer's to edit.
 const isDeveloper = () => ME && ME.role === 'DEVELOPER_ADMIN';
+// A branch admin runs their own branch: its rate card, receipt details and staff.
+const isAnyAdmin = () => ME && R_ADMINS.concat(R_BRANCH_ADMINS).includes(ME.role);
 const ROLE_LABELS = {
   DEVELOPER_ADMIN: 'Developer Admin', MASTER_ADMIN: 'Master Admin',
   SHIPPER_AGENT_TH: 'Shipper Agent — Thailand', SHIPPER_AGENT_KH: 'Shipper Agent — Cambodia',
@@ -1495,8 +1497,34 @@ async function pageLabels(kind, id) {
 /* Printed BOC forms (Information Sheet p.1 / Packing List p.2) live in boc-forms.js */
 
 /* ---------- Delivery Receipt (blank, travels with the truck for the receiver to sign) ---------- */
-function truckReceiptBlockHtml(box, trip, isLast) {
+// Boxes handed over together are signed for together. Two boxes count as one consignment
+// when they are for the same receiver *and* the same address — same person at a different
+// address is a separate delivery, so the address is part of the key, not just the id.
+function groupBoxesByConsignee(boxes) {
+  const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const keyOf = (b) => {
+    const r = b.receiver || {};
+    return [
+      b.receiver_id || r.id || norm(r.full_name),
+      norm(r.address_line), norm(r.barangay), norm(r.city_municipality), norm(r.province)
+    ].join('|');
+  };
+  const groups = [];
+  const index = new Map();
+  for (const b of boxes) {
+    const k = keyOf(b);
+    if (index.has(k)) groups[index.get(k)].push(b);
+    else { index.set(k, groups.length); groups.push([b]); }
+  }
+  return groups;
+}
+// One receipt per consignment, not per box: several boxes going to the same person at the
+// same address are handed over together and signed for once. `boxes` is that group.
+function truckReceiptBlockHtml(boxes, trip, isLast) {
+  const list = Array.isArray(boxes) ? boxes : [boxes];
+  const box = list[0];
   const r = box.receiver || {};
+  const multi = list.length > 1;
   return `
     <div class="receipt" style="${isLast ? '' : 'page-break-after:always'}">
       <div class="rc-head">
@@ -1511,7 +1539,7 @@ function truckReceiptBlockHtml(box, trip, isLast) {
         </div>
         <div class="rc-qr">
           <img src="/api/qr/${esc(box.qr_token)}" alt="QR">
-          <div class="rc-tid">${esc(box.box_number)}</div>
+          <div class="rc-tid">${esc(box.box_number)}${multi ? ` +${list.length - 1} more` : ''}</div>
         </div>
       </div>
       <div class="rc-parties">
@@ -1527,14 +1555,32 @@ function truckReceiptBlockHtml(box, trip, isLast) {
           ${r.landmark ? `<div class="rc-line"><span>Landmark</span>${esc(r.landmark)}</div>` : ''}
         </div>
       </div>
+      ${multi ? `
+      <div class="rc-details" style="display:block">
+        <div class="rc-label" style="margin-bottom:4px">${list.length} BOXES IN THIS DELIVERY</div>
+        <table class="rc-boxes"><tr><th>#</th><th>Box number</th><th>Load code</th><th>Size</th><th>Weight</th><th>Received ✓</th></tr>
+          ${list.map((b, i) => `<tr>
+            <td>${i + 1}</td>
+            <td>${esc(b.box_number)}</td>
+            <td>${esc(b.container_load_code || '—')}</td>
+            <td>${esc(b.size_category || '—')}</td>
+            <td>${b.weight_kg ? b.weight_kg + ' kg' : '—'}</td>
+            <td class="rc-tick">☐</td>
+          </tr>`).join('')}
+        </table>
+        ${list.some(b => b.special_instructions)
+          ? `<div class="rc-line" style="margin-top:6px"><span>Instructions</span>${esc(list.map(b => b.special_instructions).filter(Boolean).join(' · '))}</div>`
+          : ''}
+      </div>` : `
       <div class="rc-details">
         <div class="rc-cell"><span>Box #</span>${esc(box.box_number)}</div>
+        <div class="rc-cell"><span>Load code</span>${esc(box.container_load_code || '—')}</div>
         <div class="rc-cell"><span>Size</span>${esc(box.size_category || '—')}</div>
         <div class="rc-cell"><span>Weight</span>${box.weight_kg ? box.weight_kg + ' kg' : '—'}</div>
         <div class="rc-cell"><span>Instructions</span>${esc(box.special_instructions || '—')}</div>
-      </div>
+      </div>`}
       <div class="rc-terms">
-        I acknowledge receipt of the balikbayan box listed above, delivered by Victors Freight International Corporation (VFIC),
+        I acknowledge receipt of the ${multi ? `${list.length} balikbayan boxes listed above` : 'balikbayan box listed above'}, delivered by Victors Freight International Corporation (VFIC),
         in good order and condition unless otherwise noted below.
       </div>
       <div class="rc-sign">
@@ -1558,13 +1604,17 @@ async function pageTruckReceipt(kind, id) {
     trip = b.trip;
     title = b.box_number;
   }
+  const groups = groupBoxesByConsignee(boxes);
   view(`
     <div class="row no-print" style="justify-content:space-between">
-      <h1>Delivery Receipt${kind === 'trip' ? 's' : ''} — ${esc(title)}</h1>
+      <h1>Delivery Receipt${groups.length > 1 ? 's' : ''} — ${esc(title)}</h1>
       <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
     </div>
-    <div class="muted no-print" style="margin-bottom:10px">Print and send with the driver — one copy per box, for the receiver to sign on delivery.</div>
-    ${boxes.length ? boxes.map((b, i) => truckReceiptBlockHtml(b, kind === 'trip' ? trip : b.trip, i === boxes.length - 1)).join('')
+    <div class="muted no-print" style="margin-bottom:10px">
+      Print and send with the driver, for the receiver to sign on delivery.
+      Boxes going to the same person at the same address share one receipt${groups.length !== boxes.length ? ` — ${boxes.length} box(es) on ${groups.length} receipt(s)` : ''}.
+    </div>
+    ${groups.length ? groups.map((g, i) => truckReceiptBlockHtml(g, kind === 'trip' ? trip : g[0].trip, i === groups.length - 1)).join('')
       : '<div class="card muted">No boxes to print.</div>'}`);
 }
 
@@ -1642,12 +1692,15 @@ async function pageBoxes() {
       <button class="small" onclick="boxFilter()">Filter</button>
     </div>
     <div class="card table-scroll">
-      <table><tr><th>Box #</th><th>Sender</th><th>Receiver</th><th>City</th><th>Region</th><th>Status</th><th>Updated</th></tr>
+      <table><tr><th>Box #</th><th>Load code</th><th>Sender</th><th>Receiver</th><th>City</th><th>Region</th><th>Status</th><th>Updated</th></tr>
       ${list.map(b => `<tr>
         <td><a href="#/boxes/${b.id}">${esc(b.box_number)}</a></td>
+        <td>${b.container_load_code
+          ? `<a href="#/containers/${b.container_id}"><span class="badge st-loaded">${esc(b.container_load_code)}</span></a>`
+          : '<span class="muted">not loaded</span>'}</td>
         <td>${esc(b.sender_name)}</td><td>${esc(b.receiver_name)}</td><td>${esc(b.receiver_city)}</td>
         <td>${regionBadge(b.region || b.receiver_region)}</td><td>${badge(b.status)}</td><td>${fmtDay(b.status_updated_at)}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">No boxes match</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No boxes match</td></tr>'}
       </table>
       <div class="muted">${list.length} box(es)</div>
     </div>`);
@@ -1823,7 +1876,13 @@ async function pageContainers() {
     api('/api/containers'),
     canIntake() ? api('/api/refdata') : Promise.resolve({ shipping_lines: [], origin_ports: [], destination_ports: [] })
   ]);
-  const nextCode = 'C' + (list.reduce((m, c) => { const n = /^C(\d+)$/.exec(c.load_code || ''); return n ? Math.max(m, +n[1]) : m; }, 0) + 1);
+  // Preview of the code the server will mint — sequenced per origin, so it must count only
+  // this branch's containers or it would promise a number the server does not assign.
+  const myPrefix = { Thailand: 'TH', Cambodia: 'KH' }[myOriginCountry()] || 'VF';
+  const codeRe = new RegExp('^' + myPrefix + '-C(\\d+)$');
+  const nextCode = myPrefix + '-C' + (list.reduce((m, c) => {
+    const n = codeRe.exec(c.load_code || ''); return n ? Math.max(m, +n[1]) : m;
+  }, 0) + 1);
   // Proper <select> dropdowns (origin ports stay grouped by country/region).
   const lineOpts = `<option value="">— select shipping line —</option>` +
     (ref.shipping_lines || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
@@ -2791,7 +2850,7 @@ async function renderRateCard(branch) {
       ${editable
         ? `<button onclick="saveRateCard()" style="margin-top:14px">Save rate card</button>
            <button class="secondary" style="margin-top:14px" onclick="undoRateCard()">↩ Undo last save</button>`
-        : `<div class="note-info" style="margin-top:14px">Rate cards are commercial policy and can only be changed from the <b>Developer Console portal</b> (/dev). This is a read-only view of the rates your branch is billed on.</div>`}
+        : `<div class="note-info" style="margin-top:14px">This is a read-only view of the rates your branch is billed on — only an admin can change them.</div>`}
     </div>
     <div id="fxCard"></div>`;
   renderFxCard();
@@ -2838,7 +2897,7 @@ async function renderFxCard() {
       <div class="muted" style="font-size:12px;margin-top:6px">
         “Fetch from BSP” reads the latest bulletin from bsp.gov.ph. If BSP is unreachable or its
         page has changed, nothing is overwritten — key the figures in by hand instead.
-      </div>` : `<div class="note-info" style="margin-top:12px">Exchange rates follow the same rule as rate cards: only the <b>Developer Console portal</b> (/dev) can change them.</div>`}
+      </div>` : `<div class="note-info" style="margin-top:12px">Exchange rates follow the same rule as rate cards — only an admin can change them.</div>`}
     </div>`;
 }
 async function saveFx() {
@@ -3095,7 +3154,7 @@ function fxBreakdownHtml(c, p) {
       ${p && p.unconverted_expenses ? `<div class="note-warn" style="margin-top:10px">
         ${p.unconverted_expenses} expense(s) are in a currency with no BSP rate and are left out of the peso total.</div>` : ''}
       ${stale ? `<div class="note-warn" style="margin-top:10px">
-        These rates are ${c.age_days} days old. ${isDeveloper() ? 'Refresh them in <a href="#/accounting/rates">Rate Cards → Exchange rates</a>.' : 'Ask the Developer to refresh them.'}</div>` : ''}
+        These rates are ${c.age_days} days old. ${isAnyAdmin() ? 'Refresh them in <a href="#/accounting/rates">Rate Cards → Exchange rates</a>.' : 'Ask an admin to refresh them.'}</div>` : ''}
     </div>`;
 }
 
@@ -3353,7 +3412,11 @@ async function saveBir() {
   } catch (e) { showErr(e); }
 }
 async function pageAdmin() {
-  const [users, tpl, bir] = await Promise.all([api('/api/users'), api('/api/templates'), api('/api/settings/bir')]);
+  const [users, tpl, bir] = await Promise.all([
+    api('/api/users'),
+    api('/api/templates').catch(() => null),   // head-office only; branch admins get null
+    api('/api/settings/bir')
+  ]);
   view(`
     <div class="row" style="justify-content:space-between">
       <h1>Admin</h1>
@@ -3362,7 +3425,10 @@ async function pageAdmin() {
 
     <h2>Official Receipt details <span class="muted" style="font-size:13px;font-weight:400">(printed on every receipt)</span></h2>
     <div class="card">
-      <div class="muted" style="margin-bottom:6px">VFIC's BIR registration particulars. Anything left blank prints as “—” on the receipt.</div>
+      <div class="muted" style="margin-bottom:6px">
+        Registration particulars for <b>${esc(NODE_LABELS[bir.branch] || bir.branch || 'this branch')}</b>, printed on the receipts it issues.
+        Anything left blank prints as “—”. Each branch keeps its own set.
+      </div>
       <div class="form-grid" id="birForm">
         <div><label>VAT Reg. TIN</label><input id="bir_tin" placeholder="000-000-000-00000"></div>
         <div><label>Accreditation No.</label><input id="bir_accreditation_no" placeholder="PR0000000000"></div>
@@ -3374,6 +3440,7 @@ async function pageAdmin() {
       <span id="birMsg" class="muted" style="margin-left:8px"></span>
     </div>
 
+    ${tpl ? `
     <h2>SMS templates</h2>
     <div class="card">
       <div class="muted">Placeholders: ${tpl.placeholders.map(p => `<code>{${p}}</code>`).join(' ')}</div>
@@ -3383,7 +3450,7 @@ async function pageAdmin() {
           <textarea id="tpl_${key}" style="min-height:52px">${esc(t.body)}</textarea>
           <button class="small" onclick="saveTemplate('${key}')">Save</button>
         </div>`).join('')}
-    </div>
+    </div>` : ''}
     <h2>Users</h2>
     <details class="collapse card"><summary>+ New user</summary>
       <div class="form-grid" style="margin-top:8px">
