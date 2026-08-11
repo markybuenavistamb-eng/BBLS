@@ -120,6 +120,51 @@ function scopeContainerList(user, containers, scopeOverride) {
   return containers.filter(c => String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase()));
 }
 
+// ---------- per-record branch guards ----------
+// Scoping the list endpoints kept another branch's shipments off the screen, but any record
+// could still be fetched or changed by id — a Thailand agent opening a Cambodia shipment,
+// advancing its boxes, or reading its sender's details. These guards close that: a branch
+// user may only touch records from their own origin country.
+//
+// They answer 404, not 403, on purpose. A branch has no business learning whether an id it
+// cannot see exists at all, and "forbidden" would confirm exactly that.
+function outOfScope(req, res, country) {
+  const scope = branchScope(req.user);
+  if (!scope || scope === country) return false;
+  res.status(404).json({ error: 'Not found' });
+  return true;
+}
+// Look up a record and enforce scope in one step. Returns null when the caller may not have
+// it (a response has already been sent), so handlers read: `const s = getShipment(...); if (!s) return;`
+function getShipment(req, res, id) {
+  const s = db.get().shipments.find(x => x.id === +id);
+  if (!s) { res.status(404).json({ error: 'Shipment not found' }); return null; }
+  return outOfScope(req, res, s.origin_country) ? null : s;
+}
+function getBox(req, res, id) {
+  const d = db.get();
+  const b = d.boxes.find(x => x.id === +id);
+  if (!b) { res.status(404).json({ error: 'Box not found' }); return null; }
+  const parent = d.shipments.find(s => s.id === b.shipment_id) || {};
+  return outOfScope(req, res, parent.origin_country) ? null : b;
+}
+// A container belongs to the branch whose country it sails from.
+function getContainer(req, res, id) {
+  const c = db.get().containers.find(x => x.id === +id);
+  if (!c) { res.status(404).json({ error: 'Container not found' }); return null; }
+  const scope = branchScope(req.user);
+  if (scope && !String(c.origin_port || '').toLowerCase().includes(scope.toLowerCase())) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  return c;
+}
+function getIntakeRequest(req, res, id) {
+  const r = db.get().intake_requests.find(x => x.id === +id);
+  if (!r) { res.status(404).json({ error: 'Request not found' }); return null; }
+  return outOfScope(req, res, r.origin_country) ? null : r;
+}
+
 // ---------- shared serializers ----------
 // Itemized packing list: array of {description, qty}. Drops blank rows.
 function sanitizeItems(items) {
@@ -404,8 +449,8 @@ app.get('/api/shipments', requireAuth, (req, res) => {
 });
 app.get('/api/shipments/:id', requireAuth, (req, res) => {
   const d = db.get();
-  const s = d.shipments.find(x => x.id === +req.params.id);
-  if (!s) return res.status(404).json({ error: 'Not found' });
+  const s = getShipment(req, res, req.params.id);
+  if (!s) return;
   res.json({
     ...s,
     sender: d.customers.find(c => c.id === s.sender_id) || null,
@@ -434,6 +479,14 @@ app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIP
     if (!d.customers.find(c => c.id === +bx.receiver_id)) return res.status(400).json({ error: 'Every box needs a valid receiver' });
     if (bx.size_category && !SM.SIZE_CATEGORIES.includes(bx.size_category)) return res.status(400).json({ error: 'Invalid size category' });
   }
+  // A branch agent files against their own branch, whatever the form said — otherwise a
+  // shipment could be booked into another country's books and numbering series.
+  const ownScope = branchScope(req.user);
+  if (ownScope && b.origin_country && b.origin_country !== ownScope) {
+    return res.status(403).json({ error: `This portal books ${ownScope} shipments only` });
+  }
+  if (ownScope) b.origin_country = ownScope;
+
   const nowIso = new Date().toISOString();
   const shipment = {
     id: db.nextId('shipment'),
@@ -483,8 +536,8 @@ app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIP
   res.json({ ...shipment, boxes: boxes.map(boxRow) });
 });
 app.put('/api/shipments/:id', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
-  const s = db.get().shipments.find(x => x.id === +req.params.id);
-  if (!s) return res.status(404).json({ error: 'Not found' });
+  const s = getShipment(req, res, req.params.id);
+  if (!s) return;
   const b = req.body || {};
   if (b.payment_status && !['PAID', 'UNPAID'].includes(b.payment_status)) return res.status(400).json({ error: 'Invalid payment status' });
   for (const k of ['origin_country', 'origin_agent', 'service_type', 'service_level', 'collection', 'receiving_form_file', 'packing_list_file', 'passport_file', 'shipping_fee_amount', 'currency', 'payment_status']) {
@@ -496,8 +549,8 @@ app.put('/api/shipments/:id', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...S
 // Confirm physical receipt at origin: all CREATED boxes → RECEIVED_ORIGIN (SMS to sender)
 app.post('/api/shipments/:id/receive', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
-  const s = d.shipments.find(x => x.id === +req.params.id);
-  if (!s) return res.status(404).json({ error: 'Not found' });
+  const s = getShipment(req, res, req.params.id);
+  if (!s) return;
   const boxes = d.boxes.filter(b => b.shipment_id === s.id && b.status === 'CREATED');
   for (const box of boxes) changeBoxStatus(box, 'RECEIVED_ORIGIN', req.user, 'Physical receipt confirmed at origin');
   db.persist();
@@ -787,14 +840,14 @@ app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
   })));
 });
 app.get('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
-  const r = db.get().intake_requests.find(x => x.id === +req.params.id);
-  if (!r) return res.status(404).json({ error: 'Not found' });
+  const r = getIntakeRequest(req, res, req.params.id);
+  if (!r) return;
   res.json(r);
 });
 // Staff decision on the uploaded ID (confirm it matches the sender, or reject it).
 app.post('/api/intake-requests/:id/verify-id', requireRole(...AGENTS), (req, res) => {
-  const r = db.get().intake_requests.find(x => x.id === +req.params.id);
-  if (!r) return res.status(404).json({ error: 'Not found' });
+  const r = getIntakeRequest(req, res, req.params.id);
+  if (!r) return;
   const { status, note } = req.body || {};
   if (!['VERIFIED', 'REJECTED', 'PENDING'].includes(status)) return res.status(400).json({ error: 'Invalid verification status' });
   if (status === 'REJECTED' && !String(note || '').trim()) return res.status(400).json({ error: 'Please say why the ID was rejected' });
@@ -803,8 +856,8 @@ app.post('/api/intake-requests/:id/verify-id', requireRole(...AGENTS), (req, res
   res.json(r.id_verification);
 });
 app.put('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {
-  const r = db.get().intake_requests.find(x => x.id === +req.params.id);
-  if (!r) return res.status(404).json({ error: 'Not found' });
+  const r = getIntakeRequest(req, res, req.params.id);
+  if (!r) return;
   const { status, shipment_id } = req.body || {};
   if (!['CONVERTED', 'DISMISSED'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   r.status = status;
@@ -851,6 +904,9 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
       status: 'NEW',
       submitted_at: new Date().toISOString(),
       items, total_qty, delivery_method: delivery, address, pickup_branch, contact,
+      // Which branch this order belongs to. A branch deployment serves its own order form,
+      // so the node answering the request is the branch that owns the order.
+      origin_country: NODE.SELF.type === 'BRANCH' ? NODE.SELF.country : String(b.origin_country || '').trim(),
       notes: String(b.notes || '').trim()
     };
     d.box_orders.push(rec);
@@ -863,6 +919,9 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
 app.get('/api/box-orders', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   let list = (d.box_orders || []).slice();
+  // A branch sees only the empty-box orders placed with it.
+  const scope = effectiveScope(req);
+  if (scope) list = list.filter(o => !o.origin_country || o.origin_country === scope);
   if (req.query.status) list = list.filter(o => o.status === req.query.status);
   list.sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
   res.json(list);
@@ -871,6 +930,7 @@ app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   const o = (d.box_orders || []).find(x => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
+  if (o.origin_country && outOfScope(req, res, o.origin_country)) return;
   const { status } = req.body || {};
   if (!['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   o.status = status;
@@ -992,8 +1052,8 @@ app.get('/api/boxes', requireAuth, (req, res) => {
   res.json(list.map(boxRow));
 });
 app.get('/api/boxes/:id', requireAuth, (req, res) => {
-  const box = db.get().boxes.find(b => b.id === +req.params.id);
-  if (!box) return res.status(404).json({ error: 'Not found' });
+  const box = getBox(req, res, req.params.id);
+  if (!box) return;
   res.json(boxDetail(box));
 });
 // Staff lookup by box number OR qr token (scan screens)
@@ -1005,11 +1065,14 @@ app.get('/api/boxes/lookup/:key', requireAuth, (req, res) => {
   const needle = (tokenMatch ? tokenMatch[1] : key).toLowerCase();
   const box = d.boxes.find(b => b.qr_token.toLowerCase() === needle || b.box_number.toLowerCase() === needle);
   if (!box) return res.status(404).json({ error: 'No box matches that code' });
+  // Scanning a code is still a read of that record, so the same branch rule applies.
+  const parent = d.shipments.find(x => x.id === box.shipment_id) || {};
+  if (outOfScope(req, res, parent.origin_country)) return;
   res.json(boxDetail(box));
 });
 app.put('/api/boxes/:id', requireRole(...AGENTS), (req, res) => {
-  const box = db.get().boxes.find(b => b.id === +req.params.id);
-  if (!box) return res.status(404).json({ error: 'Not found' });
+  const box = getBox(req, res, req.params.id);
+  if (!box) return;
   const b = req.body || {};
   if (b.size_category && !SM.SIZE_CATEGORIES.includes(b.size_category)) return res.status(400).json({ error: 'Invalid size' });
   if (b.region && !SM.REGIONS.includes(b.region)) return res.status(400).json({ error: 'Invalid region' });
@@ -1023,8 +1086,8 @@ app.put('/api/boxes/:id', requireRole(...AGENTS), (req, res) => {
 // Manual validated status change (also used by scan screens)
 app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
   const d = db.get();
-  const box = d.boxes.find(b => b.id === +req.params.id);
-  if (!box) return res.status(404).json({ error: 'Not found' });
+  const box = getBox(req, res, req.params.id);
+  if (!box) return;
   const { status, note, region } = req.body || {};
   // Warehouse staff can only do warehouse statuses
   if (req.user.role === 'WAREHOUSE' && !['RECEIVED_WAREHOUSE', 'SORTED'].includes(status)) {
@@ -1051,8 +1114,8 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
 // event and rolls the box back to the prior status, reconciling any side effects.
 app.post('/api/boxes/:id/revert', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
-  const box = d.boxes.find(b => b.id === +req.params.id);
-  if (!box) return res.status(404).json({ error: 'Not found' });
+  const box = getBox(req, res, req.params.id);
+  if (!box) return;
   const events = d.status_events.filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
   if (events.length <= 1) return res.status(400).json({ error: 'Nothing to undo — box is at its initial status.' });
   const last = events[events.length - 1];
@@ -1129,8 +1192,8 @@ app.post('/api/containers', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHI
 });
 app.get('/api/containers/:id', requireAuth, (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const boxes = d.boxes.filter(b => b.container_id === c.id).map(boxRow);
   // manifest documents bundle (arrival notice view)
   const shipmentIds = [...new Set(boxes.map(b => b.shipment_id))];
@@ -1148,8 +1211,8 @@ app.get('/api/containers/:id', requireAuth, (req, res) => {
   });
 });
 app.put('/api/containers/:id', requireRole(...AGENTS), (req, res) => {
-  const c = db.get().containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const b = req.body || {};
   if (b.status && !SM.CONTAINER_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid container status' });
   for (const k of ['container_number', 'size', 'shipping_line', 'vessel_name', 'booking_number', 'origin_port', 'destination_port', 'etd', 'eta', 'status']) {
@@ -1161,8 +1224,8 @@ app.put('/api/containers/:id', requireRole(...AGENTS), (req, res) => {
 // Load a box (by scan/search) into a container: RECEIVED_ORIGIN → LOADED_CONTAINER
 app.post('/api/containers/:id/load', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const box = d.boxes.find(b => b.id === +req.body.box_id);
   if (!box) return res.status(404).json({ error: 'Box not found' });
   if (box.container_id && box.container_id !== c.id) return res.status(400).json({ error: 'Box is already on another container' });
@@ -1192,8 +1255,8 @@ app.post('/api/containers/:id/load', requireRole(...ADMINS, ...ROLE.BRANCH_ADMIN
 // Depart: container + all boxes → IN_TRANSIT
 app.post('/api/containers/:id/depart', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const boxes = d.boxes.filter(b => b.container_id === c.id && b.status === 'LOADED_CONTAINER');
   for (const box of boxes) changeBoxStatus(box, 'IN_TRANSIT', req.user, `Container ${c.container_number} departed`);
   c.status = 'IN_TRANSIT';
@@ -1204,8 +1267,8 @@ app.post('/api/containers/:id/depart', requireRole(...ADMINS, ...ROLE.BRANCH_ADM
 // Arrive: container + all boxes → ARRIVED_PORT (SMS to receivers)
 app.post('/api/containers/:id/arrive', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const boxes = d.boxes.filter(b => b.container_id === c.id && b.status === 'IN_TRANSIT');
   for (const box of boxes) changeBoxStatus(box, 'ARRIVED_PORT', req.user, `Container ${c.container_number} arrived at ${c.destination_port}`);
   c.status = 'ARRIVED';
@@ -1217,8 +1280,8 @@ app.post('/api/containers/:id/arrive', requireRole(...AGENTS), (req, res) => {
 // box cascade for Depart (IN_TRANSIT→LOADING) and Arrive (ARRIVED→IN_TRANSIT).
 app.post('/api/containers/:id/revert', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const prev = CONTAINER_PREV[c.status];
   if (!prev) return res.status(400).json({ error: `Container is at ${c.status} — there is no earlier status to revert to.` });
   let reversed = 0;
@@ -1244,8 +1307,8 @@ app.post('/api/containers/:id/revert', requireRole(...ADMINS), (req, res) => {
 // Warehouse stripping scan: each box → RECEIVED_WAREHOUSE
 app.post('/api/containers/:id/strip-scan', requireRole(...PH_SIDE), (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const box = d.boxes.find(b => b.id === +req.body.box_id);
   if (!box) return res.status(404).json({ error: 'Box not found' });
   const offManifest = box.container_id !== c.id;
@@ -1263,8 +1326,8 @@ app.post('/api/containers/:id/strip-scan', requireRole(...PH_SIDE), (req, res) =
 // strip + regional dispatch before the vessel arrives.
 app.get('/api/containers/:id/load-plan', requireAuth, (req, res) => {
   const d = db.get();
-  const c = d.containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   const boxes = d.boxes.filter(b => b.container_id === c.id).map(boxRow);
   const groups = {};
   for (const b of boxes) {
@@ -1293,15 +1356,15 @@ app.get('/api/containers/:id/load-plan', requireAuth, (req, res) => {
 });
 // Consignee agent records the discharge/dispatch plan for this container.
 app.put('/api/containers/:id/load-plan', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
-  const c = db.get().containers.find(x => x.id === +req.params.id);
-  if (!c) return res.status(404).json({ error: 'Not found' });
+  const c = getContainer(req, res, req.params.id);
+  if (!c) return;
   c.load_plan_notes = String((req.body || {}).load_plan_notes || '').trim();
   db.persist();
   res.json({ ok: true, load_plan_notes: c.load_plan_notes });
 });
 
 // ---------- trucking trips ----------
-app.get('/api/trips', requireAuth, (req, res) => {
+app.get('/api/trips', requireRole(...ROLE.PH_SIDE, 'ACCOUNTING'), (req, res) => {
   const d = db.get();
   res.json(d.trips.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })));
@@ -1322,7 +1385,7 @@ app.post('/api/trips', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => 
   db.persist();
   res.json(t);
 });
-app.get('/api/trips/:id', requireAuth, (req, res) => {
+app.get('/api/trips/:id', requireRole(...ROLE.PH_SIDE, 'ACCOUNTING'), (req, res) => {
   const d = db.get();
   const t = d.trips.find(x => x.id === +req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
@@ -1406,8 +1469,8 @@ app.post('/api/boxes/:id/delivery-attempts', requireAuth,
   podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }]),
   async (req, res) => {
     const d = db.get();
-    const box = d.boxes.find(b => b.id === +req.params.id);
-    if (!box) return res.status(404).json({ error: 'Not found' });
+    const box = getBox(req, res, req.params.id);
+    if (!box) return;
     const { outcome, failure_reason, received_by_name, notes } = req.body || {};
     if (!['DELIVERED', 'FAILED'].includes(outcome)) return res.status(400).json({ error: 'Outcome must be DELIVERED or FAILED' });
     const files = req.files || {};
@@ -1446,7 +1509,7 @@ app.post('/api/boxes/:id/delivery-attempts', requireAuth,
 // ---------- returns queue ----------
 app.get('/api/returns', requireAuth, (req, res) => {
   const d = db.get();
-  const list = d.boxes.filter(b => b.status === 'RETURNED').map(b => {
+  const list = scopeBoxList(req.user, d.boxes, effectiveScope(req)).filter(b => b.status === 'RETURNED').map(b => {
     const row = boxRow(b);
     const attempts = d.delivery_attempts.filter(a => a.box_id === b.id).sort((x, y) => y.created_at.localeCompare(x.created_at));
     const last = attempts[0] || {};
@@ -1460,7 +1523,11 @@ app.get('/api/returns', requireAuth, (req, res) => {
 // ---------- notifications ----------
 app.get('/api/notifications', requireAuth, (req, res) => {
   const d = db.get();
-  const list = d.notifications.slice().sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 300)
+  // An SMS names a box and a customer's phone number, so the log follows the box scope.
+  const visible = new Set(scopeBoxList(req.user, d.boxes, effectiveScope(req)).map(b => b.id));
+  const list = d.notifications
+    .filter(n => n.box_id == null || visible.has(n.box_id))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 300)
     .map(n => ({ ...n, box_number: (d.boxes.find(b => b.id === n.box_id) || {}).box_number || '' }));
   res.json(list);
 });
@@ -2731,7 +2798,9 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
 // ---------- dashboard & reports ----------
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const d = db.get();
-  const scopedBoxes = scopeBoxList(req.user, d.boxes, effectiveScope(req));
+  const scope = effectiveScope(req);
+  const scopedBoxes = scopeBoxList(req.user, d.boxes, scope);
+  const visibleBoxIds = new Set(scopedBoxes.map(b => b.id));
   const byStatus = {};
   for (const s of SM.BOX_STATUSES) byStatus[s] = 0;
   for (const x of scopedBoxes) byStatus[x.status] = (byStatus[x.status] || 0) + 1;
@@ -2747,12 +2816,18 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
     byStatus,
     boxesByMonth,
     returnsCount: byStatus.RETURNED || 0,
-    unpaidShipments: d.shipments.filter(s => s.payment_status === 'UNPAID').length,
-    inTransitContainers: d.containers.filter(c => c.status === 'IN_TRANSIT').map(c => ({ ...c, box_count: d.boxes.filter(b => b.container_id === c.id).length })),
-    todaysTrips: d.trips.filter(t => t.scheduled_date && String(t.scheduled_date).slice(0, 10) === today)
+    unpaidShipments: scopeShipmentList(req.user, d.shipments, scope).filter(s => s.payment_status === 'UNPAID').length,
+    inTransitContainers: scopeContainerList(req.user, d.containers, scope)
+      .filter(c => c.status === 'IN_TRANSIT').map(c => ({ ...c, box_count: scopedBoxes.filter(b => b.container_id === c.id).length })),
+    // Trucking runs are Philippine-side delivery. A branch neither plans nor sees them, so
+    // its dashboard shows none rather than another country's schedule.
+    todaysTrips: scope ? [] : d.trips.filter(t => t.scheduled_date && String(t.scheduled_date).slice(0, 10) === today)
       .map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })),
-    activeTrips: d.trips.filter(t => t.status !== 'COMPLETED').map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })),
-    recentNotifications: d.notifications.slice().sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6)
+    activeTrips: scope ? [] : d.trips.filter(t => t.status !== 'COMPLETED').map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })),
+    // An SMS names a customer and their box, so the log follows the same box scope.
+    recentNotifications: d.notifications
+      .filter(n => n.box_id == null || visibleBoxIds.has(n.box_id))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6)
       .map(n => ({ ...n, box_number: (d.boxes.find(b => b.id === n.box_id) || {}).box_number || '' }))
   });
 });
@@ -2764,7 +2839,17 @@ function toCsv(rows) {
   return [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\r\n');
 }
 app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
-  const d = db.get();
+  const base = db.get();
+  // Every report reads straight off these collections, so scope them once here rather than
+  // in each case — a branch's report must never count another branch's boxes, and a new
+  // report added later is scoped by construction.
+  const scope = effectiveScope(req);
+  const d = scope ? {
+    ...base,
+    shipments: scopeShipmentList(req.user, base.shipments, scope),
+    boxes: scopeBoxList(req.user, base.boxes, scope),
+    containers: scopeContainerList(req.user, base.containers, scope)
+  } : base;
   let rows = [];
   switch (req.params.name) {
     case 'boxes-per-container':
