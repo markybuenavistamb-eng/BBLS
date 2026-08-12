@@ -2984,7 +2984,13 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   // the branch's own currency otherwise. Anything recorded in another is converted at the
   // BSP reference rate rather than added as if it were the same money.
   const fx = fxFor(d, branch);
-  const reportCcy = mixedCurrency ? 'PHP' : card0.currency;
+  // State the books in the money they are actually kept in, not in whatever the rate card
+  // happens to say. A branch whose card was never restamped after the split still carried
+  // head office's peso label while every shipment on it was booked in baht, so the statement
+  // announced PHP over a column of THB figures. The shipments are the source of truth; the
+  // branch's own currency is the fallback when it has no shipments yet.
+  const bookCcy = Object.keys(byCurrency)[0] || BRANCH.currencyFor(branch) || card0.currency;
+  const reportCcy = mixedCurrency ? 'PHP' : bookCcy;
   const inReportCcy = (amount, ccy) => FX.convert(amount, ccy || reportCcy, reportCcy, fx);
 
   const expenses = (d.expenses || []).filter(e => !e.deleted_at && inRange(e.spent_at) && inBranch(e));
@@ -3031,7 +3037,7 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     // Whose books these are, so the statement can name its own revenue line correctly.
     books: allBooks ? 'GROUP' : (hqBooks ? 'HQ' : 'BRANCH'),
     // A consolidated view is stated in pesos; a single branch in its own currency.
-    currency: mixedCurrency ? 'PHP' : card0.currency,
+    currency: reportCcy,
     period: { from: req.query.from || null, to: req.query.to || null },
     revenue,
     // Present when the rows span more than one currency: what each currency contributed and

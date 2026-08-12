@@ -12,7 +12,8 @@
     "reset": "node lib/reset.js",
     "check-store": "node lib/check-store.js",
     "check-nodes": "node lib/check-nodes.js",
-    "migrate-load-codes": "node lib/migrate-load-codes.js"
+    "migrate-load-codes": "node lib/migrate-load-codes.js",
+    "migrate-currency": "node lib/migrate-branch-currency.js"
   },
   "dependencies": {
     "@vercel/blob": "^2.7.0",
