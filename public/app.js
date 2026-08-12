@@ -3175,6 +3175,22 @@ function fxBreakdownHtml(c, p) {
 const IB_BADGE = { DRAFT: 'st-created', ISSUED: 'st-sorted', RECEIVED: 'st-assigned', REMITTED: 'st-loaded', PAID: 'st-delivered', DISPUTED: 'st-returned', VOID: 'st-cancelled' };
 let IB_DRAFT = null;
 
+// Pull from peers on demand. The list auto-syncs when it loads, but a branch chasing a
+// settlement head office says it has issued needs a way to ask again without waiting.
+async function syncInterbranch(btn) {
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    const r = await api('/api/sync/run', { method: 'POST' });
+    const applied = (r.peers || []).reduce((n, p) => n + (p.applied || 0), 0);
+    const failed = (r.peers || []).filter(p => !p.ok);
+    if (failed.length) flash(`Could not reach ${failed.map(p => p.peer).join(', ')}: ${failed[0].error}`, 'error');
+    else flash(applied ? `${applied} record(s) pulled in.` : 'Already up to date.');
+    renderInterbranch();
+  } catch (e) { showErr(e); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
+
 async function renderInterbranch() {
   const d = await api('/api/accounting/interbranch');
   const canIssue = isAdmin() || (ME && ME.role === 'ACCOUNTING');
@@ -3203,6 +3219,10 @@ async function renderInterbranch() {
       <div class="tile"><div class="num">${esc(money(d.totals.receivable))}</div><div class="lbl">Owed to us by other branches</div></div>
       <div class="tile"><div class="num">${esc(money(d.totals.payable))}</div><div class="lbl">We owe other branches</div></div>
     </div>
+    ${isAnyAdmin() ? `<div class="row" style="justify-content:flex-end;align-items:center;gap:8px;margin:-6px 0 10px">
+      <span class="muted" style="font-size:12.5px">Settlements are raised on the other branch's system and pulled here.</span>
+      <button class="small secondary" onclick="syncInterbranch(this)">⟳ Check for new settlements</button>
+    </div>` : ''}
     ${canIssue ? `
     <details class="collapse card" open><summary>Generate a settlement from delivered boxes</summary>
       <div class="muted" style="font-size:12px;margin:8px 0">

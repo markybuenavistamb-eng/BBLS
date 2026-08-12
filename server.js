@@ -1768,6 +1768,31 @@ app.post('/api/sync/push', requireSyncSecret, (req, res) => {
   res.json(result);
 });
 
+// A settlement belongs to the branch that issued it, and replication rightly refuses to let
+// any other node rewrite it — otherwise ownership means nothing. But the billed branch has
+// to be able to acknowledge, remit or dispute, and that action has to reach the issuer.
+//
+// So the action travels as a request rather than as a record: the billed node asks the
+// issuing node to apply it, and the issuing node applies it to its own copy. Ownership is
+// preserved, and only the three statuses that belong to the billed side are accepted.
+app.post('/api/sync/interbranch-ack', requireSyncSecret, (req, res) => {
+  const d = db.get();
+  const { uid, status, notes, settled_reference, by } = req.body || {};
+  const inv = (d.interbranch_invoices || []).find(i => i._uid === uid);
+  if (!inv) return res.status(404).json({ error: 'Unknown settlement' });
+  if (inv._node && inv._node !== NODE.NODE_ID) return res.status(409).json({ error: 'This node does not own that settlement' });
+  if (!IB_BILLED_ACTIONS.includes(status)) return res.status(400).json({ error: 'Not an action the billed branch may take' });
+  inv.history = inv.history || [];
+  inv.history.push({ status: inv.status, at: new Date().toISOString(), by: by || 'branch' });
+  if (status === 'RECEIVED') inv.received_at = new Date().toISOString();
+  if (status === 'REMITTED') inv.remitted_at = new Date().toISOString();
+  if (notes != null) inv.notes = String(notes).trim();
+  if (settled_reference != null) inv.settled_reference = String(settled_reference).trim();
+  inv.status = status;
+  db.persist();
+  res.json({ ok: true, status: inv.status });
+});
+
 // Identity — lets the developer console confirm a node is reachable and which one it is.
 app.get('/api/sync/whoami', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -1779,11 +1804,101 @@ app.get('/api/sync/status', requireRole('DEVELOPER_ADMIN'), (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(SYNC.status(db.get()));
 });
-app.post('/api/sync/run', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
+// Any admin can pull, not just the Developer. A branch admin waiting on a settlement head
+// office has issued was previously unable to fetch it at all: the only way to pull was the
+// Developer Console, which a branch does not have. They were left watching an empty page.
+app.post('/api/sync/run', requireRole(...ROLE.ANY_ADMIN), async (req, res) => {
   const result = await SYNC.runSync(db.get());
+  markAutoSynced(db.get());
   db.persist();
   res.json(result);
 });
+
+// ---- automatic pull ----
+// Each deployment has its own database, so anything raised on another node — an inter-branch
+// settlement above all — only exists here once this node pulls it. Leaving that to a manual
+// button meant a settlement issued in Manila silently never reached Thailand.
+//
+// So the views that read cross-node data pull first, at most once every AUTO_SYNC_MS. Cheap
+// because a pull with nothing new returns an empty change set, and serverless-safe because
+// it runs inside the request rather than a background worker.
+const AUTO_SYNC_MS = Math.max(0, +(process.env.VFIC_AUTO_SYNC_SECONDS || 60) * 1000);
+function markAutoSynced(d) {
+  d.sync_state = d.sync_state || {};
+  d.sync_state._auto_last = new Date().toISOString();
+}
+function autoSyncDue(d) {
+  if (!AUTO_SYNC_MS || !NODE.syncEnabled()) return false;
+  const last = Date.parse(((d.sync_state || {})._auto_last) || '');
+  return !isFinite(last) || (Date.now() - last) >= AUTO_SYNC_MS;
+}
+// Hand a record straight to the branch it concerns, instead of waiting for that branch to
+// poll. A settlement is an event — the moment head office issues one, the branch being
+// billed should have it. Pulling alone left them staring at an empty page until someone
+// happened to sync.
+//
+// Best effort by design: the record is already saved here and replication will carry it
+// anyway, so a peer that is down delays delivery rather than failing the issue.
+async function pushToBranch(d, branchKey, collection, record) {
+  if (!NODE.syncEnabled() || !record) return null;
+  const peer = NODE.PEERS.find(p => p.id === branchKey);
+  if (!peer) return null;
+  // Write our own change before going near the network. The document lives in one in-memory
+  // copy that every request reloads and rewrites, so awaiting a fetch while holding an
+  // unflushed mutation lets a concurrent request save over it — which silently reverted an
+  // issued settlement back to DRAFT. Flushing first closes that window.
+  try { await db.flush(); } catch (e) { console.warn('Flush before push failed:', e.message); }
+  try {
+    const res = await fetch(`${peer.url}/api/sync/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfic-sync': NODE.SYNC_SECRET, 'x-vfic-node': NODE.NODE_ID },
+      body: JSON.stringify({ node: NODE.NODE_ID, collections: { [collection]: [record] } })
+    });
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => '')).slice(0, 100)}`);
+    return await res.json();
+  } catch (e) {
+    console.warn(`Push to ${branchKey} failed (${e.message}) — replication will carry it instead.`);
+    return null;
+  }
+}
+// The billed branch's side of the conversation: ask the issuing node to record that we have
+// acknowledged, remitted or disputed. Best effort — our own copy is already saved, so a peer
+// that is briefly down means the issuer sees it late, not that the action is lost.
+async function tellIssuer(inv, status, actorName) {
+  if (!NODE.syncEnabled() || !IB_BILLED_ACTIONS.includes(status)) return null;
+  const peer = NODE.PEERS.find(p => p.id === inv._node);
+  if (!peer) return null;
+  try { await db.flush(); } catch (e) { /* saved on the next flush */ }
+  try {
+    const res = await fetch(`${peer.url}/api/sync/interbranch-ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-vfic-sync': NODE.SYNC_SECRET, 'x-vfic-node': NODE.NODE_ID },
+      body: JSON.stringify({ uid: inv._uid, status, notes: inv.notes, settled_reference: inv.settled_reference, by: actorName })
+    });
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text().catch(() => '')).slice(0, 100)}`);
+    return await res.json();
+  } catch (e) {
+    console.warn(`Could not tell ${inv._node} about the ${status} (${e.message}).`);
+    return null;
+  }
+}
+
+// Awaited: the caller is about to render data that may live on a peer.
+async function autoSync(d) {
+  if (!autoSyncDue(d)) return null;
+  markAutoSynced(d);            // set first, so a slow peer cannot cause a pull stampede
+  db.persist();
+  // Same reason as pushToBranch: don't hold an unflushed change across network I/O.
+  try { await db.flush(); } catch (e) { /* fall through — the pull is still worth trying */ }
+  try {
+    const result = await SYNC.runSync(d);
+    db.persist();
+    return result;
+  } catch (e) {
+    console.warn('Auto-sync failed:', e.message);
+    return null;
+  }
+}
 
 // Reach out to every peer and report what it says about itself — the network overview.
 app.get('/api/sync/network', requireRole('DEVELOPER_ADMIN'), async (req, res) => {
@@ -2523,8 +2638,11 @@ function ibVisible(user, inv) {
   return inv.from_branch === own || inv.to_branch === own;
 }
 
-app.get('/api/accounting/interbranch', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+app.get('/api/accounting/interbranch', requireRole(...ACCOUNTING_ROLES), async (req, res) => {
   const d = db.get();
+  // Settlements are raised on one node and read on another, so pull before listing —
+  // otherwise a branch sees an empty page and concludes head office never sent anything.
+  await autoSync(d);
   const own = BRANCH.branchForRole(req.user.role);
   const list = (d.interbranch_invoices || [])
     .filter(i => ibVisible(req.user, i))
@@ -2642,7 +2760,8 @@ app.post('/api/accounting/interbranch', requireRole(...ADMINS, 'ACCOUNTING'), (r
   d.seq.ib_no = (d.seq.ib_no || 0) + 1;
   const inv = {
     id: db.nextId('interbranch_invoice'),
-    invoice_number: `IB-${new Date().getFullYear()}-${String(d.seq.ib_no).padStart(5, '0')}`,
+    // The issuing branch is part of the number, so two nodes cannot mint the same one.
+    invoice_number: `IB-${BRANCH.countryCode((BRANCH.byKey(from_branch) || {}).country)}-${new Date().getFullYear()}-${String(d.seq.ib_no).padStart(5, '0')}`,
     from_branch, to_branch,
     period_from: b.period_from || null, period_to: b.period_to || null,
     currency: b.currency || rateCardFor(d, from_branch).currency,
@@ -2656,7 +2775,7 @@ app.post('/api/accounting/interbranch', requireRole(...ADMINS, 'ACCOUNTING'), (r
   res.json(inv);
 });
 
-app.put('/api/accounting/interbranch/:id', requireRole(...ACCOUNTING_ROLES), (req, res) => {
+app.put('/api/accounting/interbranch/:id', requireRole(...ACCOUNTING_ROLES), async (req, res) => {
   const d = db.get();
   const inv = (d.interbranch_invoices || []).find(x => x.id === +req.params.id);
   if (!inv) return res.status(404).json({ error: 'Not found' });
@@ -2692,6 +2811,13 @@ app.put('/api/accounting/interbranch/:id', requireRole(...ACCOUNTING_ROLES), (re
   }
   for (const k of ['notes', 'settled_reference']) if (k in b) inv[k] = String(b[k] || '').trim();
   db.persist();
+  // Get the change to the other side straight away, rather than leaving it to be polled.
+  if (inv._node && inv._node !== NODE.NODE_ID) {
+    // Not ours to replicate — ask the node that owns it to record what we did.
+    await tellIssuer(inv, b.status, req.user.name);
+  } else {
+    await pushToBranch(d, inv.to_branch, 'interbranch_invoices', inv);
+  }
   res.json(inv);
 });
 
