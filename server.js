@@ -2283,7 +2283,12 @@ const FX = require('./lib/fx');
 function fxFor(d, branchKey) {
   d.settings.fxByBranch = d.settings.fxByBranch || {};
   const own = branchKey && d.settings.fxByBranch[branchKey];
-  return FX.normalizeFx(own || d.settings.fx);
+  const fx = FX.normalizeFx(own || d.settings.fx);
+  // Each branch converts at the rate its own central or clearing bank publishes, so the
+  // table is labelled with that source rather than inheriting head office's BSP.
+  const fin = BRANCH.financeFor(branchKey || 'HQ_MANILA');
+  if (!own || !own.source) { fx.source = fin.fx_source; fx.source_url = fin.fx_source_url; }
+  return fx;
 }
 
 // Which branch's books the caller is working in. HQ admins/accounting may pass ?branch=.
@@ -2296,8 +2301,15 @@ function accountingBranch(req) {
 // Rate cards are stored per branch, falling back to the legacy single card.
 function rateCardFor(d, branchKey) {
   d.settings.rateCards = d.settings.rateCards || {};
-  const stored = d.settings.rateCards[branchKey] || d.settings.rateCard;
-  return RATES.normalizeRateCard(stored);
+  const stored = d.settings.rateCards[branchKey];
+  if (stored) return RATES.normalizeRateCard(stored);
+  // No card saved for this branch. The old fallback handed over head office's card, which
+  // is priced in pesos — so a branch with no card of its own reported its whole profit and
+  // loss in PHP. Fall back to the legacy card's *shape*, restamped in the branch's own
+  // currency, so the figures are at least labelled with the money the branch actually deals in.
+  const card = RATES.normalizeRateCard(d.settings.rateCard);
+  card.currency = BRANCH.currencyFor(branchKey);
+  return card;
 }
 
 // Reference data for the rate-card editor.
@@ -2769,15 +2781,19 @@ app.put('/api/accounting/fx', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
 // Pull today's bulletin straight from BSP. Best-effort: on any failure the stored rates are
 // left exactly as they were and the reason is reported, so VFIC can key them in instead.
 app.post('/api/accounting/fx/refresh', requireRole(...ROLE.ANY_ADMIN), async (req, res) => {
-  const result = await FX.refreshFromBsp();
-  if (!result.ok) return res.status(502).json({ error: result.error, source_url: FX.BSP_PAGE });
+  // Each branch pulls from its own source: BSP for Manila, ACLEDA for Cambodia, and
+  // Bank of Thailand for Thailand (which reports that it must be keyed in by hand).
+  const branchForRefresh = accountingBranch(req);
+  const result = await FX.refreshForBranch(branchForRefresh, fxFor(db.get(), branchForRefresh));
+  if (!result.ok) return res.status(502).json({ error: result.error, source_url: result.url || BRANCH.financeFor(branchForRefresh).fx_source_url });
   const d = db.get();
   const branch = accountingBranch(req);
   const current = fxFor(d, branch);
   d.settings.fxByBranch = d.settings.fxByBranch || {};
   d.settings.fxByBranch[branch] = FX.normalizeFx({
     ...current, rates: { ...current.rates, ...result.rates },
-    as_of: result.as_of, source: 'BSP Reference Exchange Rate Bulletin',
+    as_of: result.as_of, source: BRANCH.financeFor(branch).fx_source,
+    source_url: BRANCH.financeFor(branch).fx_source_url,
     updated_at: new Date().toISOString(), updated_by: req.user.name + ' (from BSP)'
   });
   db.persist();

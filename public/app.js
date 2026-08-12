@@ -1600,9 +1600,22 @@ async function pageTruckReceipt(kind, id) {
     title = trip.trip_number;
   } else {
     const b = await api('/api/boxes/' + id);
-    boxes = [b];
     trip = b.trip;
     title = b.box_number;
+    // Printing from one box still has to produce the receipt for the whole doorstep. The
+    // driver hands over everything for that address at once and gets one signature, so pull
+    // in this box's companions on the same trip rather than printing it alone.
+    boxes = [b];
+    if (trip && trip.id) {
+      try {
+        const full = await api('/api/trips/' + trip.id);
+        const mine = groupBoxesByConsignee(full.boxes || []).find(g => g.some(x => x.id === b.id));
+        if (mine && mine.length > 1) {
+          boxes = mine;
+          title = `${b.box_number} +${mine.length - 1}`;
+        }
+      } catch (e) { /* trip unreadable — fall back to the single box */ }
+    }
   }
   const groups = groupBoxesByConsignee(boxes);
   view(`
@@ -2402,7 +2415,7 @@ async function pageTripDetail(id) {
       <h1>${esc(t.trip_number)} ${badge(t.status)}</h1>
       <div>
         <a href="#/manifest/${t.id}"><button class="secondary">🖨 Trip manifest</button></a>
-        ${t.boxes.length ? `<a href="#/truck-receipt/t/${t.id}"><button class="secondary">🖨 Delivery receipts (${t.boxes.length})</button></a>` : ''}
+        ${t.boxes.length ? `<a href="#/truck-receipt/t/${t.id}"><button class="secondary">🖨 Delivery receipts (${groupBoxesByConsignee(t.boxes).length})</button></a>` : ''}
         ${canDispatch() && loaded.length ? `<button onclick="dispatchTrip(${t.id})">🚚 Dispatch trip (${loaded.length} loaded)</button>` : ''}
       </div>
     </div>

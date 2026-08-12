@@ -40,9 +40,19 @@ const orMoney = (v, ccy) => (ccy ? ccy + ' ' : '')
 const orDate = (iso) => iso ? new Date(iso).toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
 const orDay = (iso) => iso ? new Date(iso).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', month: 'numeric', day: 'numeric', year: 'numeric' }) : '';
 
+// Standard VAT of the country the receipt is issued in. A Thailand receipt must break out
+// Thai VAT, not Philippine — a branch is registered where it trades.
+const VAT_BY_COUNTRY = { Philippines: 0.12, Thailand: 0.07, Cambodia: 0.10 };
+const vatRateFor = (country) => {
+  const r = VAT_BY_COUNTRY[String(country || '').trim()];
+  return r == null ? 0.12 : r;
+};
+// Rounded before printing: 0.07 * 100 is 7.000000000000001 in binary floating point.
+const vatLabel = (rate) => `${+(rate * 100).toFixed(2)}% VAT`;
+
 /* Build one official receipt for a shipment (optionally for a single box). */
 function officialReceiptHtml(s, box, opts = {}) {
-  const VAT_RATE = 0.12;
+  const VAT_RATE = vatRateFor(s.origin_country);
   // Freight and VAT are billed in the origin branch's currency; the declared value of the
   // contents is a peso figure by definition (BOC declares in PHP).
   const ccy = s.currency || 'PHP';
@@ -128,7 +138,7 @@ function officialReceiptHtml(s, box, opts = {}) {
           ${line('VAT Zero-Rated', orMoney(0, ccy))}
           ${line('Discount', orMoney(0, ccy))}
           ${line('Total Sales', orMoney(net, ccy))}
-          ${line('12% VAT', orMoney(vat, ccy))}
+          ${line(vatLabel(VAT_RATE), orMoney(vat, ccy))}
         </div>
         <div class="or-due">
           <div class="or-kv or-amount"><span>Amount Due</span><b>: ${esc(orMoney(gross, ccy))}</b></div>
