@@ -2904,11 +2904,11 @@ app.put('/api/accounting/fx', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   res.json({ ...fx, branch, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES, editable: true });
 });
 
-// Pull today's bulletin straight from BSP. Best-effort: on any failure the stored rates are
-// left exactly as they were and the reason is reported, so VFIC can key them in instead.
+// Pull today's published rates. Best-effort: on any failure the stored rates are left
+// exactly as they were and the reason is reported, so VFIC can key them in instead.
 app.post('/api/accounting/fx/refresh', requireRole(...ROLE.ANY_ADMIN), async (req, res) => {
-  // Each branch pulls from its own source: BSP for Manila, ACLEDA for Cambodia, and
-  // Bank of Thailand for Thailand (which reports that it must be keyed in by hand).
+  // Each branch pulls from the source it actually banks against: BSP for Manila, Bank of
+  // Thailand for Bangkok, ACLEDA for Phnom Penh.
   const branchForRefresh = accountingBranch(req);
   const result = await FX.refreshForBranch(branchForRefresh, fxFor(db.get(), branchForRefresh));
   if (!result.ok) return res.status(502).json({ error: result.error, source_url: result.url || BRANCH.financeFor(branchForRefresh).fx_source_url });
@@ -2920,7 +2920,7 @@ app.post('/api/accounting/fx/refresh', requireRole(...ROLE.ANY_ADMIN), async (re
     ...current, rates: { ...current.rates, ...result.rates },
     as_of: result.as_of, source: BRANCH.financeFor(branch).fx_source,
     source_url: BRANCH.financeFor(branch).fx_source_url,
-    updated_at: new Date().toISOString(), updated_by: req.user.name + ' (from BSP)'
+    updated_at: new Date().toISOString(), updated_by: req.user.name + ' (from ' + BRANCH.financeFor(branch).fx_source + ')'
   });
   db.persist();
   const fx = fxFor(d, branch);
