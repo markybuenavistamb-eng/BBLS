@@ -67,6 +67,9 @@
 
       /* landing */
       'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.account': 'Sign-up / Sign-in', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
+      // Staff portal picker on the landing page.
+      'land.portal.title': 'Staff sign-in', 'land.portal.sub': 'Choose the portal for your branch.',
+      'land.portal.branches': 'Branch sites', 'land.portal.note': 'Branch portals are separate sites with their own staff accounts.',
       'land.hero.line1': 'Delivering your', 'land.hero.line2': 'love, sacrifice, and blessings home.',
       'land.hero.kicker': 'Worldwide to the Philippines · Since day one',
       'land.hero.title': 'Your balikbayan box, safely home.',
@@ -188,6 +191,9 @@
       'dash.inTransit': 'Mga container sa biyahe', 'dash.activeTrips': 'Aktibong biyahe', 'dash.recentSms': 'Kamakailang SMS',
 
       'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.account': 'Mag-sign up / Mag-sign in', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
+      // Pampiling ng portal ng kawani sa landing page.
+      'land.portal.title': 'Sign-in ng kawani', 'land.portal.sub': 'Piliin ang portal ng inyong sangay.',
+      'land.portal.branches': 'Mga site ng sangay', 'land.portal.note': 'Hiwalay na site ang bawat sangay, may sariling account ang kanilang mga kawani.',
       'land.hero.line1': 'Inihahatid ang inyong', 'land.hero.line2': 'pagmamahal, sakripisyo, at biyaya pauwi.',
       'land.hero.kicker': 'Buong mundo papuntang Pilipinas · Maaasahan',
       'land.hero.title': 'Ang inyong balikbayan box, ligtas na nakauwi.',

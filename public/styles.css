@@ -839,3 +839,35 @@ body.print-6x4 .or-receipt { page: vfic6x4; }
 .rc-boxes th, .rc-boxes td { border: 1px solid #999; padding: 3px 6px; font-size: 11.5px; text-align: left; white-space: nowrap; }
 .rc-boxes th { background: #f0f0f0; text-transform: uppercase; letter-spacing: .3px; font-size: 10px; }
 .rc-boxes .rc-tick { text-align: center; font-size: 14px; }
+
+/* ---------- landing: staff portal picker ---------- */
+.portal-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.portal-modal[hidden] { display: none; }
+.portal-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .62); backdrop-filter: blur(2px); }
+.portal-dialog {
+  position: relative; background: #fff; border-radius: 16px; padding: 26px 24px 22px;
+  width: 100%; max-width: 430px; box-shadow: 0 24px 60px rgba(0,0,0,.35); max-height: 88vh; overflow-y: auto;
+}
+.portal-dialog h2 { margin: 0 0 4px; font-size: 20px; color: var(--chrome-dark); }
+.portal-sub { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+.portal-x {
+  position: absolute; top: 12px; right: 12px; background: transparent; color: var(--muted);
+  border: 0; font-size: 17px; padding: 4px 8px; cursor: pointer; margin: 0; border-radius: 8px;
+}
+.portal-x:hover { background: #f1f5f9; color: var(--text); }
+.portal-list { display: flex; flex-direction: column; gap: 8px; }
+.portal-card {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 12px; color: var(--text); text-decoration: none;
+  transition: border-color .12s, box-shadow .12s, transform .12s;
+}
+.portal-card:hover { border-color: var(--primary); box-shadow: 0 3px 12px rgba(240,83,28,.14); transform: translateY(-1px); }
+.portal-flag { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 10px; font-size: 19px; flex-shrink: 0; }
+.portal-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.portal-body b { font-size: 14.5px; }
+.portal-city { font-size: 12.5px; color: var(--muted); }
+.portal-go { color: var(--muted); font-size: 17px; }
+.portal-card:hover .portal-go { color: var(--primary); }
+.portal-sep { margin: 18px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-weight: 700; }
+.portal-note { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.portal-empty { padding: 14px; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); font-size: 13.5px; }

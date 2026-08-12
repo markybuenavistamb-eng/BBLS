@@ -16,7 +16,7 @@
         <a class="hide-sm" href="#services" data-i18n="land.nav.services">Services</a>
         <a class="hide-sm" href="#how" data-i18n="land.nav.how">How it works</a>
         <a class="hide-sm" href="#contact" data-i18n="land.nav.contact">Contact</a>
-        <a href="/index.html" data-i18n="land.nav.login">Staff Login</a>
+        <a href="#" id="staffLoginLink" data-i18n="land.nav.login">Staff Login</a>
       </nav>
       <a class="lp-track-btn" href="/account.html" data-i18n="land.nav.account">Sign-up / Sign-in</a>
     </header>
@@ -144,6 +144,19 @@
     <div style="margin-top:8px">© <span id="yr"></span> · <span data-i18n="land.footer.rights">All rights reserved.</span></div>
     <div style="margin-top:6px;opacity:.7" data-i18n="land.footer.disclaimer">Demo system built to VFIC’s operations specification.</div>
   </footer>
+
+  <!-- Staff portal picker: which branch's door to sign in at. Filled from /api/portals,
+       which only ever lists portals this deployment can actually authenticate against. -->
+  <div class="portal-modal" id="portalModal" hidden>
+    <div class="portal-backdrop" data-close></div>
+    <div class="portal-dialog" role="dialog" aria-modal="true" aria-labelledby="portalTitle">
+      <button class="portal-x" type="button" data-close aria-label="Close">✕</button>
+      <h2 id="portalTitle" data-i18n="land.portal.title">Staff sign-in</h2>
+      <p class="portal-sub" data-i18n="land.portal.sub">Choose the portal for your branch.</p>
+      <div id="portalList" class="portal-list"></div>
+      <div id="portalElsewhere"></div>
+    </div>
+  </div>
 
   <script src="/i18n.js"></script>
   <script src="/landing.js"></script>

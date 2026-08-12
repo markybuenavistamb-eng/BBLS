@@ -319,6 +319,45 @@ app.post('/api/login', (req, res) => {
 });
 
 // Public branding for a branch portal's sign-in page.
+// Which staff portals this deployment can actually sign someone into.
+//
+// Each branch runs its own deployment with its own user table — users deliberately do not
+// replicate — so a Thailand account exists only on the Thailand deployment. Offering /th on
+// Manila's site would present a door whose key nobody there holds. Head office additionally
+// gets links out to the branch sites, taken from the peers it is already configured with,
+// because overseeing them is its job; a branch site lists only itself.
+app.get('/api/portals', (req, res) => {
+  const d = db.get();
+  const branches = BRANCH.resolve(d.settings.branches);
+  const decorate = (p) => {
+    const b = branches.find(x => x.key === p.branch) || {};
+    return {
+      slug: p.slug, name: p.name, city: p.city, flag: p.flag, accent: p.accent,
+      label: b.label || p.name, country: b.country || '', type: p.branch ? b.type : 'DEVELOPER',
+      // The app reads the portal from the path (/mnl, /th), not from a hash.
+      href: '/' + p.slug
+    };
+  };
+  const isHQ = NODE.SELF.type === 'HQ';
+  const here = Object.values(BRANCH.PORTALS)
+    .filter(p => (p.branch ? p.branch === NODE.NODE_ID : isHQ))   // the dev console lives at HQ
+    .map(decorate);
+  // Peer sites, so head office can hop to a branch portal rather than hunt for the URL.
+  const elsewhere = isHQ
+    ? NODE.PEERS.map(peer => {
+        const p = BRANCH.portalForBranch(peer.id);
+        if (!p) return null;
+        const b = branches.find(x => x.key === peer.id) || {};
+        return {
+          slug: p.slug, name: p.name, city: p.city, flag: p.flag, accent: p.accent,
+          label: b.label || p.name, country: b.country || '', type: b.type || 'BRANCH',
+          href: String(peer.url).replace(/\/+$/, '') + '/' + p.slug, external: true
+        };
+      }).filter(Boolean)
+    : [];
+  res.json({ node: NODE.SELF.id, node_label: NODE.SELF.label, here, elsewhere });
+});
+
 app.get('/api/portal/:slug', (req, res) => {
   const p = BRANCH.portalBySlug(req.params.slug);
   if (!p) return res.status(404).json({ error: 'Unknown portal' });
