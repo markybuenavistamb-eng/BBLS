@@ -3012,7 +3012,10 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     const c = FX.convert(feeOf(sh), from, branchCcy, fxNow);
     return c.converted ? c.amount : 0;
   };
-  const strayCurrency = allBooks ? [] : Object.keys(byCurrency).filter(c => c !== branchCcy);
+  // Only a currency carrying actual money is worth reporting. A shipment encoded in the
+  // wrong currency but with no fee on it yet is a missing-fee problem, not an FX one.
+  const strayCurrency = allBooks ? [] : Object.keys(byCurrency)
+    .filter(c => c !== branchCcy && byCurrency[c].billed > 0);
   const revenueBilled = consolidated
     ? consolidated.totals.billed
     : +shipmentsIn.reduce((n, sh) => n + feeIn(sh), 0).toFixed(2);
