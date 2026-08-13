@@ -2651,6 +2651,16 @@ app.get('/api/accounting/interbranch', requireRole(...ACCOUNTING_ROLES), async (
   // otherwise a branch sees an empty page and concludes head office never sent anything.
   await autoSync(d);
   const own = BRANCH.branchForRole(req.user.role);
+  // Head office raises every settlement in pesos, but a branch settles in its own money and
+  // should read the bill that way. Convert into the reader's currency at their own stored
+  // rate, keeping the peso original beside it — that is the amount on the document.
+  const homeCcy = own ? BRANCH.currencyFor(own) : null;
+  const fx = fxFor(d, own || 'HQ_MANILA');
+  const inHome = (amount, from) => {
+    if (!homeCcy || (from || 'PHP') === homeCcy) return null;
+    const c = FX.convert(amount, from || 'PHP', homeCcy, fx);
+    return c.converted ? { amount: c.amount, currency: homeCcy, rate: c.rate } : null;
+  };
   const list = (d.interbranch_invoices || [])
     .filter(i => ibVisible(req.user, i))
     .filter(i => !req.query.status || i.status === req.query.status)
@@ -2660,15 +2670,25 @@ app.get('/api/accounting/interbranch', requireRole(...ACCOUNTING_ROLES), async (
       // How this invoice reads from where the caller is sitting.
       direction: own ? (i.from_branch === own ? 'RECEIVABLE' : 'PAYABLE') : 'BOTH',
       from_label: BRANCH.BRANCH_LABELS[i.from_branch] || i.from_branch,
-      to_label: BRANCH.BRANCH_LABELS[i.to_branch] || i.to_branch
+      to_label: BRANCH.BRANCH_LABELS[i.to_branch] || i.to_branch,
+      home: inHome(i.total, i.currency)
     }));
-  const openTotal = (dir) => +list.filter(i => i.direction === dir && ['ISSUED', 'DISPUTED'].includes(i.status))
-    .reduce((n, i) => n + i.total, 0).toFixed(2);
+  // Totals follow the reader too: a branch's outstanding balance in its own money.
+  const totalIn = (dir) => {
+    const rows = list.filter(i => i.direction === dir && ['ISSUED', 'DISPUTED'].includes(i.status));
+    const raw = +rows.reduce((n, i) => n + i.total, 0).toFixed(2);
+    if (!homeCcy) return { amount: raw, currency: 'PHP' };
+    const converted = rows.reduce((n, i) => n + (i.home ? i.home.amount : i.total), 0);
+    return { amount: +converted.toFixed(2), currency: homeCcy };
+  };
   res.json({
     invoices: list,
     branches: BRANCH.resolve(d.settings.branches).map(b => ({ key: b.key, label: b.label, short: b.short, type: b.type })),
     my_branch: own,
-    totals: { receivable: openTotal('RECEIVABLE'), payable: openTotal('PAYABLE') },
+    home_currency: homeCcy,
+    fx: homeCcy ? { source: BRANCH.financeFor(own).fx_source_short || fx.source, source_url: fx.source_url, as_of: fx.as_of } : null,
+    totals: { receivable: totalIn('RECEIVABLE').amount, payable: totalIn('PAYABLE').amount },
+    totals_currency: homeCcy || 'PHP',
     statuses: IB_STATUSES
   });
 });

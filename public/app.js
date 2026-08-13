@@ -3211,7 +3211,10 @@ async function renderInterbranch() {
     <td class="wrap-cell" style="max-width:320px">${i.lines.map(l => esc(l.description)).join('<br>')}
       ${i.period_from || i.period_to ? `<div class="muted">Period ${fmtDay(i.period_from)} – ${fmtDay(i.period_to)}</div>` : ''}
       ${i.notes ? `<div class="muted">“${esc(i.notes)}”</div>` : ''}</td>
-    <td><b>${esc(money(i.total, i.currency))}</b></td>
+    <td>${i.home
+      ? `<b>${esc(money(i.home.amount, i.home.currency))}</b>
+         <div class="muted" style="font-size:11.5px">billed ${esc(money(i.total, i.currency))}</div>`
+      : `<b>${esc(money(i.total, i.currency))}</b>`}</td>
     <td><span class="badge ${IB_BADGE[i.status]}">${esc(i.status)}</span></td>
     <td class="inline-actions">
       ${i.status === 'DRAFT' && canIssue ? `<button class="small" onclick="setIb(${i.id},'ISSUED')">Issue</button>` : ''}
@@ -3225,9 +3228,14 @@ async function renderInterbranch() {
 
   document.getElementById('acctBody').innerHTML = `
     <div class="tiles">
-      <div class="tile"><div class="num">${esc(money(d.totals.receivable))}</div><div class="lbl">Owed to us by other branches</div></div>
-      <div class="tile"><div class="num">${esc(money(d.totals.payable))}</div><div class="lbl">We owe other branches</div></div>
+      <div class="tile"><div class="num">${esc(money(d.totals.receivable, d.totals_currency))}</div><div class="lbl">Owed to us by other branches</div></div>
+      <div class="tile"><div class="num">${esc(money(d.totals.payable, d.totals_currency))}</div><div class="lbl">We owe other branches</div></div>
     </div>
+    ${d.fx ? `<div class="muted" style="font-size:12.5px;margin:-6px 0 10px">
+      Head office bills in pesos. Amounts are shown in ${esc(d.home_currency)} at the
+      <a href="${esc(d.fx.source_url)}" target="_blank" rel="noopener">${esc(d.fx.source)}</a> rate of ${esc(d.fx.as_of)},
+      with the peso figure on the document beneath each one.
+    </div>` : ''}
     ${isAnyAdmin() ? `<div class="row" style="justify-content:flex-end;align-items:center;gap:8px;margin:-6px 0 10px">
       <span class="muted" style="font-size:12.5px">Settlements are raised on the other branch's system and pulled here.</span>
       <button class="small secondary" onclick="syncInterbranch(this)">⟳ Check for new settlements</button>
