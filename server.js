@@ -675,6 +675,13 @@ app.get('/api/health', async (req, res) => {
     },
     checks,
     ready: Object.values(checks).every(Boolean),
+    // Which commit this deployment is actually running. Vercel sets these on every build.
+    // Without it there is no way to tell a fix that was never deployed from one that did
+    // not work — a question that came up repeatedly and cost a lot of guessing.
+    build: {
+      commit: (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7) || null,
+      message: (process.env.VERCEL_GIT_COMMIT_MESSAGE || '').split('\n')[0] || null
+    },
     time: new Date().toISOString()
   });
 });
