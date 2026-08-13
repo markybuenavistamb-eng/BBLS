@@ -2881,7 +2881,8 @@ app.get('/api/accounting/fx', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   const branch = accountingBranch(req);
   const fx = fxFor(db.get(), branch);
   res.json({
-    ...fx, branch, age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES,
+    ...fx, branch, source_short: BRANCH.financeFor(branch).fx_source_short,
+    age_days: FX.ageInDays(fx), currencies: FX.CURRENCIES,
     editable: ROLE.isAnyAdmin(req.user.role)
   });
 });

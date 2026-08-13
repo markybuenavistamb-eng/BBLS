@@ -2718,6 +2718,8 @@ async function pageDeveloper() {
     </div>`;
 }
 const NODE_LABELS = { HQ_MANILA: 'Manila HQ', TH_BANGKOK: 'Thailand', KH_PHNOMPENH: 'Cambodia' };
+// The money each branch keeps its books in (mirrors lib/branches.js FINANCE).
+const BRANCH_CURRENCY = { HQ_MANILA: 'PHP', TH_BANGKOK: 'THB', KH_PHNOMPENH: 'KHR' };
 async function runSyncNow() {
   try {
     const r = await api('/api/sync/run', { method: 'POST' });
@@ -2877,45 +2879,52 @@ async function renderFxCard() {
   if (!host) return;
   let fx;
   try { fx = await api('/api/accounting/fx'); } catch (e) { host.innerHTML = ''; return; }
+  // Head office issues its settlements in pesos and converts nothing, so it has no use for
+  // a rate table. Only a branch does, and only to read what Manila has billed it.
+  const home = BRANCH_CURRENCY[fx.branch];
+  if (!home || home === 'PHP') { host.innerHTML = ''; return; }
   const stale = fx.age_days != null && fx.age_days > 7;
   const cell = (c) => `<td>${c === 'PHP'
     ? '<span class="muted">base</span>'
     : `<input id="fx_${c}" type="number" min="0" step="0.0001" value="${fx.rates[c] || ''}" style="width:110px;padding:5px 7px"${fx.editable ? '' : ' disabled'}>`}</td>`;
+  const perPhp = fx.rates[home] ? (1 / fx.rates[home]) : null;   // how much of ours one peso buys
   host.innerHTML = `
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:flex-end">
         <div>
-          <h2 style="margin:0">Exchange rates <span class="muted" style="font-size:13px;font-weight:400">· pesos per 1 unit</span></h2>
+          <h2 style="margin:0">Settlement conversion <span class="muted" style="font-size:13px;font-weight:400">· PHP → ${esc(home)}</span></h2>
           <div class="muted" style="font-size:12.5px;margin-top:4px">
+            Head office bills this branch in pesos. This is the rate those settlements are read at.
             Source: <a href="${esc(fx.source_url)}" target="_blank" rel="noopener">${esc(fx.source)}</a>.
-            Used to state the head-office consolidated books in pesos.
           </div>
         </div>
         <div class="muted" style="text-align:right;font-size:12.5px">
-          Bulletin date <b>${esc(fx.as_of)}</b>${fx.age_days != null ? ` · ${fx.age_days} day(s) old` : ''}<br>
-          ${fx.updated_at ? `Saved ${fmtDate(fx.updated_at)} by ${esc(fx.updated_by || '')}` : 'Starting figures — not yet updated'}
+          Rate date <b>${esc(fx.as_of)}</b>${fx.age_days != null ? ` · ${fx.age_days} day(s) old` : ''}<br>
+          ${fx.updated_at ? `Saved ${fmtDate(fx.updated_at)} by ${esc(fx.updated_by || '')}` : 'Starting figure — not yet updated'}
         </div>
       </div>
-      ${stale ? `<div class="note-warn" style="margin-top:10px">These rates are ${fx.age_days} days old. BSP publishes a new bulletin every banking day.</div>` : ''}
-      <div class="table-scroll" style="margin-top:10px"><table>
-        <tr>${fx.currencies.map(c => `<th>${esc(c)}</th>`).join('')}</tr>
-        <tr>${fx.currencies.map(cell).join('')}</tr>
-      </table></div>
-      ${fx.editable ? `
+      ${perPhp ? `<div class="fx-headline">PHP 1.00 = <b>${esc(home)} ${perPhp.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}</b></div>` : ''}
+      ${stale ? `<div class="note-warn" style="margin-top:10px">This rate is ${fx.age_days} days old — press Refresh, or type today's in.</div>` : ''}
       <div class="row" style="gap:8px;align-items:flex-end;margin-top:12px">
-        <div><label style="margin:0">Bulletin date</label><input id="fxAsOf" type="date" value="${esc(fx.as_of)}" style="max-width:180px"></div>
-        <button onclick="saveFx()">Save rates</button>
-        <button class="secondary" onclick="refreshFx(this)">↻ Fetch from BSP</button>
+        <div style="max-width:190px">
+          <label style="margin:0">Pesos per 1 ${esc(home)}</label>
+          <input id="fx_${esc(home)}" type="number" min="0" step="0.000001" value="${fx.rates[home] || ''}"${fx.editable ? '' : ' disabled'}>
+        </div>
+        <div><label style="margin:0">Rate date</label><input id="fxAsOf" type="date" value="${esc(fx.as_of)}" style="max-width:180px"${fx.editable ? '' : ' disabled'}></div>
+        ${fx.editable ? `
+          <button onclick="saveFx()">Save</button>
+          <button class="secondary" onclick="refreshFx(this)">↻ Refresh from ${esc(fx.source_short || fx.source)}</button>` : ''}
       </div>
-      <div class="muted" style="font-size:12px;margin-top:6px">
-        “Fetch from BSP” reads the latest bulletin from bsp.gov.ph. If BSP is unreachable or its
-        page has changed, nothing is overwritten — key the figures in by hand instead.
-      </div>` : `<div class="note-info" style="margin-top:12px">Exchange rates follow the same rule as rate cards — only an admin can change them.</div>`}
+      ${fx.editable ? `<div class="muted" style="font-size:12px;margin-top:6px">
+        Refresh reads today's published rate. If the source cannot be reached, nothing is
+        overwritten — type the rate in instead.
+      </div>` : `<div class="note-info" style="margin-top:12px">Only an admin can change this rate.</div>`}
     </div>`;
 }
 async function saveFx() {
   const fx = await api('/api/accounting/fx');
   const rates = {};
+  // Only the branch's own currency is on screen; the rest of the table is left as it is.
   for (const c of fx.currencies) {
     const el = document.getElementById('fx_' + c);
     if (el && el.value !== '') rates[c] = +el.value;
