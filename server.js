@@ -682,6 +682,10 @@ app.get('/api/health', async (req, res) => {
       commit: (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7) || null,
       message: (process.env.VERCEL_GIT_COMMIT_MESSAGE || '').split('\n')[0] || null
     },
+    // What this deployment would put in an empty database. Worth reporting: wiping a node
+    // that is still on 'demo' just recreates the worked example, and with three nodes doing
+    // that independently the duplicates come straight back.
+    seed_mode: String(process.env.VFIC_SEED || 'demo').toLowerCase(),
     time: new Date().toISOString()
   });
 });
