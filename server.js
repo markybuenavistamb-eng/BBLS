@@ -1658,7 +1658,12 @@ function birFor(d, branchKey) {
   d.settings.birByBranch = d.settings.birByBranch || {};
   const own = d.settings.birByBranch[branchKey];
   const base = d.settings.bir || {};
-  return Object.fromEntries(BIR_FIELDS.map(k => [k, (own && own[k]) || base[k] || '']));
+  // A field the branch has set wins even when it is blank — clearing one is a deliberate
+  // act. Testing for a truthy value instead made a cleared field fall back to head office's,
+  // so it reappeared on the next load and the save looked as though it had not happened.
+  return Object.fromEntries(BIR_FIELDS.map(k => [
+    k, own && Object.prototype.hasOwnProperty.call(own, k) ? own[k] : (base[k] || '')
+  ]));
 }
 app.get('/api/settings/bir', requireAuth, (req, res) => {
   const branch = accountingBranch(req);
@@ -1740,8 +1745,12 @@ app.put('/api/settings/rates', requireRole(...ADMINS), (req, res) => {
 // A branch admin may only assign roles inside their own branch.
 app.get('/api/roles', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const allowed = ROLE.manageableRoles(req.user.role);
+  // On a branch deployment the Philippine-side roles cannot do anything, so they are not
+  // offered — creating a Consignee Agent in Bangkok would be an account that never works.
+  const onBranchNode = NODE.NODE_ID !== 'HQ_MANILA';
   res.json({
-    roles: ROLE.ROLES.filter(r => allowed.includes(r.key)),
+    roles: ROLE.ROLES.filter(r => allowed.includes(r.key))
+      .filter(r => !onBranchNode || !ROLE.PH_ONLY_ROLES.includes(r.key)),
     developer_only: ['DEVELOPER_ADMIN'],
     branch_scoped: ROLE.isBranchAdmin(req.user.role)
   });
@@ -1954,11 +1963,15 @@ app.get('/api/role-modules', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   // A branch admin manages only their own branch's roles, so they are shown only those —
   // the matrix is network-wide and the rest is not theirs to change.
   const editable = ROLE.manageableRoles(req.user.role);
+  const onBranchNode = NODE.NODE_ID !== 'HQ_MANILA';
+  // PH-side roles have no function on a branch deployment: nobody there receives at the
+  // Manila warehouse or drives a delivery. Hide them so a branch cannot create one.
   const visible = ROLE.isBranchAdmin(req.user.role)
     ? ROLE.ROLES.filter(r => editable.includes(r.key))
-    : ROLE.ROLES;
+    : ROLE.ROLES.filter(r => !onBranchNode || !ROLE.PH_ONLY_ROLES.includes(r.key));
   res.json({
-    modules: MODULES.MODULES,
+    // Branch portals list only the modules a branch actually has.
+    modules: (ROLE.isBranchAdmin(req.user.role) || onBranchNode) ? MODULES.BRANCH_MODULES : MODULES.MODULES,
     roles: visible,
     matrix: MODULES.matrix(visible.map(r => r.key), d.settings.roleModules),
     locked: MODULES.LOCKED,
