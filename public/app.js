@@ -3112,6 +3112,11 @@ async function renderPnl(from, to) {
       <div class="tile"><div class="num">${esc(money(p.expenses.total, p.currency))}</div><div class="lbl">${p.books === 'HQ' ? `Local PH expenses (${p.expenses.count})` : `Expenses (${p.expenses.count})`}</div></div>
     </div>
     ${p.mixed_currency ? fxBreakdownHtml(p.consolidated, p) : ''}
+    ${(p.stray_currencies || []).length ? `<div class="note-warn" style="margin-bottom:12px">
+      Some shipments here are booked in <b>${esc(p.stray_currencies.join(", "))}</b> rather than ${esc(p.currency)}.
+      They are converted for this statement, but the figure will move with the exchange rate until they are corrected —
+      usually a shipment encoded with the wrong currency.
+    </div>` : ''}
     ${!p.mixed_currency && p.fx_note ? `<div class="muted" style="margin:-4px 0 12px;font-size:12.5px">
       Inter-branch settlements are billed in pesos and shown here in ${esc(p.currency)}, converted at the
       <a href="${esc(p.fx_note.source_url)}" target="_blank" rel="noopener">${esc(p.fx_note.source)}</a> rate of ${esc(p.fx_note.as_of)}.

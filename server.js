@@ -2996,29 +2996,36 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     row.receivable = +(row.billed - row.collected).toFixed(2);
     row.shipments += 1;
   }
-  const mixedCurrency = Object.keys(byCurrency).length > 1;
-  // With more than one currency in view, convert each to pesos at the BSP reference rate so
-  // head office gets one PHP total. Every line carries the rate it was converted at.
-  const consolidated = mixedCurrency ? FX.consolidate(byCurrency, fxFor(d, branch)) : null;
+  // Only the group roll-up consolidates into pesos. A branch always reports in its own
+  // money, whatever odd record has found its way into its books — one shipment booked in the
+  // wrong currency used to make a branch look "mixed" and tip its whole statement into head
+  // office's peso view, so Bangkok read PHP over a column of baht.
+  const fxNow = fxFor(d, branch);
+  const mixedCurrency = allBooks && Object.keys(byCurrency).length > 1;
+  const consolidated = mixedCurrency ? FX.consolidate(byCurrency, fxNow) : null;
+  // A branch states everything in its own currency, converting any stray record into it.
+  const branchCcy = hqBooks ? BRANCH.currencyFor('HQ_MANILA')
+    : (BRANCH.currencyFor(branch) || card0.currency);
+  const feeIn = (sh) => {
+    const from = sh.currency || branchCcy;
+    if (from === branchCcy) return feeOf(sh);
+    const c = FX.convert(feeOf(sh), from, branchCcy, fxNow);
+    return c.converted ? c.amount : 0;
+  };
+  const strayCurrency = allBooks ? [] : Object.keys(byCurrency).filter(c => c !== branchCcy);
   const revenueBilled = consolidated
     ? consolidated.totals.billed
-    : +shipmentsIn.reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
+    : +shipmentsIn.reduce((n, sh) => n + feeIn(sh), 0).toFixed(2);
   const revenueCollected = consolidated
     ? consolidated.totals.collected
-    : +shipmentsIn.filter(sh => sh.payment_status === 'PAID').reduce((n, sh) => n + feeOf(sh), 0).toFixed(2);
+    : +shipmentsIn.filter(sh => sh.payment_status === 'PAID').reduce((n, sh) => n + feeIn(sh), 0).toFixed(2);
   const receivable = +(revenueBilled - revenueCollected).toFixed(2);
 
   // Everything on this statement is stated in one currency: pesos for a consolidated view,
   // the branch's own currency otherwise. Anything recorded in another is converted at the
   // BSP reference rate rather than added as if it were the same money.
-  const fx = fxFor(d, branch);
-  // State the books in the money they are actually kept in, not in whatever the rate card
-  // happens to say. A branch whose card was never restamped after the split still carried
-  // head office's peso label while every shipment on it was booked in baht, so the statement
-  // announced PHP over a column of THB figures. The shipments are the source of truth; the
-  // branch's own currency is the fallback when it has no shipments yet.
-  const bookCcy = Object.keys(byCurrency)[0] || BRANCH.currencyFor(branch) || card0.currency;
-  const reportCcy = mixedCurrency ? 'PHP' : bookCcy;
+  const fx = fxNow;
+  const reportCcy = mixedCurrency ? 'PHP' : branchCcy;
   const inReportCcy = (amount, ccy) => FX.convert(amount, ccy || reportCcy, reportCcy, fx);
 
   const expenses = (d.expenses || []).filter(e => !e.deleted_at && inRange(e.spent_at) && inBranch(e));
@@ -3071,6 +3078,9 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
     // Present when the rows span more than one currency: what each currency contributed and
     // the BSP rate it was converted at, so the peso total above can be checked line by line.
     by_currency: byCurrency, mixed_currency: mixedCurrency, consolidated,
+    // Records booked in something other than this branch's currency, converted for display.
+    // Worth surfacing: it usually means a shipment was encoded with the wrong currency.
+    stray_currencies: strayCurrency,
     unconverted_expenses: unconvertedExpenses, unconverted_settlements: unconvertedSettlements,
     // Named whenever a figure on this statement was converted, so the page can say so.
     fx_note: (mixedCurrency || (!allBooks && ibLive.some(i => (i.currency || 'PHP') !== reportCcy && (i.from_branch === branch || i.to_branch === branch))))
