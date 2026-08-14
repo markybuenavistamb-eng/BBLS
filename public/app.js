@@ -2160,10 +2160,14 @@ async function containerRevert(id, status) {
 async function pageOriginWarehouse(size, util) {
   const planSize = size || 'C40';
   const planUtil = util || 0.85;
-  const [wh, plan] = await Promise.all([
+  const [wh, plan, containers] = await Promise.all([
     api('/api/origin-warehouse'),
-    api(`/api/origin-warehouse/load-plan?size=${planSize}&utilisation=${planUtil}`)
+    api(`/api/origin-warehouse/load-plan?size=${planSize}&utilisation=${planUtil}`),
+    canIntake() ? api('/api/containers').catch(() => []) : Promise.resolve([])
   ]);
+  // Stuffing happens here, at the origin warehouse, against a container still being loaded.
+  // One that has sailed is closed to further boxes.
+  const openContainers = (containers.rows || containers || []).filter(c => ['BOOKING', 'LOADING'].includes(c.status));
   const a = plan.actual;
   view(`
     <div class="row" style="justify-content:space-between">
@@ -2245,8 +2249,27 @@ async function pageOriginWarehouse(size, util) {
 
     <h2>Master list (${wh.totals.count})</h2>
     ${wh.by_size.length ? `<div class="card"><b>By size:</b> ${wh.by_size.map(s => `${s.count}× ${esc(s.label)} <span class="muted">(${s.cbm} cbm, ${s.weight_kg} kg)</span>`).join(' · ')}</div>` : ''}
+    ${canIntake() ? `<div class="card">
+      <div class="row" style="gap:8px;align-items:flex-end">
+        <div style="max-width:340px">
+          <label style="margin:0">Stuff into container</label>
+          <select id="owContainer">
+            ${openContainers.length
+              ? openContainers.map(c => `<option value="${c.id}">${esc(c.container_number)} · ${esc(c.load_code || '')} · ${esc(CONTAINER_SIZE_LABELS[c.size] || c.size)} · ${c.box_count} loaded</option>`).join('')
+              : '<option value="">— no container is open for loading —</option>'}
+          </select>
+        </div>
+        ${openContainers.length ? `<button class="small" onclick="loadPlannedBoxes()">Load the ${a.fits.length} box(es) that fit</button>` : ''}
+        <a href="#/containers?at=cnBook"><button class="small secondary">Book a container</button></a>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">
+        Boxes are stuffed here, at the origin warehouse. Only a container still being loaded
+        can take more — once it departs it is closed. A container carries boxes from its own
+        origin only.
+      </div>
+    </div>` : ''}
     <div class="card table-scroll">
-      <table><tr><th>Box #</th><th>Sender</th><th>Receiver</th><th>Origin</th><th>Size</th><th>Volume</th><th>Weight</th><th>Fits this container</th></tr>
+      <table><tr><th>Box #</th><th>Sender</th><th>Receiver</th><th>Origin</th><th>Size</th><th>Volume</th><th>Weight</th><th>Fits this container</th>${canIntake() ? '<th></th>' : ''}</tr>
       ${wh.boxes.map(b => {
         const inPlan = a.fits.some(f => f.id === b.id);
         return `<tr>
@@ -2256,8 +2279,9 @@ async function pageOriginWarehouse(size, util) {
           <td>${esc(b.size_label)}<div class="muted">${esc(b.dimensions)}</div></td>
           <td>${b.cbm} cbm</td><td>${b.weight_kg || 0} kg</td>
           <td>${inPlan ? '<span class="badge st-delivered">Yes</span>' : '<span class="badge st-created">Next load</span>'}</td>
+          ${canIntake() ? `<td class="inline-actions">${openContainers.length ? `<button class="small" onclick="loadBoxIntoContainer(${b.id})">Load</button>` : ''}</td>` : ''}
         </tr>`;
-      }).join('') || '<tr><td colspan="8" class="muted">No boxes waiting at the origin warehouse</td></tr>'}
+      }).join('') || `<tr><td colspan="${canIntake() ? 9 : 8}" class="muted">No boxes waiting at the origin warehouse</td></tr>`}
       </table>
     </div>`);
 }
@@ -2302,6 +2326,38 @@ async function pageWarehouse() {
 }
 
 /* Printable origin-warehouse stock report — a proper document, not the screen page. */
+// Stuff one box into the container chosen above. The server refuses a box from another
+// origin, so a mistake is caught rather than quietly loaded.
+async function loadBoxIntoContainer(boxId) {
+  const pick = document.getElementById('owContainer');
+  const containerId = pick && pick.value;
+  if (!containerId) return flash('Pick a container first', 'error');
+  try {
+    await api('/api/containers/' + containerId + '/load', { method: 'POST', body: { box_id: boxId } });
+    flash('Box loaded');
+    pageOriginWarehouse();
+  } catch (e) { showErr(e); }
+}
+
+// Load everything the plan says fits, in the plan's own order, and report what happened.
+async function loadPlannedBoxes() {
+  const pick = document.getElementById('owContainer');
+  const containerId = pick && pick.value;
+  if (!containerId) return flash('Pick a container first', 'error');
+  const plan = await api('/api/origin-warehouse/load-plan?size=C40&utilisation=0.85').catch(() => null);
+  const fits = (plan && plan.actual && plan.actual.fits) || [];
+  if (!fits.length) return flash('Nothing to load', 'error');
+  let loaded = 0;
+  const failures = [];
+  for (const b of fits) {
+    try { await api('/api/containers/' + containerId + '/load', { method: 'POST', body: { box_id: b.id } }); loaded += 1; }
+    catch (e) { failures.push((b.box_number || b.id) + ': ' + e.message); }
+  }
+  flash(`Loaded ${loaded} box(es)${failures.length ? `, ${failures.length} refused` : ''}`, failures.length ? 'error' : 'success');
+  if (failures.length) console.warn('Not loaded:\n' + failures.join('\n'));
+  pageOriginWarehouse();
+}
+
 async function pageOriginWarehouseDoc() {
   const wh = await api('/api/origin-warehouse');
   const rows = wh.boxes || [];
@@ -3125,12 +3181,15 @@ async function renderPnl(from, to) {
     <div class="card">
       <h2 style="margin-top:0">Profit &amp; Loss${p.mixed_currency ? ` <span class="muted" style="font-size:13px;font-weight:400">· converted to PHP</span>` : ''}</h2>
       <table>
-        <tr><td><b>${p.books === 'HQ' ? 'Revenue (inter-branch settlements issued)' : 'Revenue (billed to customers)'}</b></td><td style="text-align:right">${esc(money(p.revenue.billed, p.currency))}</td></tr>
+        <tr><td><b>${p.books === 'HQ' ? 'Revenue (inter-branch settlements issued)' : 'Revenue (billed to customers)'}</b></td>
+          <td style="text-align:right"><button class="amount-link" onclick="pnlBreakdown('revenue')">${esc(money(p.revenue.billed, p.currency))}</button></td></tr>
         ${p.interbranch && p.interbranch.income ? `<tr><td class="muted" style="padding-left:22px">Inter-branch billed to other branches</td><td style="text-align:right" class="muted">${esc(money(p.interbranch.income, p.currency))}</td></tr>` : ''}
-        <tr><td><b>${p.books === 'HQ' ? 'Local Philippine costs' : 'Costs'}</b></td><td></td></tr>
+        <tr><td><b>${p.books === 'HQ' ? 'Local Philippine costs' : 'Costs'}</b></td>
+          <td style="text-align:right">${p.expenses.total ? `<button class="amount-link" onclick="pnlBreakdown('expenses')">− ${esc(money(p.expenses.total, p.currency))}</button>` : ''}</td></tr>
         ${cat.length ? cat.map(([k, v]) => `<tr><td class="muted" style="padding-left:22px">${esc(k.replace(/_/g, ' '))}</td><td style="text-align:right" class="muted">− ${esc(money(v, p.currency))}</td></tr>`).join('')
           : `<tr><td class="muted" style="padding-left:22px">No expenses recorded in this period</td><td style="text-align:right" class="muted">− ${esc(money(0, p.currency))}</td></tr>`}
-        ${p.interbranch && p.interbranch.cost ? `<tr><td class="muted" style="padding-left:22px">Inter-branch charges from other branches</td><td style="text-align:right" class="muted">− ${esc(money(p.interbranch.cost, p.currency))}</td></tr>` : ''}
+        ${p.interbranch && p.interbranch.cost ? `<tr><td class="muted" style="padding-left:22px">Inter-branch charges from other branches</td>
+          <td style="text-align:right"><button class="amount-link muted" onclick="pnlBreakdown('interbranch')">− ${esc(money(p.interbranch.cost, p.currency))}</button></td></tr>` : ''}
         <tr><td><b>Total costs</b></td><td style="text-align:right">− ${esc(money((p.totals && p.totals.costs) || p.expenses.total, p.currency))}</td></tr>
         <tr style="border-top:2px solid var(--border)">
           <td><b>Net profit (accrual)</b></td>
@@ -3139,7 +3198,47 @@ async function renderPnl(from, to) {
           <td style="text-align:right;font-weight:800;color:${p.net_cash >= 0 ? 'var(--green)' : 'var(--red)'}">${esc(money(p.net_cash, p.currency))}</td></tr>
       </table>
       ${p.interbranch && p.interbranch.note ? `<div class="muted" style="font-size:12px;margin-top:10px">${esc(p.interbranch.note)}</div>` : ''}
-    </div>`;
+      <div class="muted no-print" style="font-size:12px;margin-top:10px">Click any amount to see what makes it up.</div>
+    </div>
+    <div id="pnlDrill"></div>`;
+}
+
+// The records behind one line of the statement. Built from the same filtered lists the
+// figure came from, so the rows always add up to the total they were opened from.
+async function pnlBreakdown(line) {
+  const host = document.getElementById('pnlDrill');
+  if (!host) return;
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const from = (document.getElementById('pnlFrom') || {}).value;
+  const to = (document.getElementById('pnlTo') || {}).value;
+  if (from) q.set('from', from);
+  if (to) q.set('to', to);
+  q.set('breakdown', line);
+  host.innerHTML = '<div class="card muted">Loading…</div>';
+  try {
+    const d = await api('/api/accounting/pnl?' + q.toString());
+    host.innerHTML = `
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:baseline">
+          <h2 style="margin:0">${esc(d.label)} <span class="muted" style="font-size:13px;font-weight:400">· ${d.rows.length} record(s)</span></h2>
+          <button class="small secondary" onclick="document.getElementById('pnlDrill').innerHTML=''">Close</button>
+        </div>
+        ${d.rows.length ? `<div class="table-scroll" style="margin-top:8px"><table>
+          <tr><th>Reference</th><th>Who</th><th>Date</th><th>Status</th>${d.converted ? '<th>As booked</th>' : ''}<th>${esc(d.currency)}</th></tr>
+          ${d.rows.map(r => `<tr>
+            <td>${r.href ? `<a href="${r.href}">${esc(r.ref)}</a>` : esc(r.ref)}</td>
+            <td>${esc(r.who || '')}</td>
+            <td>${fmtDay(r.when)}</td>
+            <td>${r.status ? `<span class="badge ${IB_BADGE[r.status] || (r.status === 'PAID' ? 'pay-paid' : 'pay-unpaid')}">${esc(r.status)}</span>` : ''}</td>
+            ${d.converted ? `<td class="muted">${esc(money(r.original, r.original_currency))}</td>` : ''}
+            <td>${r.amount == null ? '<span class="muted">no rate</span>' : esc(money(r.amount, d.currency))}</td>
+          </tr>`).join('')}
+          <tr style="border-top:2px solid var(--border)"><td colspan="${d.converted ? 4 : 3}"><b>Total</b></td>
+            ${d.converted ? '<td></td>' : ''}<td><b>${esc(money(d.total, d.currency))}</b></td></tr>
+        </table></div>` : '<div class="muted" style="margin-top:8px">Nothing on this line for the period.</div>'}
+      </div>`;
+    host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) { host.innerHTML = `<div class="card error">${esc(e.message)}</div>`; }
 }
 
 // Switch which set of books the statement shows. It rides on the same ?branch= the rest of

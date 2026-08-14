@@ -3118,6 +3118,58 @@ app.get('/api/accounting/pnl', requireRole(...ACCOUNTING_ROLES), (req, res) => {
   // Guard against counting the settlements twice: for HQ they are already the revenue line.
   const totalCosts = +(totalExpenses + ibCost).toFixed(2);
   const totalIncome = +(revenue.billed + (hqBooks ? 0 : ibIncome)).toFixed(2);
+
+  // ---- drill-down ----
+  // The records behind one line of the statement, built from the same filtered lists that
+  // produced the figure above it, so the detail can never disagree with the total.
+  if (req.query.breakdown) {
+    const line = String(req.query.breakdown);
+    const money = (amount, from) => {
+      const c = inReportCcy(amount, from);
+      return { original: +amount, original_currency: from || reportCcy, amount: c.converted ? c.amount : null };
+    };
+    let rows = [];
+    let label = '';
+    if (line === 'revenue' && hqBooks) {
+      label = 'Settlements issued';
+      rows = ibOut.map(i => ({
+        ref: i.invoice_number, who: BRANCH.BRANCH_LABELS[i.to_branch] || i.to_branch,
+        when: i.issued_at || i.created_at, status: i.status, href: '#/accounting/interbranch',
+        ...money(i.total, i.currency || 'PHP')
+      }));
+    } else if (line === 'revenue') {
+      label = 'Revenue billed to customers';
+      const senderOf = (sh) => (d.customers.find(c => c.id === sh.sender_id) || {}).full_name || '';
+      rows = shipmentsIn.filter(sh => feeOf(sh) > 0).map(sh => ({
+        ref: sh.shipment_number, who: senderOf(sh), when: sh.created_at,
+        status: sh.payment_status, href: '#/shipments/' + sh.id,
+        ...money(feeOf(sh), sh.currency || reportCcy)
+      }));
+    } else if (line === 'expenses') {
+      label = 'Costs';
+      rows = expenses.map(e => ({
+        ref: e.category.replace(/_/g, ' '), who: e.description, when: e.spent_at,
+        status: null, href: '#/accounting/expenses',
+        ...money(e.amount, e.currency)
+      }));
+    } else if (line === 'interbranch') {
+      label = 'Inter-branch charges from other branches';
+      rows = ibIn.map(i => ({
+        ref: i.invoice_number, who: BRANCH.BRANCH_LABELS[i.from_branch] || i.from_branch,
+        when: i.issued_at || i.created_at, status: i.status, href: '#/accounting/interbranch',
+        ...money(i.total, i.currency || 'PHP')
+      }));
+    } else {
+      return res.status(400).json({ error: 'Unknown line' });
+    }
+    rows.sort((a, b) => String(b.when || '').localeCompare(String(a.when || '')));
+    return res.json({
+      line, label, currency: reportCcy, rows,
+      total: +rows.reduce((n, r) => n + (r.amount || 0), 0).toFixed(2),
+      converted: rows.some(r => r.original_currency !== reportCcy)
+    });
+  }
+
   res.json({
     branch: allBooks ? 'ALL' : branch,
     // Whose books these are, so the statement can name its own revenue line correctly.
