@@ -447,9 +447,25 @@ app.get('/files/*', async (req, res) => {
 });
 
 // ---------- customers ----------
+// A branch sees its own book of customers: senders in its own country, and the Philippine
+// receivers those senders actually ship to. The list was unscoped, so Bangkok could read
+// every consignee Phnom Penh had ever delivered to — another branch's customer base.
+function scopeCustomerList(req, customers) {
+  const scope = effectiveScope(req);
+  if (!scope) return customers;
+  const d = db.get();
+  const mine = new Set(d.shipments.filter(s => s.origin_country === scope).map(s => s.id));
+  const receivers = new Set(d.boxes.filter(b => mine.has(b.shipment_id)).map(b => b.receiver_id));
+  const senders = new Set(d.shipments.filter(s => mine.has(s.id)).map(s => s.sender_id));
+  return customers.filter(c =>
+    c.country === scope ||          // a sender in this branch's country
+    senders.has(c.id) ||            // named as sender on one of its shipments
+    receivers.has(c.id));           // a consignee it has actually shipped to
+}
+
 app.get('/api/customers', requireAuth, (req, res) => {
   const d = db.get();
-  let list = d.customers.slice();
+  let list = scopeCustomerList(req, d.customers.slice());
   const q = String(req.query.q || '').toLowerCase();
   if (q) list = list.filter(c => [c.full_name, c.phone_primary, c.phone_alternate, c.city_municipality].some(v => v && String(v).toLowerCase().includes(q)));
   if (req.query.type) list = list.filter(c => c.type === req.query.type || c.type === 'BOTH');
@@ -459,9 +475,15 @@ app.get('/api/customers/:id', requireAuth, (req, res) => {
   const d = db.get();
   const c = d.customers.find(x => x.id === +req.params.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
-  const asSenderShipments = d.shipments.filter(s => s.sender_id === c.id);
-  const asReceiverBoxes = d.boxes.filter(b => b.receiver_id === c.id).map(boxRow);
-  const sentBoxes = d.boxes.filter(b => asSenderShipments.some(s => s.id === b.shipment_id)).map(boxRow);
+  // Same rule as the list, or the record could still be opened by id. 404, not 403 — a
+  // branch has no business learning that another branch's customer exists.
+  if (!scopeCustomerList(req, [c]).length) return res.status(404).json({ error: 'Not found' });
+  // The history shown is this branch's dealings with them, not every branch's. A consignee
+  // who receives from both origins must not expose one branch's traffic to the other.
+  const asSenderShipments = scopeShipmentList(req.user, d.shipments.filter(s => s.sender_id === c.id), effectiveScope(req));
+  const visibleBoxes = scopeBoxList(req.user, d.boxes, effectiveScope(req));
+  const asReceiverBoxes = visibleBoxes.filter(b => b.receiver_id === c.id).map(boxRow);
+  const sentBoxes = visibleBoxes.filter(b => asSenderShipments.some(s => s.id === b.shipment_id)).map(boxRow);
   res.json({ ...c, shipments: asSenderShipments, sent_boxes: sentBoxes, received_boxes: asReceiverBoxes });
 });
 app.post('/api/customers', requireRole(...AGENTS), (req, res) => {
@@ -1319,10 +1341,19 @@ app.post('/api/containers/:id/load', requireRole(...ADMINS, ...ROLE.BRANCH_ADMIN
   const box = d.boxes.find(b => b.id === +req.body.box_id);
   if (!box) return res.status(404).json({ error: 'Box not found' });
   if (box.container_id && box.container_id !== c.id) return res.status(400).json({ error: 'Box is already on another container' });
-  // A branch loads only its own boxes into its own containers.
+  // A container is stuffed at one origin warehouse, so it can only hold boxes received at
+  // that origin. This is physical, not a permission: it held only for branch staff before,
+  // which let an HQ admin put Phnom Penh boxes on a container sailing from Bangkok.
+  const shipment = d.shipments.find(s => s.id === box.shipment_id) || {};
+  const containerCountry = REF.countryForOriginPort(c.origin_port);
+  if (containerCountry && shipment.origin_country && shipment.origin_country !== containerCountry) {
+    return res.status(400).json({
+      error: `${box.box_number} was received in ${shipment.origin_country}, but ${c.container_number} sails from ${containerCountry}. A container can only carry boxes from its own origin.`
+    });
+  }
+  // And a branch only ever works its own containers.
   const scope = branchScope(req.user);
   if (scope) {
-    const shipment = d.shipments.find(s => s.id === box.shipment_id) || {};
     if (shipment.origin_country !== scope) {
       return res.status(403).json({ error: `That box is not from your branch (${scope}) — it cannot be loaded here.` });
     }
