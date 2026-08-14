@@ -885,3 +885,26 @@ body.print-6x4 .or-receipt { page: vfic6x4; }
 .amount-link:hover { background: none; color: var(--primary-dark); text-decoration-style: solid; }
 .amount-link.muted { color: var(--muted); }
 @media print { .amount-link { color: inherit; text-decoration: none; } }
+
+/* ---------- running log of scanned boxes ---------- */
+.scan-log { margin-top: 10px; text-align: left; max-height: 220px; overflow-y: auto; font-size: 13px; }
+.scan-log > div { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.scan-log .ok { color: var(--green); }
+.scan-log .bad { color: var(--red); }
+
+/* ---------- booking review summary ---------- */
+.sum-card { border-color: var(--primary); }
+.sum-block { border-top: 1px solid var(--border); padding: 10px 0; }
+.sum-block:first-of-type { border-top: 0; }
+.sum-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; color: var(--chrome); }
+.sum-row { display: flex; justify-content: space-between; gap: 14px; padding: 3px 0; font-size: 13.5px; }
+.sum-row > span { color: var(--muted); flex-shrink: 0; }
+.sum-row > b { text-align: right; word-break: break-word; }
+.sum-total { background: #fff7ed; border-radius: 8px; padding: 10px 12px; }
+
+/* a field the sender needs to fix */
+input.invalid, select.invalid, textarea.invalid {
+  border-color: var(--red);
+  outline: 2px solid rgba(185, 28, 28, .18);
+  background: #fef2f2;
+}

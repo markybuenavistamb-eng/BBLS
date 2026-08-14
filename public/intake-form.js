@@ -569,8 +569,9 @@ function renderForm() {
       </div>
       <label class="chk"><input type="checkbox" id="declare" required> <span>I agree to the declaration above *</span></label>
       <div id="submitError" class="error"></div>
+      <div id="bookingSummary" style="display:none"></div>
       <div class="row" style="gap:8px">
-        <button onclick="submitIntake()">Submit Booking</button>
+        <button onclick="submitIntake()">Review booking</button>
         <button type="button" class="secondary" onclick="openDraftPanel()">💾 Save as draft</button>
       </div>
 
@@ -626,9 +627,125 @@ function collectGoods(n) {
     .filter(g => g.qty > 0);
 }
 
+// Mark a field as wrong, so the sender can see which box to fix rather than reading a
+// sentence and scrolling for it. Cleared on the next attempt and as soon as they type.
+function markInvalid(id, why) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add('invalid');
+  if (why) el.setAttribute('title', why);
+  el.addEventListener('input', function clear() {
+    el.classList.remove('invalid');
+    el.removeAttribute('title');
+    el.removeEventListener('input', clear);
+  });
+}
+function clearInvalid() {
+  document.querySelectorAll('.invalid').forEach(el => { el.classList.remove('invalid'); el.removeAttribute('title'); });
+}
+// Fail with the field marked and the view moved to it.
+function failAt(id, message) {
+  markInvalid(id, message);
+  const el = document.getElementById(id);
+  if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); try { el.focus({ preventScroll: true }); } catch (e) {} }
+  throw new Error(message);
+}
+const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '').trim());
+
+// Whether the sender has seen and confirmed the summary. Reset whenever they go back to
+// change something, so an edit is always re-read before it is sent.
+let CONFIRMED = false;
+const BOC_AVAILMENT_LABELS = {
+  BB_1ST: 'Balikbayan Box privilege — 1st time', BB_2ND: 'Balikbayan Box privilege — 2nd time',
+  BB_3RD: 'Balikbayan Box privilege — 3rd time', DE_MINIMIS: 'De Minimis Value', NONE: 'None'
+};
+const sizeLabel = (key) => {
+  const s = (BOX_SIZES || []).find(x => x.key === key);
+  return s ? s.label : (key || '');
+};
+
+// Read the booking back in plain terms. Deliberately not a re-render of the form: it shows
+// what will actually be filed — who is sending, who receives each box, and what it costs.
+function showBookingSummary(d) {
+  const host = document.getElementById('bookingSummary');
+  if (!host) { CONFIRMED = true; return submitIntake(); }
+  const row = (label, value) => `<div class="sum-row"><span>${esc(label)}</span><b>${esc(value || '—')}</b></div>`;
+  const senderName = [val('sGiv'), val('sMid'), val('sFam'), val('sSuf')].filter(x => x && x !== 'N/A').join(' ');
+  const avail = (BOC_AVAILMENT_LABELS && BOC_AVAILMENT_LABELS[d.availment]) || d.availment;
+
+  host.innerHTML = `
+    <div class="card sum-card">
+      <h2 style="margin-top:0">Please check before you send</h2>
+      <div class="muted" style="margin-bottom:10px">
+        This is what will be filed with your booking. A wrong address or contact number is
+        hard to fix once the box is on its way, so it is worth a moment now.
+      </div>
+
+      <div class="sum-block">
+        <div class="sum-title">Sender</div>
+        ${row('Name', senderName)}
+        ${row('Contact', val('sPhone'))}
+        ${row('Email', val('sEmail') || 'none given')}
+        ${row('Address abroad', val('sAddrAbroad'))}
+        ${row('Sending from', [val('oAgent'), val('sCountry')].filter(Boolean).join(', '))}
+        ${row('Type of availment', avail)}
+      </div>
+
+      <div class="sum-block">
+        <div class="sum-title">Collection</div>
+        ${row('Method', d.collection === 'PICKUP' ? 'Pick-up' : 'Drop-off at VFIC office')}
+        ${d.pickup ? row('When', [d.pickup.date, d.pickup.time_window].filter(Boolean).join(' · ')) : ''}
+        ${d.pickup ? row('Where', d.pickup.address) : ''}
+        ${row('Service level', (SERVICE_LEVEL_LABELS && SERVICE_LEVEL_LABELS[d.serviceLevel]) || d.serviceLevel)}
+      </div>
+
+      ${d.boxes.map((b, i) => {
+        const r = b.receiver;
+        const name = [r.given_name, r.middle_name, r.family_name, r.suffix].filter(x => x && x !== 'N/A').join(' ');
+        const addr = [r.street_address, r.barangay, r.city_municipality, r.region, r.postal_code].filter(Boolean).join(', ');
+        return `<div class="sum-block">
+          <div class="sum-title">Box ${i + 1} — ${esc(sizeLabel(b.size_category))}, ${esc(b.weight_kg)} kg</div>
+          ${row('Goes to', name)}
+          ${row('Contact', r.contact_number)}
+          ${row('Email', r.email || 'none given')}
+          ${row('Address', addr)}
+          ${row('Landmark', r.landmark)}
+          ${row('Relationship', r.relationship)}
+          ${row('Declared value', peso(b.total_value_php))}
+          ${row('Contents', b.goods.map(g => g.category + ' ×' + g.qty).join(', '))}
+        </div>`;
+      }).join('')}
+
+      ${QUOTED_TOTAL != null ? `<div class="sum-block sum-total">
+        ${row('Estimated shipping', shipMoney(QUOTED_TOTAL))}
+        <div class="muted" style="font-size:12px">Confirmed by our agent when the box is received and weighed.</div>
+      </div>` : ''}
+
+      <div class="row" style="gap:8px;margin-top:14px">
+        <button onclick="confirmBooking()">Everything is correct — submit</button>
+        <button class="secondary" onclick="editBooking()">Go back and change something</button>
+      </div>
+    </div>`;
+  host.style.display = '';
+  host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function confirmBooking() {
+  CONFIRMED = true;
+  submitIntake();
+}
+function editBooking() {
+  CONFIRMED = false;
+  const host = document.getElementById('bookingSummary');
+  if (host) { host.style.display = 'none'; host.innerHTML = ''; }
+  const form = document.querySelector('.box-block') || document.body;
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function submitIntake() {
   const err = document.getElementById('submitError');
   err.textContent = '';
+  clearInvalid();
   try {
     const senderType = (document.querySelector('input[name="senderType"]:checked') || {}).value || '';
     const availment = (document.querySelector('input[name="availment"]:checked') || {}).value || '';
@@ -646,7 +763,12 @@ async function submitIntake() {
     if (isQFWA) required.push(['sPassNo', 'Passport Number'], ['sPassPlace', 'Place Issued'],
       ['sPassIssued', 'Passport Date Issued'], ['sPassExp', 'Passport Expiry Date']);
     if (BUSINESS_TYPES.includes(senderType)) required.push(['sBiz', 'Business Name']);
-    for (const [id, label] of required) if (!val(id)) throw new Error(`${label} is required.`);
+    for (const [id, label] of required) if (!val(id)) failAt(id, `${label} is required.`);
+    // A contact number is how VFIC reaches the sender about their own shipment, so it is
+    // checked for shape rather than merely for being filled in.
+    if (digits(val('sPhone')).length < 7) failAt('sPhone', 'Enter a full contact number, including the area or mobile prefix.');
+    // Email is optional, but a mistyped one is worse than a blank: it silently goes nowhere.
+    if (val('sEmail') && !looksLikeEmail(val('sEmail'))) failAt('sEmail', 'That email address does not look right — check for a missing @ or domain.');
 
     const serviceLevel = val('oLevel');
     const collection = isPickup() ? 'PICKUP' : 'DROPOFF';
@@ -664,9 +786,13 @@ async function submitIntake() {
     const boxes = boxEls.map((el, idx) => {
       const n = el.dataset.box;
       const num = idx + 1;
-      const need = (id, label) => { const v = val(id + n); if (!v) throw new Error(`Box ${num}: ${label} is required.`); return v; };
+      const need = (id, label) => { const v = val(id + n); if (!v) failAt(id + n, `Box ${num}: ${label} is required.`); return v; };
       const phone = digits(val('rPhone' + n));
-      if (!isPhMobile(phone)) throw new Error(`Box ${num}: receiver contact number must be 11 digits starting with 09 (e.g. 09171234567).`);
+      if (!phone) failAt('rPhone' + n, `Box ${num}: the receiver's contact number is required — the driver calls it on delivery.`);
+      if (!isPhMobile(phone)) failAt('rPhone' + n, `Box ${num}: receiver contact number must be 11 digits starting with 09 (e.g. 09171234567).`);
+      if (val('rEmail' + n) && !looksLikeEmail(val('rEmail' + n))) {
+        failAt('rEmail' + n, `Box ${num}: that email address does not look right — check for a missing @ or domain.`);
+      }
       const goods = collectGoods(n);
       if (!goods.length) throw new Error(`Box ${num}: please enter a quantity for at least one item.`);
       if (goods.some(g => g.category === 'Others') && !val('othersSpec' + n)) {
@@ -733,6 +859,9 @@ async function submitIntake() {
     fd.append('pickup', JSON.stringify(pickup));
     fd.append('boxes', JSON.stringify(boxes));
     fd.append('passport_file', passportInput.files[0]);
+
+    // First pass reviews; the sender confirms what they entered before any of it is sent.
+    if (!CONFIRMED) return showBookingSummary({ availment, senderType, serviceLevel, collection, pickup, boxes });
 
     const res = await fetch('/api/public/intake-requests', { method: 'POST', body: fd });
     const data = await res.json();

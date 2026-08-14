@@ -715,17 +715,19 @@ async function pageDashboard() {
       ${pnl ? `<div class="chart-card">
         <h3>Profit &amp; Loss ${pnl.branch && pnl.branch !== 'ALL' ? `<span class="muted" style="font-weight:400">· ${esc(NODE_LABELS[pnl.branch] || pnl.branch)}</span>` : ''}</h3>
         ${pnl.mixed_currency ? revenueByCurrencyHtml(pnl) : `
-        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Settlements issued' : 'Revenue billed'}</span><b>${esc(money(pnl.revenue.billed, pnl.currency))}</b></div>
+        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Settlements issued' : 'Revenue billed'}</span><b><button class="amount-link" onclick="pnlBreakdown('revenue')">${esc(money(pnl.revenue.billed, pnl.currency))}</button></b></div>
         <div class="pnl-line"><span class="muted">${pnl.books === 'HQ' ? 'Settled by branches' : 'Collected'}</span><span>${esc(money(pnl.revenue.collected, pnl.currency))}</span></div>
         <div class="pnl-line"><span class="muted">${pnl.books === 'HQ' ? 'Due from branches' : 'Receivable'}</span><span>${esc(money(pnl.revenue.receivable, pnl.currency))}</span></div>`}
         ${pnl.interbranch && pnl.interbranch.income ? `<div class="pnl-line"><span class="muted">Inter-branch income</span><span>${esc(money(pnl.interbranch.income, pnl.currency))}</span></div>` : ''}
-        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Local PH expenses' : 'Expenses'}</span><span class="neg">− ${esc(money(pnl.expenses.total, pnl.currency))}</span></div>
-        ${pnl.interbranch && pnl.interbranch.cost ? `<div class="pnl-line"><span class="muted">Inter-branch charges</span><span class="neg">− ${esc(money(pnl.interbranch.cost, pnl.currency))}</span></div>` : ''}
+        <div class="pnl-line"><span>${pnl.books === 'HQ' ? 'Local PH expenses' : 'Expenses'}</span><span class="neg">− <button class="amount-link" onclick="pnlBreakdown('expenses')">${esc(money(pnl.expenses.total, pnl.currency))}</button></span></div>
+        ${pnl.interbranch && pnl.interbranch.cost ? `<div class="pnl-line"><span class="muted">Inter-branch charges</span><span class="neg">− <button class="amount-link" onclick="pnlBreakdown('interbranch')">${esc(money(pnl.interbranch.cost, pnl.currency))}</button></span></div>` : ''}
         <div class="pnl-line total"><span>Net profit</span>
           <span class="${pnl.net_profit >= 0 ? 'pos' : 'neg'}">${esc(money(pnl.net_profit, pnl.currency))}</span></div>
         <div style="margin-top:8px"><a href="#/accounting/pnl">Full profit &amp; loss →</a></div>
+        <div class="muted" style="font-size:11.5px;margin-top:4px">Click a figure to see what makes it up.</div>
       </div>` : ''}
-    </div>`;
+    </div>
+    <div id="pnlDrill"></div>`;
 
   view(`
     <h1>${VI.t('dash.title')}</h1>
@@ -2250,6 +2252,19 @@ async function pageOriginWarehouse(size, util) {
     <h2>Master list (${wh.totals.count})</h2>
     ${wh.by_size.length ? `<div class="card"><b>By size:</b> ${wh.by_size.map(s => `${s.count}× ${esc(s.label)} <span class="muted">(${s.cbm} cbm, ${s.weight_kg} kg)</span>`).join(' · ')}</div>` : ''}
     ${canIntake() ? `<div class="card">
+      <h2 style="margin-top:0">Scan as you work</h2>
+      <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+        Scan a box label to act on it. Receiving marks it in at this warehouse; stuffing puts
+        it on the container chosen below. Each scan is applied as it is read, so a pallet can
+        be worked without stopping.
+      </div>
+      <div class="seg-toggle" id="owScanMode">
+        <button type="button" class="seg on" data-mode="receive" onclick="setOwScanMode('receive')">Receive at origin</button>
+        <button type="button" class="seg" data-mode="load" onclick="setOwScanMode('load')">Stuff into container</button>
+      </div>
+      ${scannerHtml('Scan a box label, or type its number')}
+    </div>
+    <div class="card">
       <div class="row" style="gap:8px;align-items:flex-end">
         <div style="max-width:340px">
           <label style="margin:0">Stuff into container</label>
@@ -2284,9 +2299,31 @@ async function pageOriginWarehouse(size, util) {
       }).join('') || `<tr><td colspan="${canIntake() ? 9 : 8}" class="muted">No boxes waiting at the origin warehouse</td></tr>`}
       </table>
     </div>`);
+  if (canIntake()) setOwScanMode(OW_SCAN_MODE);
 }
 
 /* ---------- warehouse scan hub ---------- */
+// Which action a scan performs at the Philippine warehouse.
+let PH_SCAN_MODE = 'sort';
+function setPhScanMode(mode) {
+  PH_SCAN_MODE = mode === 'receive' ? 'receive' : 'sort';
+  document.querySelectorAll('#phScanMode .seg').forEach(b => b.classList.toggle('on', b.dataset.mode === PH_SCAN_MODE));
+  if (PH_SCAN_MODE === 'receive') {
+    scanRunner('', async (box) => {
+      if (box.status === 'RECEIVED_WAREHOUSE') return box.box_number + ' was already received';
+      await api('/api/boxes/' + box.id + '/status', { method: 'POST', body: { status: 'RECEIVED_WAREHOUSE', note: 'Received at PH warehouse (scanned)' } });
+      return box.box_number + ' received at PH warehouse';
+    });
+  } else {
+    scanRunner('', async (box) => {
+      const lane = (document.getElementById('laneRegion') || {}).value;
+      const region = lane || (box.receiver ? box.receiver.region : null);
+      const r = await api('/api/boxes/' + box.id + '/status', { method: 'POST', body: { status: 'SORTED', region } });
+      return r.box_number + ' sorted → ' + (REGION_LABELS[r.region] || r.region || 'no region');
+    });
+  }
+}
+
 async function pageWarehouse() {
   const containers = await api('/api/containers');
   const toStrip = containers.filter(c => ['ARRIVED', 'AT_CUSTOMS', 'RELEASED'].includes(c.status));
@@ -2299,22 +2336,22 @@ async function pageWarehouse() {
         : '<span class="muted">No containers awaiting stripping. Mark a container arrived first.</span>'}
     </div>
     <div class="card">
-      <h2 style="margin-top:0">2 · Segregate by region</h2>
-      <div class="muted">Scan any received box — its destination region is prefilled from the receiver's address. Or pick a region lane first for bulk sorting.</div>
+      <h2 style="margin-top:0">2 · Scan as you work</h2>
+      <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+        Receiving books a box in off a stripped container. Segregating sends it to a region
+        lane — prefilled from the receiver's address unless a lane is forced below.
+      </div>
+      <div class="seg-toggle" id="phScanMode">
+        <button type="button" class="seg" data-mode="receive" onclick="setPhScanMode('receive')">Receive at PH warehouse</button>
+        <button type="button" class="seg on" data-mode="sort" onclick="setPhScanMode('sort')">Segregate by region</button>
+      </div>
       <label>Region lane (optional — forces every scan into this lane)</label>
       <select id="laneRegion" style="max-width:280px"><option value="">Auto (use receiver's region)</option>
         ${regionOptions()}</select>
     </div>
-    ${scannerHtml('Scan a box to mark it Sorted into its region lane')}
+    ${scannerHtml('Scan a box label, or type its number')}
     <div class="card" id="sortPick">Loading…</div>`);
-  setScanHandler(async code => {
-    const box = await lookupBox(code);
-    const lane = document.getElementById('laneRegion').value;
-    const region = lane || (box.receiver ? box.receiver.region : null);
-    const r = await api(`/api/boxes/${box.id}/status`, { method: 'POST', body: { status: 'SORTED', region } });
-    scanFeedback(`<div class="scan-last"><div class="big">✓ ${esc(r.box_number)}</div>
-      <div class="scan-count">${esc(REGION_LABELS[r.region] || r.region)}</div><div class="muted">sorted into lane</div></div>`);
-  });
+  setPhScanMode(PH_SCAN_MODE);
   const pending = await api('/api/boxes?status=RECEIVED_WAREHOUSE');
   document.getElementById('sortPick').innerHTML = `
     <b>Received at warehouse, awaiting sorting (${pending.length}):</b>
@@ -3646,6 +3683,55 @@ async function toggleUser(id, active) {
 }
 
 /* ---------- generic scan ---------- */
+// Scan a run of boxes and apply the same action to each. `act` gets the looked-up box and
+// returns a short line describing what happened; anything it throws is shown against that
+// box and the run carries on, because one bad label should not stop a pallet.
+function scanRunner(hint, act) {
+  const log = [];
+  setScanHandler(async code => {
+    const out = document.getElementById('scanResult');
+    let line;
+    try {
+      const box = await lookupBox(code);
+      line = { ok: true, text: await act(box) };
+    } catch (e) {
+      line = { ok: false, text: (code || '').slice(0, 40) + ' — ' + e.message };
+    }
+    log.unshift(line);
+    if (out) {
+      out.innerHTML = `<div class="scan-log">${log.slice(0, 12).map(l =>
+        `<div class="${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${esc(l.text)}</div>`).join('')}</div>`;
+    }
+    const inp = document.getElementById('manualCode');
+    if (inp) { inp.value = ''; inp.focus(); }
+  });
+  return hint;
+}
+
+// Which action a scan performs at the origin warehouse.
+let OW_SCAN_MODE = 'receive';
+function setOwScanMode(mode) {
+  OW_SCAN_MODE = mode === 'load' ? 'load' : 'receive';
+  document.querySelectorAll('#owScanMode .seg').forEach(b => b.classList.toggle('on', b.dataset.mode === OW_SCAN_MODE));
+  if (OW_SCAN_MODE === 'receive') {
+    scanRunner('', async (box) => {
+      // Scanning a box that is already booked in is not an error worth alarming anyone with —
+      // it happens constantly when a pallet is re-checked. Say so and move on.
+      if (box.status === 'RECEIVED_ORIGIN') return box.box_number + ' was already received';
+      await api('/api/boxes/' + box.id + '/status', { method: 'POST', body: { status: 'RECEIVED_ORIGIN', note: 'Received at origin warehouse (scanned)' } });
+      return box.box_number + ' received at origin';
+    });
+  } else {
+    scanRunner('', async (box) => {
+      const pick = document.getElementById('owContainer');
+      if (!pick || !pick.value) throw new Error('pick a container first');
+      await api('/api/containers/' + pick.value + '/load', { method: 'POST', body: { box_id: box.id } });
+      const opt = pick.options[pick.selectedIndex];
+      return box.box_number + ' → ' + (opt ? opt.text.split(' · ')[0] : 'container');
+    });
+  }
+}
+
 async function pageScan() {
   view(`<h1>Find a box</h1>${scannerHtml('Scan any box QR label or type its number to open it')}`);
   setScanHandler(async code => {
