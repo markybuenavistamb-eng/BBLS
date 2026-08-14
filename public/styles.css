@@ -908,3 +908,27 @@ input.invalid, select.invalid, textarea.invalid {
   outline: 2px solid rgba(185, 28, 28, .18);
   background: #fef2f2;
 }
+
+/* ---------- table filter + sort toolbar ---------- */
+/* Sticks to the left edge so it stays put when a wide table is scrolled sideways. */
+.tbl-tools {
+  position: sticky; left: 0;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 0 0 10px;
+}
+.tbl-tools .tbl-filter {
+  max-width: 260px; margin: 0; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+}
+.tbl-tools .tbl-lbl { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.tbl-tools .tbl-sort { max-width: 190px; margin: 0; padding: 7px 10px; border-radius: 8px; font-size: 13px; }
+.tbl-tools .tbl-dir { min-width: 34px; padding: 6px 10px; font-size: 14px; line-height: 1; }
+.tbl-tools .tbl-dir[disabled] { opacity: .4; cursor: default; }
+.tbl-tools .tbl-count { font-size: 12px; }
+
+/* Headings become the quick way to sort, so they need to look clickable. */
+th.sortable { cursor: pointer; user-select: none; position: relative; }
+th.sortable:hover { background: #e2e2e6; }
+th.sorted { color: var(--primary); }
+th.sorted::after { content: ' ↑'; font-size: 11px; }
+th.sorted[data-dir="desc"]::after { content: ' ↓'; }

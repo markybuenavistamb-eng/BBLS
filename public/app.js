@@ -162,7 +162,194 @@ function backBar() {
   if (hash.startsWith('#/dashboard') || hash === '#/' || hash === '') return '';
   return `<div class="back-bar no-print"><button class="secondary small" onclick="goBack()">← ${esc(VI.t('nav.back'))}</button></div>`;
 }
-function view(html) { stopScanner(); document.getElementById('view2').innerHTML = backBar() + branchBanner() + html; }
+function view(html) {
+  stopScanner();
+  document.getElementById('view2').innerHTML = backBar() + branchBanner() + html;
+  watchTables();
+  enhanceTables(document.getElementById('view2'));
+}
+/* ---------- filter + sort, added to every list table ---------- */
+// Sorting reads the rendered cell, so it has to work out what a column actually holds. A
+// column of "PHP 1,234.56" sorts as money, "Aug 12, 2026" as a date, and "TH-2026-000001"
+// as text — that last one matters, because stripping its letters leaves something that
+// looks numeric but is not a number.
+const DATEISH = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i;
+const ISOISH = /^\d{4}-\d{2}-\d{2}/;
+
+function cellText(td) { return (td ? td.textContent : '').replace(/\s+/g, ' ').trim(); }
+
+function asNumber(text) {
+  if (!text || text === '—') return NaN;
+  // Normalise the typographic minus used in the P&L before anything else.
+  const t = text.replace(/[\u2212\u2013]/g, '-').replace(/[A-Za-z\s,]/g, '');
+  if (!/^-?\d*\.?\d+$/.test(t)) return NaN;
+  return Number(t);
+}
+function asDate(text) {
+  if (!text || text === '—') return NaN;
+  if (!DATEISH.test(text) && !ISOISH.test(text) && !/^\d{1,2}\/\d{1,2}\//.test(text)) return NaN;
+  const v = Date.parse(text);
+  return Number.isNaN(v) ? NaN : v;
+}
+const MONEYISH = /^[\u2212-]?\s*([A-Z]{3})\s*[\u2212-]?[\d,]/;
+function currencyOf(text) { const m = MONEYISH.exec(text || ''); return m ? m[1] : null; }
+
+// Decide a column's type from the values actually in it, not from its heading.
+function columnType(rows, idx) {
+  let num = 0, date = 0, money = 0, seen = 0;
+  const codes = new Set();
+  for (const r of rows) {
+    const t = cellText(r.cells[idx]);
+    if (!t || t === '—') continue;
+    seen += 1;
+    const ccy = currencyOf(t);
+    if (ccy && !Number.isNaN(asNumber(t))) { money += 1; codes.add(ccy); }
+    if (!Number.isNaN(asNumber(t))) num += 1;
+    else if (!Number.isNaN(asDate(t))) date += 1;
+  }
+  if (!seen) return 'text';
+  // Only worth treating as money when more than one currency is actually present —
+  // a single-currency column sorts identically either way.
+  if (money / seen >= 0.6 && codes.size > 1) return 'money';
+  if (num / seen >= 0.6) return 'number';
+  if (date / seen >= 0.6) return 'date';
+  return 'text';
+}
+function sortValue(row, idx, type) {
+  const t = cellText(row.cells[idx]);
+  if (type === 'money') {
+    const n = asNumber(t), ccy = currencyOf(t);
+    return (Number.isNaN(n) || !ccy) ? null : [ccy, n];
+  }
+  if (type === 'number') { const n = asNumber(t); return Number.isNaN(n) ? null : n; }
+  if (type === 'date') { const d = asDate(t); return Number.isNaN(d) ? null : d; }
+  return t ? t.toLowerCase() : null;
+}
+// Money sorts on a pair, everything else on a scalar.
+function cmpValues(a, b) {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i] < b[i]) return -1;
+      if (a[i] > b[i]) return 1;
+    }
+    return 0;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function enhanceTables(root) {
+  (root || document).querySelectorAll('.table-scroll table').forEach(table => {
+    if (table.dataset.tools) return;                       // already wired
+    if (table.closest('.receipt, .boc-page, .no-tools')) return;   // printed documents keep their shape
+    if (table.classList.contains('rc-table')) return;
+
+    const all = Array.from(table.rows);
+    const head = all.find(r => r.querySelector('th'));
+    if (!head) return;
+    const heads = Array.from(head.cells);
+    // Rows spanning the table are placeholders ("No shipments"), not data.
+    const body = all.filter(r => r !== head && !r.querySelector('[colspan]'));
+    const filler = all.filter(r => r !== head && r.querySelector('[colspan]'));
+    if (heads.length < 3 || body.length < 3) return;
+    table.dataset.tools = '1';
+
+    body.forEach((r, i) => { r.dataset.i = i; });
+    const types = heads.map((_, i) => columnType(body, i));
+
+    const tools = document.createElement('div');
+    tools.className = 'tbl-tools no-print';
+    tools.innerHTML = `
+      <input class="tbl-filter" type="search" placeholder="Filter ${body.length} rows…" aria-label="Filter rows">
+      <label class="tbl-lbl">Sort by</label>
+      <select class="tbl-sort" aria-label="Sort by">
+        <option value="">As listed</option>
+        ${heads.map((th, i) => `<option value="${i}">${esc(cellText(th))}</option>`).join('')}
+      </select>
+      <button type="button" class="tbl-dir secondary small" title="Ascending / descending">↑</button>
+      <span class="tbl-count muted"></span>
+      <button type="button" class="tbl-clear small secondary" hidden>Clear</button>`;
+    table.parentElement.insertBefore(tools, table);
+
+    const $ = (sel) => tools.querySelector(sel);
+    const state = { col: '', dir: 1 };
+
+    function apply() {
+      const terms = $('.tbl-filter').value.toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      for (const r of body) {
+        const hay = r.textContent.toLowerCase();
+        const ok = terms.every(t => hay.includes(t));
+        r.style.display = ok ? '' : 'none';
+        if (ok) shown += 1;
+      }
+      // The placeholder row belongs to an empty table, not to a filtered-out one.
+      for (const r of filler) r.style.display = terms.length ? 'none' : '';
+
+      const ordered = body.slice();
+      if (state.col !== '') {
+        const idx = Number(state.col), type = types[idx];
+        ordered.sort((a, b) => {
+          const va = sortValue(a, idx, type), vb = sortValue(b, idx, type);
+          // Blanks sort last whichever way the column is pointing.
+          if (va === null && vb === null) return Number(a.dataset.i) - Number(b.dataset.i);
+          if (va === null) return 1;
+          if (vb === null) return -1;
+          const c = cmpValues(va, vb);
+          if (c) return c * state.dir;
+          return Number(a.dataset.i) - Number(b.dataset.i);   // stable
+        });
+      } else {
+        ordered.sort((a, b) => Number(a.dataset.i) - Number(b.dataset.i));
+      }
+      const parent = body[0].parentElement;
+      for (const r of ordered) parent.appendChild(r);
+      for (const r of filler) parent.appendChild(r);
+
+      const active = terms.length || state.col !== '';
+      $('.tbl-count').textContent = terms.length ? `showing ${shown} of ${body.length}` : '';
+      $('.tbl-clear').hidden = !active;
+      $('.tbl-dir').textContent = state.dir === 1 ? '↑' : '↓';
+      $('.tbl-dir').disabled = state.col === '';
+      heads.forEach((th, i) => {
+        th.classList.toggle('sorted', String(i) === String(state.col));
+        th.dataset.dir = String(i) === String(state.col) ? (state.dir === 1 ? 'asc' : 'desc') : '';
+      });
+    }
+
+    $('.tbl-filter').addEventListener('input', apply);
+    $('.tbl-sort').addEventListener('change', e => { state.col = e.target.value; apply(); });
+    $('.tbl-dir').addEventListener('click', () => { state.dir = -state.dir; apply(); });
+    $('.tbl-clear').addEventListener('click', () => {
+      $('.tbl-filter').value = ''; $('.tbl-sort').value = ''; state.col = ''; state.dir = 1; apply();
+    });
+    // Clicking a heading is the quicker way in: first click sorts, next click reverses.
+    heads.forEach((th, i) => {
+      th.classList.add('sortable');
+      th.addEventListener('click', () => {
+        if (String(state.col) === String(i)) state.dir = -state.dir;
+        else { state.col = String(i); state.dir = 1; }
+        $('.tbl-sort').value = state.col;
+        apply();
+      });
+    });
+    apply();
+  });
+}
+
+// Tables also arrive after the initial render — a P&L drill-down, a reloaded sort list — so
+// watch the view rather than relying on every caller to remember. The data-tools flag makes
+// re-running cheap and stops the observer from reacting to its own toolbars.
+let tblTimer = null;
+function watchTables() {
+  const host = document.getElementById('view2');
+  if (!host || host.dataset.watching) return;
+  host.dataset.watching = '1';
+  new MutationObserver(() => {
+    clearTimeout(tblTimer);
+    tblTimer = setTimeout(() => enhanceTables(host), 40);
+  }).observe(host, { childList: true, subtree: true });
+}
+
 function flash(msg, cls = 'success') {
   const el = document.createElement('div');
   el.className = cls;
