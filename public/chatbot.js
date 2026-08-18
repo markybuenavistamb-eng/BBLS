@@ -1,4 +1,4 @@
-/* VFIC landing-page assistant — "Kuya Vic".
+/* VFIC landing-page assistant — "Ate Vicky".
  *
  * A rule-based helper, not a language model: every answer is either fixed copy written here
  * or a figure read from the live rate card, so it can run with no API key and can never
@@ -29,8 +29,8 @@
   /* ---------- the replies ---------- */
 
   const GREET = [
-    'Kumusta po! 👋 Ako si <b>Kuya Vic</b> ng Victors Freight. Tanong lang po kayo tungkol sa balikbayan box — presyo, laki, o kung nasaan na ang padala ninyo.',
-    'Hello po! Ako si <b>Kuya Vic</b>. Ano pong maitutulong ko sa padala ninyo ngayon?'
+    'Kumusta po! 👋 Ako si <b>Ate Vicky</b> ng Victors Freight. Tanong lang po kayo tungkol sa balikbayan box — presyo, laki, o kung nasaan na ang padala ninyo.',
+    'Hello po! Ako si <b>Ate Vicky</b>. Ano pong maitutulong ko sa padala ninyo ngayon?'
   ];
 
   const CHIPS = [
@@ -226,14 +226,14 @@
   function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; }
 
   function mount() {
-    const fab = el(`<button class="bot-fab" type="button" aria-label="Chat with Kuya Vic">
-      <span class="bot-fab-ico">💬</span><span class="bot-fab-txt">Tanong?</span></button>`);
+    const fab = el(`<button class="bot-fab" type="button" aria-label="Chat with Ate Vicky">
+      <img class="bot-fab-ava" src="/ate-vicky.jpg" alt="" width="34" height="34"><span class="bot-fab-txt">Tanong?</span></button>`);
     const panel = el(`
       <div class="bot-panel" hidden>
         <div class="bot-head">
-          <div class="bot-ava">🧑🏽‍✈️</div>
+          <img class="bot-ava" src="/ate-vicky.jpg" alt="Ate Vicky" width="38" height="38">
           <div>
-            <b>Kuya Vic</b>
+            <b>Ate Vicky</b>
             <div class="bot-sub">VFIC helper · sumasagot agad</div>
           </div>
           <button class="bot-x" type="button" aria-label="I-minimize" title="I-minimize">–</button>
