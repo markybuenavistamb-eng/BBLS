@@ -1148,8 +1148,8 @@ function buildAlerts(req) {
 
   // Notes from the other portals. Your own branch's messages are not news to you.
   for (const m of (d.messages || [])) {
-    if (m.from_branch === mine) continue;
-    if (!(m.to_branch === 'ALL' || m.to_branch === mine)) continue;
+    if (String(m.from_user_id) === String(req.user.id)) continue;
+    if (!chatVisible(m, mine, req.user.id)) continue;
     out.push({ key: 'msg:' + m.id, kind: 'message', icon: '💬', reference: BRANCH.BRANCH_LABELS[m.from_branch] || m.from_branch,
       who: m.from_name || '', detail: String(m.body || '').slice(0, 90),
       at: m.created_at, href: '#chat' });
@@ -1236,8 +1236,29 @@ function chatBranchOf(user) {
   const own = BRANCH.branchForRole(user.role);
   return own || 'HQ_MANILA';
 }
-function chatVisible(m, mine) {
-  return m.to_branch === 'ALL' || m.to_branch === mine || m.from_branch === mine;
+// The chat runs through head office and it runs between people. Manila talks to Thailand and
+// Manila talks to Cambodia; the two branches never talk to each other, so a Thailand user
+// never sees a Cambodia user in their list and cannot address one.
+const CHAT_HUB = 'HQ_MANILA';
+
+// Which branches a person may correspond with: their own colleagues, plus head office if they
+// are a branch, or every branch if they are head office. Never the far branch.
+function chatPeerBranches(mine) {
+  if (mine === CHAT_HUB) return [CHAT_HUB, ...BRANCH.BRANCH_KEYS.filter(k => k !== CHAT_HUB)];
+  return [mine, CHAT_HUB];
+}
+
+// A message is between two people. Older messages were addressed to a branch rather than a
+// person, so they fall back to the branch rule — and that rule is applied on reading, not
+// only on sending, because a note Thailand once sent to "everyone" would otherwise still be
+// sitting in Cambodia's panel.
+function chatVisible(m, mine, userId) {
+  if (m.to_user_id != null) {
+    return String(m.from_user_id) === String(userId) || String(m.to_user_id) === String(userId);
+  }
+  if (mine === CHAT_HUB) return true;
+  if (m.from_branch === mine) return true;
+  return m.from_branch === CHAT_HUB && (m.to_branch === mine || m.to_branch === 'ALL');
 }
 // How far each person has read. Kept per user rather than per device, so the count does not
 // reset on reload and does not follow them to a second screen already cleared.
@@ -1245,6 +1266,25 @@ function chatReadAt(d, userId) {
   d.chat_reads = d.chat_reads || {};
   return d.chat_reads[String(userId)] || '';
 }
+
+// Who this person can write to. The list is the restriction — a Thailand user is never shown
+// a Cambodia colleague, so the rule needs no explaining in the interface.
+app.get('/api/messages/contacts', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  const mine = chatBranchOf(req.user);
+  const peers = chatPeerBranches(mine);
+  const list = (d.users || [])
+    .filter(u => u.active && u.id !== req.user.id)
+    .map(u => ({ u, branch: chatBranchOf(u) }))
+    .filter(x => peers.includes(x.branch))
+    .map(({ u, branch }) => ({
+      id: u.id, name: u.name || u.email, branch,
+      branch_label: BRANCH.BRANCH_LABELS[branch] || branch,
+      role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role
+    }))
+    .sort((a, b) => (a.branch_label + a.name).localeCompare(b.branch_label + b.name));
+  res.json({ branch: mine, contacts: list });
+});
 
 app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
   const d = db.get();
@@ -1254,14 +1294,15 @@ app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
   const mine = chatBranchOf(req.user);
   const since = String(req.query.since || '');
   const visible = d.messages
-    .filter(m => chatVisible(m, mine))
+    .filter(m => chatVisible(m, mine, req.user.id))
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const list = (since ? visible.filter(m => String(m.created_at) > since) : visible).slice(-200);
 
-  // Unread is counted from the mark, and never includes what this branch said itself —
+  // Unread is counted from the mark and never includes what this person sent themselves —
   // your own message coming back from the server is not news.
   const readAt = chatReadAt(d, req.user.id);
-  const unreadList = visible.filter(m => m.from_branch !== mine && String(m.created_at) > readAt);
+  const unreadList = visible.filter(m =>
+    String(m.from_user_id) !== String(req.user.id) && String(m.created_at) > readAt);
   const byBranch = {};
   for (const m of unreadList) byBranch[m.from_branch] = (byBranch[m.from_branch] || 0) + 1;
 
@@ -1287,7 +1328,8 @@ app.post('/api/messages/read', requireRole(...ALL_STAFF), (req, res) => {
   const mine = chatBranchOf(req.user);
   const state = alertStateFor(d, req.user.id);
   for (const m of d.messages) {
-    if (m.from_branch === mine || !chatVisible(m, mine)) continue;
+    if (String(m.from_user_id) === String(req.user.id)) continue;
+    if (!chatVisible(m, mine, req.user.id)) continue;
     if (String(m.created_at) > at) continue;
     const key = 'msg:' + m.id;
     if (state[key] !== 'deleted') state[key] = 'read';
@@ -1300,14 +1342,25 @@ app.post('/api/messages', requireRole(...ALL_STAFF), (req, res) => {
   d.messages = d.messages || [];
   const body = String((req.body || {}).body || '').trim().slice(0, 2000);
   if (!body) return res.status(400).json({ error: 'Type a message first.' });
-  const to = String((req.body || {}).to_branch || 'ALL');
-  const valid = ['ALL', ...BRANCH.BRANCH_KEYS];
-  if (!valid.includes(to)) return res.status(400).json({ error: 'Unknown channel.' });
+  const mineBranch = chatBranchOf(req.user);
+  const toUserId = (req.body || {}).to_user_id;
+  const recipient = (d.users || []).find(u => String(u.id) === String(toUserId) && u.active);
+  if (!recipient) return res.status(400).json({ error: 'Choose who to send this to.' });
+  const theirBranch = chatBranchOf(recipient);
+  // Refused rather than quietly redirected, so nobody believes they reached someone they
+  // cannot reach. Thailand and Cambodia correspond through Manila.
+  if (!chatPeerBranches(mineBranch).includes(theirBranch)) {
+    return res.status(403).json({
+      error: `${BRANCH.BRANCH_LABELS[mineBranch] || mineBranch} and ${BRANCH.BRANCH_LABELS[theirBranch] || theirBranch} do not message each other directly — send it to Manila.`
+    });
+  }
+  const to = theirBranch;
   const m = {
     id: db.nextId('message'),
-    from_branch: chatBranchOf(req.user),
+    from_branch: mineBranch,
     from_user_id: req.user.id, from_name: req.user.name || req.user.email,
-    to_branch: to, body, created_at: new Date().toISOString()
+    to_branch: to, to_user_id: recipient.id, to_name: recipient.name || recipient.email,
+    body, created_at: new Date().toISOString()
   };
   d.messages.push(m);
   db.persist();

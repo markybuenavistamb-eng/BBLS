@@ -714,7 +714,8 @@ function startAlerts() {
 // entirely outside the system. Messages replicate like any other record, so a note written
 // in Bangkok reaches Manila the same way a box does — which also means it is not instant,
 // and the panel says so rather than pretending otherwise.
-let CHAT = { open: false, branch: null, msgs: [], unread: 0, byBranch: {}, firstUnreadAt: null, to: 'ALL' };
+let CHAT = { open: false, branch: null, msgs: [], unread: 0, byBranch: {}, firstUnreadAt: null,
+             to: null, contacts: [] };
 let chatTimer = null;
 let chatToastFor = null;      // which message the toast is currently announcing
 
@@ -736,7 +737,7 @@ function chatMount() {
   panel.innerHTML = `
     <div class="chat-head">
       <b>${VI.t('chat.title')}</b>
-      <select id="chatTo" class="chat-to" title="Who sees this"></select>
+      <select id="chatTo" class="chat-to" title="Who this goes to"></select>
       <button type="button" class="chat-x" onclick="toggleChat()" aria-label="Minimize" title="Minimize">–</button>
     </div>
     <div class="chat-log" id="chatLog"><div class="muted" style="padding:10px">Loading…</div></div>
@@ -747,14 +748,22 @@ function chatMount() {
   document.body.appendChild(panel);
 }
 
-function chatChannels() {
-  // Head office talks to either branch; a branch talks to head office and the whole network.
-  const opts = [['ALL', VI.t('chat.everyone')]];
-  for (const k of (window.BRANCH_KEYS || ['HQ_MANILA', 'TH_BANGKOK', 'KH_PHNOMPENH'])) {
-    if (k === CHAT.branch) continue;
-    opts.push([k, BRANCH_LABEL[k] || k]);
-  }
-  return opts;
+// The people this user may write to, grouped by branch. The list is the restriction: a
+// Thailand user is simply never offered a Cambodia colleague, so nothing has to be explained.
+async function loadContacts() {
+  try {
+    const r = await api('/api/messages/contacts');
+    CHAT.contacts = r.contacts || [];
+    if (!CHAT.to && CHAT.contacts.length) CHAT.to = CHAT.contacts[0].id;
+  } catch (e) { CHAT.contacts = []; }
+  if (CHAT.open) paintChat();
+}
+function chatRecipientOptions() {
+  const groups = {};
+  for (const c of CHAT.contacts) (groups[c.branch_label] = groups[c.branch_label] || []).push(c);
+  return Object.entries(groups).map(([label, people]) =>
+    `<optgroup label="${esc(label)}">${people.map(c =>
+      `<option value="${c.id}">${esc(c.name)} — ${esc(c.role_label)}</option>`).join('')}</optgroup>`).join('');
 }
 const BRANCH_LABEL = { HQ_MANILA: 'Manila (HQ)', TH_BANGKOK: 'Thailand', KH_PHNOMPENH: 'Cambodia' };
 
@@ -816,17 +825,25 @@ function paintChat(scrollToEnd) {
   const log = document.getElementById('chatLog');
   const sel = document.getElementById('chatTo');
   if (!log || !sel) return;
-  if (!sel.options.length) {
-    sel.innerHTML = chatChannels().map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
-    sel.value = CHAT.to;
+  // Rebuild when the people change, not merely when the box is empty: painting once left
+  // head office without Cambodia whenever the first paint beat the contact list back.
+  const sig = CHAT.contacts.map(c => c.id).join(',');
+  if (CHAT.contacts.length && sel.dataset.sig !== sig) {
+    const keep = sel.value;
+    sel.innerHTML = chatRecipientOptions();
+    sel.dataset.sig = sig;
+    if (keep && sel.querySelector('option[value="' + keep + '"]')) sel.value = keep;
+    else if (CHAT.to) sel.value = String(CHAT.to);
+    CHAT.to = sel.value;
     sel.onchange = () => { CHAT.to = sel.value; };
   }
+  if (!CHAT.contacts.length) { sel.innerHTML = '<option value="">No one to message</option>'; delete sel.dataset.sig; }
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
   const mark = CHAT.firstUnreadAt;
   let drewDivider = false;
   log.innerHTML = CHAT.msgs.length ? CHAT.msgs.map(m => {
-    const mine = m.from_branch === CHAT.branch;
-    const to = m.to_branch === 'ALL' ? VI.t('chat.everyone') : (BRANCH_LABEL[m.to_branch] || m.to_branch);
+    const mine = String(m.from_user_id) === String(ME && ME.id);
+    const to = m.to_name || (m.to_branch === 'ALL' ? VI.t('chat.everyone') : (BRANCH_LABEL[m.to_branch] || m.to_branch));
     // One line showing where they stopped reading, drawn before the first unread message.
     let divider = '';
     if (mark && !drewDivider && !mine && String(m.created_at) >= String(mark)) {
@@ -849,7 +866,7 @@ function toggleChat() {
   panel.hidden = !CHAT.open;
   if (CHAT.open) {
     document.querySelectorAll('.chat-toast').forEach(t => t.remove());
-    loadChat(true);
+    loadContacts().then(() => { paintChat(true); loadChat(true); });
     const i = document.getElementById('chatInput');
     if (i) i.focus();
   }
@@ -862,7 +879,7 @@ async function sendChat(ev) {
   if (!body) return false;
   input.value = '';
   try {
-    await api('/api/messages', { method: 'POST', body: { body, to_branch: CHAT.to } });
+    await api('/api/messages', { method: 'POST', body: { body, to_user_id: CHAT.to } });
     await loadChat(true);
   } catch (e) { showErr(e); input.value = body; }
   return false;
@@ -871,6 +888,7 @@ async function sendChat(ev) {
 function startChat() {
   chatMount();
   if (chatTimer) return;
+  loadContacts();
   loadChat();
   // Cheap while shut (just the unread badge), livelier once someone is actually reading.
   chatTimer = setInterval(() => loadChat(), 12000);
