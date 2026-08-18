@@ -525,8 +525,27 @@ function loginAccepted() {
 async function logout() {
   await api('/api/logout', { method: 'POST' });
   ME = null;
+  teardownSignedIn();
   location.hash = '';
   renderLogin();
+}
+
+// The chat button, its panel and the alert poller are built once when the shell appears and
+// were never taken down again, so they sat on top of the login screen after signing out —
+// still polling, still holding the last person's conversations. Signing out has to undo
+// everything signing in put on the page.
+function teardownSignedIn() {
+  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
+  if (alertTimer) { clearInterval(alertTimer); alertTimer = null; }
+  ['chatFab', 'chatPanel'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+  document.querySelectorAll('.chat-toast').forEach(t => t.remove());
+  const mount = document.getElementById('alertMount');
+  if (mount) mount.innerHTML = '';
+  CHAT = { open: false, branch: null, me: null, view: 'list', peer: null, peerName: '',
+           peerReadonly: false, threads: [], msgs: [], unread: 0, firstUnreadAt: null, contacts: [] };
+  ALERTS = { total: 0, items: [], by_kind: {}, read_count: 0 };
+  chatToastFor = null;
+  alertMenuFor = null;
 }
 function toggleNav(open) {
   document.getElementById('shell').classList.toggle('nav-open', open);

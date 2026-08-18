@@ -72,7 +72,13 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
+  if (!res.ok) {
+    // Carry the rest of the payload on the error: a refusal can be an instruction, such as
+    // an unfinished sign-up that needs its code rather than a different password.
+    const err = new Error(data.error || 'Something went wrong');
+    Object.assign(err, data);
+    throw err;
+  }
   return data;
 }
 function flash(msg, cls = 'success') {
@@ -139,13 +145,17 @@ async function doSignup() {
   const err = gid('acErr'); err.textContent = '';
   try {
     const heard = val('acHeard') === 'Other' ? (val('acHeardOther') || 'Other') : val('acHeard');
-    ME = await api('/api/public/sender/signup', { method: 'POST', body: {
+    const r = await api('/api/public/sender/signup', { method: 'POST', body: {
       given_name: val('acGiven'), surname: val('acSurname'),
       name: [val('acGiven'), val('acSurname')].filter(Boolean).join(' '),
       heard_about_us: heard,
       phone: val('acPhone'), country: val('acCountry'),
       email: val('acEmail'), password: gid('acPass').value
     } });
+    // Either the account is open, or a code is waiting to be typed back.
+    if (r && r.status === 'verify_required') return renderVerify(r.email, r.sent_to);
+    ME = r;
+    await accountAccepted();
     renderAccount();
   } catch (e) { err.textContent = e.message; }
 }
@@ -153,8 +163,81 @@ async function doSignin() {
   const err = gid('acErr'); err.textContent = '';
   try {
     ME = await api('/api/public/sender/signin', { method: 'POST', body: { email: val('acEmail'), password: gid('acPass').value } });
+    await accountAccepted();
+    renderAccount();
+  } catch (e) {
+    // A correct password on an unfinished sign-up is not a failure — it is the code screen.
+    if (e.status === 'verify_required') return renderVerify(e.email || val('acEmail'), e.sent_to);
+    err.textContent = e.message;
+  }
+}
+
+// The same confirmation the staff portal gives: the one moment someone is unsure whether
+// they typed their password right deserves an answer before the screen changes.
+function accountAccepted() {
+  return new Promise(resolve => {
+    const host = document.querySelector('#app .card') || gid('app');
+    if (!host) return resolve();
+    const first = ME && ME.name ? String(ME.name).split(' ')[0] : '';
+    const ok = document.createElement('div');
+    ok.className = 'login-ok';
+    ok.innerHTML = [
+      '<div class="login-ok-ring"><svg viewBox="0 0 52 52" aria-hidden="true">',
+      '<circle class="lo-circle" cx="26" cy="26" r="23"/>',
+      '<path class="lo-check" d="M15 27 l7.5 7.5 l14.5 -16"/>',
+      '</svg></div>',
+      '<div class="login-ok-text">Welcome back' + (first ? ', ' + esc(first) : '') + '</div>'
+    ].join('');
+    host.style.position = 'relative';
+    host.appendChild(ok);
+    setTimeout(resolve, 1150);
+  });
+}
+
+/* ---------- sign-up verification ---------- */
+// A new account claims a phone number. Until a code sent to it comes back, that is only a
+// claim — and a courier that texts people about their boxes needs the number to be real.
+let VERIFY_EMAIL = null;
+
+function renderVerify(email, sentTo) {
+  VERIFY_EMAIL = email;
+  gid('app').innerHTML = `
+    <div style="text-align:center;margin:6px 0 14px">
+      <h1 style="font-size:24px;margin:0 0 4px">Confirm your number</h1>
+      <p class="muted" style="margin:0">We sent a 6-digit code${sentTo ? ' to <b>' + esc(sentTo) + '</b>' : ''}. It expires in 10 minutes.</p>
+    </div>
+    <div class="card" style="max-width:420px;margin:0 auto;text-align:center">
+      <label style="text-align:left">Verification code</label>
+      <input id="vfCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+             placeholder="••••••" style="font-size:26px;letter-spacing:10px;text-align:center">
+      <div id="vfErr" class="error"></div>
+      <button onclick="doVerify()" style="width:100%;margin-top:10px">Confirm</button>
+      <div class="muted" style="font-size:12.5px;margin-top:12px">
+        Did not get it? <a href="#" onclick="doResend();return false">Send another code</a>
+      </div>
+      <div id="vfNote" class="muted" style="font-size:12px;margin-top:6px"></div>
+    </div>`;
+  const box = gid('vfCode');
+  box.focus();
+  box.addEventListener('keydown', e => { if (e.key === 'Enter') doVerify(); });
+}
+
+async function doVerify() {
+  const err = gid('vfErr'); err.textContent = '';
+  try {
+    ME = await api('/api/public/sender/verify', { method: 'POST', body: { email: VERIFY_EMAIL, code: val('vfCode') } });
+    await accountAccepted();
     renderAccount();
   } catch (e) { err.textContent = e.message; }
+}
+
+async function doResend() {
+  const note = gid('vfNote'); const err = gid('vfErr');
+  err.textContent = ''; note.textContent = 'Sending…';
+  try {
+    const r = await api('/api/public/sender/verify/resend', { method: 'POST', body: { email: VERIFY_EMAIL } });
+    note.textContent = r.sent_to ? `A new code is on its way to ${r.sent_to}.` : 'A new code is on its way.';
+  } catch (e) { note.textContent = ''; err.textContent = e.message; }
 }
 async function doSignout() {
   await api('/api/public/sender/signout', { method: 'POST' });

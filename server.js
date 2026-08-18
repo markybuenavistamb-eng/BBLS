@@ -1295,7 +1295,9 @@ app.get('/api/messages/contacts', requireRole(...ALL_STAFF), (req, res) => {
   const mine = chatBranchOf(req.user);
   const peers = chatPeerBranches(mine);
   const list = (d.users || [])
-    .filter(u => u.active && u.id !== req.user.id)
+    // The developer account exists to maintain the system, not to take part in the day's
+    // work, so it is not offered as someone to message.
+    .filter(u => u.active && u.id !== req.user.id && ROLE.normalizeRole(u.role) !== 'DEVELOPER_ADMIN')
     .map(u => ({ u, branch: chatBranchOf(u) }))
     .filter(x => peers.includes(x.branch))
     .map(({ u, branch }) => ({
@@ -2582,6 +2584,39 @@ const senderPublic = (a) => ({
   heard_about_us: a.heard_about_us || '', created_at: a.created_at
 });
 
+// ---------- sign-up verification ----------
+// A new account claims a phone number, and until someone proves they hold it the claim is
+// only an assertion. The code is six digits, lives ten minutes, and is stored hashed — the
+// server never keeps anything it could leak and never returns the code to the caller, which
+// would make the whole exercise theatre.
+const VERIFY_TTL_MS = 10 * 60 * 1000;
+const VERIFY_MAX_ATTEMPTS = 5;
+const VERIFY_RESEND_MS = 60 * 1000;
+
+function hashCode(code, salt) {
+  return crypto.createHash('sha256').update(String(salt) + ':' + String(code)).digest('hex');
+}
+function newVerification() {
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  const salt = crypto.randomBytes(8).toString('hex');
+  return {
+    code,
+    record: { salt, code_hash: hashCode(code, salt), expires_at: new Date(Date.now() + VERIFY_TTL_MS).toISOString(),
+              attempts: 0, sent_at: new Date().toISOString(), resends: 0 }
+  };
+}
+// Enough of the number to recognise, not enough to read off a shoulder.
+function maskPhone(p) {
+  const digits = String(p || '').replace(/\D/g, '');
+  if (digits.length < 4) return '';
+  return '•••• ' + digits.slice(-4);
+}
+async function sendVerificationCode(acct, code) {
+  const msg = `VFIC: ${code} is your verification code. It expires in 10 minutes. Do not share it with anyone.`;
+  try { await notif.sendNow(acct.phone, msg); return true; }
+  catch (e) { console.warn(`Could not send the sign-up code to ${maskPhone(acct.phone)}: ${e.message}`); return false; }
+}
+
 app.post('/api/public/sender/signup', rateLimit, (req, res) => {
   const d = db.get();
   d.sender_accounts = d.sender_accounts || [];
@@ -2605,10 +2640,83 @@ app.post('/api/public/sender/signup', rateLimit, (req, res) => {
     password_hash: hashPassword(password),
     drafts: [], active: true, created_at: new Date().toISOString()
   };
+
+  // Verification is only meaningful if a message can actually reach the person. With no SMS
+  // provider configured the code would go to the server console, which proves nothing about
+  // who holds the phone — so rather than pretend, the account opens and the response says
+  // plainly that the check is inactive.
+  const canDeliver = notif.deliveryConfigured();
+  const phoneDigits = String(acct.phone || '').replace(/\D/g, '');
+  if (canDeliver && phoneDigits.length >= 7) {
+    const { code, record } = newVerification();
+    acct.verified = false;
+    acct.verification = record;
+    d.sender_accounts.push(acct);
+    db.persist();
+    sendVerificationCode(acct, code);
+    return res.status(202).json({
+      status: 'verify_required', email: acct.email,
+      sent_to: maskPhone(acct.phone), expires_in_minutes: 10
+    });
+  }
+
+  acct.verified = true;
+  acct.verification_skipped = canDeliver ? 'no usable phone number' : 'no SMS provider configured';
   d.sender_accounts.push(acct);
+  db.persist();
+  if (!canDeliver) {
+    console.warn('Sign-up verification is inactive: set SMS_PROVIDER and SEMAPHORE_API_KEY to require it.');
+  }
+  res.cookie(sess.SENDER_COOKIE_NAME, sess.senderTokenFor(acct.id), sess.cookieOptions);
+  res.json(senderPublic(acct));
+});
+
+// Check a code and open the account. Wrong codes are counted, because a six-digit secret
+// falls to guessing in seconds otherwise.
+app.post('/api/public/sender/verify', rateLimit, (req, res) => {
+  const d = db.get();
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const code = String((req.body || {}).code || '').replace(/\D/g, '');
+  const acct = (d.sender_accounts || []).find(a => a.email === email);
+  if (!acct) return res.status(400).json({ error: 'No sign-up is waiting for that email address.' });
+  if (acct.verified) return res.json({ status: 'already_verified' });
+  const v = acct.verification;
+  if (!v) return res.status(400).json({ error: 'Ask for a new code.' });
+  if (Date.now() > Date.parse(v.expires_at)) return res.status(400).json({ error: 'That code has expired — ask for a new one.' });
+  if (v.attempts >= VERIFY_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many wrong codes. Ask for a new one.' });
+  if (hashCode(code, v.salt) !== v.code_hash) {
+    v.attempts += 1;
+    db.persist();
+    const left = VERIFY_MAX_ATTEMPTS - v.attempts;
+    return res.status(400).json({ error: left > 0 ? `That code is not right — ${left} attempt(s) left.` : 'Too many wrong codes. Ask for a new one.' });
+  }
+  acct.verified = true;
+  acct.verified_at = new Date().toISOString();
+  delete acct.verification;
   db.persist();
   res.cookie(sess.SENDER_COOKIE_NAME, sess.senderTokenFor(acct.id), sess.cookieOptions);
   res.json(senderPublic(acct));
+});
+
+// A new code, not the old one again — a resend that repeats the same digits keeps a shoulder
+// -surfed code alive.
+app.post('/api/public/sender/verify/resend', rateLimit, (req, res) => {
+  const d = db.get();
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const acct = (d.sender_accounts || []).find(a => a.email === email);
+  if (!acct) return res.status(400).json({ error: 'No sign-up is waiting for that email address.' });
+  if (acct.verified) return res.json({ status: 'already_verified' });
+  const prev = acct.verification;
+  if (prev && Date.now() - Date.parse(prev.sent_at) < VERIFY_RESEND_MS) {
+    const wait = Math.ceil((VERIFY_RESEND_MS - (Date.now() - Date.parse(prev.sent_at))) / 1000);
+    return res.status(429).json({ error: `Please wait ${wait}s before asking for another code.` });
+  }
+  const { code, record } = newVerification();
+  record.resends = (prev && prev.resends ? prev.resends : 0) + 1;
+  acct.verification = record;
+  db.persist();
+  sendVerificationCode(acct, code);
+  res.json({ status: 'sent', sent_to: maskPhone(acct.phone), expires_in_minutes: 10 });
 });
 
 app.post('/api/public/sender/signin', rateLimit, (req, res) => {
@@ -2617,6 +2725,10 @@ app.post('/api/public/sender/signin', rateLimit, (req, res) => {
   const password = String((req.body || {}).password || '');
   const acct = (d.sender_accounts || []).find(a => a.email === email && a.active !== false);
   if (!acct || !verifyPassword(password, acct.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
+  // Correct password, unfinished sign-up: send them to the code rather than in.
+  if (acct.verified === false) {
+    return res.status(403).json({ error: 'Your sign-up is not finished — enter the code we sent you.', status: 'verify_required', email: acct.email, sent_to: maskPhone(acct.phone) });
+  }
   res.cookie(sess.SENDER_COOKIE_NAME, sess.senderTokenFor(acct.id), sess.cookieOptions);
   res.json(senderPublic(acct));
 });
