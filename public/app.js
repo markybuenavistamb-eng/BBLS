@@ -3086,8 +3086,14 @@ async function requeueBox(boxId, tripId, tripNo) {
 async function pageCustomers() {
   const q = hashQuery();
   const list = await api('/api/customers?q=' + encodeURIComponent(q.get('q') || ''));
+  // The export carries whatever search is showing, so the file matches the screen rather
+  // than quietly being the whole book.
+  const exportUrl = '/api/customers/export.xlsx' + (q.get('q') ? '?q=' + encodeURIComponent(q.get('q')) : '');
   view(`
-    <h1>Customers</h1>
+    <div class="row" style="justify-content:space-between">
+      <h1>Customers</h1>
+      <a href="${esc(exportUrl)}" download><button class="secondary">⬇ Export to Excel</button></a>
+    </div>
     <div class="card row">
       <input id="custQ" placeholder="Search name, phone, city…" style="max-width:300px" value="${esc(q.get('q') || '')}">
       <button class="small" onclick="location.hash='#/customers?q='+encodeURIComponent(custQ.value)">Search</button>

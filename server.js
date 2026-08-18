@@ -59,6 +59,7 @@ app.use(['/api', '/files'], async (req, res, next) => {
 // ---------- auth helpers ----------
 const ROLE = require('./lib/roles');
 const BRANCH = require('./lib/branches');
+const XLSX = require('./lib/xlsx');
 const MODULES = require('./lib/modules');
 const { ADMINS, SHIPPERS, AGENTS, PH_SIDE, ALL_STAFF, ACCOUNTING_ROLES } = {
   ADMINS: ROLE.ADMINS, SHIPPERS: ROLE.SHIPPERS, AGENTS: ROLE.AGENTS,
@@ -471,6 +472,83 @@ app.get('/api/customers', requireAuth, (req, res) => {
   if (req.query.type) list = list.filter(c => c.type === req.query.type || c.type === 'BOTH');
   res.json(list.map(customerPublic));
 });
+// ---------- customers, as a spreadsheet ----------
+// The office works its customer list in Excel — chasing a phone number, checking who a branch
+// has actually shipped to. Scoped exactly like the on-screen list, so a branch exports its own
+// customers and nobody else's: the file is easier to pass around than the screen is, which is
+// precisely why it must not carry more than the screen would.
+app.get('/api/customers/export.xlsx', requireAuth, (req, res) => {
+  const d = db.get();
+  let list = scopeCustomerList(req, d.customers.slice());
+
+  // Honour whatever the user was already looking at, so the export matches the screen.
+  const q = String(req.query.q || '').toLowerCase();
+  if (q) list = list.filter(c => [c.full_name, c.phone_primary, c.phone_alternate, c.city_municipality]
+    .some(v => v && String(v).toLowerCase().includes(q)));
+  if (req.query.type) list = list.filter(c => c.type === req.query.type || c.type === 'BOTH');
+  list.sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')));
+
+  // Their dealings with this branch only — the same shipments and boxes the user can already
+  // open. An export must not become a way around the per-record guards.
+  const scope = effectiveScope(req);
+  const shipments = scopeShipmentList(req.user, d.shipments, scope);
+  const boxes = scopeBoxList(req.user, d.boxes, scope);
+  const sentBy = new Map(), recvBy = new Map(), lastSeen = new Map();
+  const touch = (map, id, when) => {
+    if (!id) return;
+    map.set(id, (map.get(id) || 0) + 1);
+    const prev = lastSeen.get(id) || '';
+    if (when && String(when) > prev) lastSeen.set(id, String(when));
+  };
+  const shipById = new Map(shipments.map(x => [x.id, x]));
+  for (const b of boxes) {
+    const sh = shipById.get(b.shipment_id);
+    if (sh) touch(sentBy, sh.sender_id, b.status_updated_at || sh.created_at);
+    touch(recvBy, b.receiver_id, b.status_updated_at);
+  }
+
+  const TYPE_LABEL = { SENDER: 'Sender', RECEIVER: 'Receiver', BOTH: 'Sender & Receiver' };
+  const { S, N, D } = XLSX;
+  const columns = [
+    { header: 'Customer ID', width: 12 }, { header: 'Name', width: 26 },
+    { header: 'Type', width: 17 },
+    { header: 'Mobile / phone', width: 20 }, { header: 'Alternate phone', width: 20 },
+    { header: 'Email', width: 26 },
+    { header: 'Address', width: 34 }, { header: 'Barangay', width: 18 },
+    { header: 'City / Municipality', width: 20 }, { header: 'Province', width: 18 },
+    { header: 'Region', width: 16 }, { header: 'Postal code', width: 12 },
+    { header: 'Country', width: 15 }, { header: 'Landmark', width: 24 },
+    { header: 'Boxes sent', width: 11 }, { header: 'Boxes received', width: 14 },
+    { header: 'Last activity', width: 18 }, { header: 'Customer since', width: 18 },
+    { header: 'Notes', width: 34 }
+  ];
+  const rows = list.map(c => [
+    N(c.id), S(c.full_name), S(TYPE_LABEL[c.type] || c.type),
+    // Phones and postal codes stay strings on purpose: as numbers Excel drops the leading
+    // zero off "0917…" and turns "+63 917" into something else entirely.
+    S(c.phone_primary), S(c.phone_alternate), S(c.email),
+    S(c.address_line), S(c.barangay), S(c.city_municipality), S(c.province),
+    S(REGION_LABELS_EXPORT(c.region)), S(c.postal_code), S(c.country), S(c.landmark),
+    N(sentBy.get(c.id) || 0), N(recvBy.get(c.id) || 0),
+    lastSeen.get(c.id) ? D(lastSeen.get(c.id)) : S(''),
+    c.created_at ? D(c.created_at) : S(''),
+    S(c.notes)
+  ]);
+
+  const book = XLSX.build([{ name: 'Customers', columns, rows }]);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const name = `VFIC customers ${scope || 'all branches'} ${stamp}.xlsx`.replace(/[^\w .-]/g, '_');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.setHeader('Content-Length', book.length);
+  res.send(book);
+});
+// Region codes mean nothing to someone reading a spreadsheet; the label does.
+function REGION_LABELS_EXPORT(code) {
+  if (!code) return '';
+  return REGION.LABELS[code] || code;
+}
+
 app.get('/api/customers/:id', requireAuth, (req, res) => {
   const d = db.get();
   const c = d.customers.find(x => x.id === +req.params.id);
