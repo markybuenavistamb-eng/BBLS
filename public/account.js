@@ -85,15 +85,8 @@ function flash(msg, cls = 'success') {
 }
 // The sender's portal keeps one language: whatever was chosen on the public site carries
 // over through VI, but the toggle itself is gone from here — a person signing in to check
-// their boxes should not be offered a settings control at the top of the page.
-// A way back to the site they came from is more use in that spot.
-function wireBack() {
-  const b = gid('acctBack');
-  if (!b) return;
-  b.addEventListener('click', (e) => {
-    if (history.length > 1) { e.preventDefault(); history.back(); }
-  });
-}
+// their boxes should not be offered a settings control at the top of the page. A way back to
+// where they came from is more use in that spot, and backlink.js wires it on every page.
 
 /* ---------- signed-out: sign in / sign up ---------- */
 function renderAuth(mode) {
@@ -314,7 +307,6 @@ function drawTrack(cell, d) {
 
 /* ---------- boot ---------- */
 (async () => {
-  wireBack();
   try { ME = await api('/api/public/sender/me'); renderAccount(); }
   catch (e) { renderAuth('signin'); }
 })();

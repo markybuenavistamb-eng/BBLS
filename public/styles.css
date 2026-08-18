@@ -1101,3 +1101,10 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
   white-space: nowrap;
 }
 .pub-back:hover { background: rgba(255,255,255,.15); }
+
+/* An author `display` rule outranks the browser's own [hidden] { display: none }, so a panel
+   laid out with flex stays on screen no matter what the hidden property says. Both chat
+   panels set display, so both have to opt back out explicitly. */
+.chat-panel[hidden],
+.bot-panel[hidden],
+.bell-panel[hidden] { display: none !important; }
