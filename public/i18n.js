@@ -12,6 +12,15 @@
       'shell.language': 'Language',
       'shell.viewSite': 'View public site',
 
+      /* alerts bell + portal chat */
+      'alerts.title': 'Alerts',
+      'alerts.none': 'Nothing new. Online bookings and empty-box orders appear here as they arrive.',
+      'chat.title': 'Portal chat',
+      'chat.placeholder': 'Message your team…',
+      'chat.send': 'Send',
+      'chat.everyone': 'Everyone',
+      'chat.empty': 'No messages yet. Notes reach the other branches as the portals sync.',
+
       /* nav */
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
@@ -143,6 +152,15 @@
       'shell.staffPortal': 'Portal ng Kawani',
       'shell.language': 'Wika',
       'shell.viewSite': 'Tingnan ang public site',
+
+      /* alerts bell + portal chat */
+      'alerts.title': 'Abiso',
+      'alerts.none': 'Walang bago. Lilitaw dito ang online booking at order ng walang lamang kahon pagdating.',
+      'chat.title': 'Chat ng portal',
+      'chat.placeholder': 'Magmensahe sa inyong grupo…',
+      'chat.send': 'Ipadala',
+      'chat.everyone': 'Lahat',
+      'chat.empty': 'Wala pang mensahe. Naaabot ang mga nota sa ibang sangay kapag nag-sync ang mga portal.',
 
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',

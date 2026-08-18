@@ -749,7 +749,9 @@ app.get('/api/box-sizes', (req, res) => {
     zones: RATES.ZONES,
     region_zone: RATES.REGION_ZONE,
     // The branch office city that serves this country — autofills "Sending From".
-    branch_city: (BRANCH.portalForBranch(branchKey) || {}).city || ''
+    branch_city: (BRANCH.portalForBranch(branchKey) || {}).city || '',
+    // So the landing-page assistant quotes the office's real contact rather than its own copy.
+    support: { phone: d.settings.supportPhone || '', email: d.settings.supportEmail || '' }
   });
 });
 
@@ -1026,6 +1028,81 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
     return res.status(400).json({ error: e.message || 'Invalid order' });
   }
 });
+// ---------- alerts: work that arrived on its own ----------
+// Online bookings and empty-box orders come in without anyone asking, so unless the portal
+// says so they sit unseen until someone thinks to open the page. Counted against the same
+// branch scope as the lists themselves, so a branch is never alerted to another's work.
+app.get('/api/alerts', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  const scope = effectiveScope(req);
+  const origin = shippedOnly(req.user);   // Manila's PH-side staff do not do origin intake
+
+  const intakes = origin ? [] : (d.intake_requests || [])
+    .filter(r => r.status === 'PENDING' && (!scope || r.origin_country === scope))
+    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
+    .map(r => ({
+      id: r.id, kind: 'intake', reference: r.reference_code,
+      who: personName(r.sender), detail: `${(r.boxes || []).length} box(es)`,
+      at: r.submitted_at, href: '#/intake-requests'
+    }));
+
+  const orders = origin ? [] : (d.box_orders || [])
+    .filter(o => o.status === 'NEW' && (!scope || !o.origin_country || o.origin_country === scope))
+    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
+    .map(o => ({
+      id: o.id, kind: 'order', reference: o.reference_code,
+      who: (o.contact && o.contact.name) || '', detail: `${o.total_qty || 1} empty box(es)`,
+      at: o.submitted_at, href: '#/box-orders'
+    }));
+
+  const items = [...intakes, ...orders].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  res.json({ total: items.length, intake_count: intakes.length, order_count: orders.length, items: items.slice(0, 25) });
+});
+
+// ---------- portal chat ----------
+// Branches and head office work the same shipments from three deployments, and until now the
+// only channel between them was outside the system entirely. Messages replicate like any
+// other record, so a note written in Bangkok reaches Manila the same way a box does.
+function chatBranchOf(user) {
+  const own = BRANCH.branchForRole(user.role);
+  return own || 'HQ_MANILA';
+}
+function chatVisible(m, mine) {
+  return m.to_branch === 'ALL' || m.to_branch === mine || m.from_branch === mine;
+}
+app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
+  const d = db.get();
+  d.messages = d.messages || [];
+  // Pull peers' messages before answering, or a branch only ever sees its own half.
+  await autoSync(d);
+  const mine = chatBranchOf(req.user);
+  const since = String(req.query.since || '');
+  const list = d.messages
+    .filter(m => chatVisible(m, mine))
+    .filter(m => !since || String(m.created_at) > since)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .slice(-200);
+  res.json({ branch: mine, messages: list });
+});
+app.post('/api/messages', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  d.messages = d.messages || [];
+  const body = String((req.body || {}).body || '').trim().slice(0, 2000);
+  if (!body) return res.status(400).json({ error: 'Type a message first.' });
+  const to = String((req.body || {}).to_branch || 'ALL');
+  const valid = ['ALL', ...BRANCH.BRANCH_KEYS];
+  if (!valid.includes(to)) return res.status(400).json({ error: 'Unknown channel.' });
+  const m = {
+    id: db.nextId('message'),
+    from_branch: chatBranchOf(req.user),
+    from_user_id: req.user.id, from_name: req.user.name || req.user.email,
+    to_branch: to, body, created_at: new Date().toISOString()
+  };
+  d.messages.push(m);
+  db.persist();
+  res.status(201).json(m);
+});
+
 app.get('/api/box-orders', requireRole(...AGENTS), (req, res) => {
   const d = db.get();
   let list = (d.box_orders || []).slice();
@@ -2305,6 +2382,7 @@ app.get('/api/public/sender/shipments', requireSender, (req, res) => {
           status_updated_at: b.status_updated_at,
           size_label: (BOXSIZE.bySize(b.size_category) || {}).label || b.size_category,
           receiver_name: receiver.full_name || '', receiver_city: receiver.city_municipality || '',
+          qr_token: b.qr_token || null,
           track_url: b.qr_token ? `/track.html?t=${b.qr_token}` : null
         };
       })
@@ -3458,6 +3536,7 @@ function publicTrackingPayload(box) {
   const j = buildJourney(box);
   return {
     box_number: box.box_number,
+    qr_token: box.qr_token || null,
     status: box.status,
     status_label: SM.FRIENDLY[box.status] || box.status,
     status_updated_at: box.status_updated_at,

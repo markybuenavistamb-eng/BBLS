@@ -589,11 +589,197 @@ async function loadMyModules() {
   catch (e) { MY = null; }
 }
 
+/* ---------- alerts: online bookings and box orders announce themselves ---------- */
+// Work that arrives on its own is the work most easily missed — nobody refreshes a queue they
+// have no reason to think has changed. The bell carries the count so the queue can be ignored
+// until it matters.
+let ALERTS = { total: 0, items: [], intake_count: 0, order_count: 0 };
+let alertTimer = null;
+
+async function loadAlerts() {
+  try { ALERTS = await api('/api/alerts'); }
+  catch (e) { return; }                       // a failed poll is not worth a banner
+  paintBell();
+}
+function paintBell() {
+  const host = document.getElementById('alertMount');
+  if (!host) return;
+  const open = host.querySelector('.bell-panel:not([hidden])');
+  const n = ALERTS.total || 0;
+  host.innerHTML = `
+    <button type="button" class="bell" onclick="toggleAlerts()" title="New online bookings and box orders">
+      <span class="bell-ico">🔔</span>
+      <span class="bell-txt">${VI.t('alerts.title')}</span>
+      ${n ? `<span class="bell-badge">${n > 99 ? '99+' : n}</span>` : ''}
+    </button>
+    <div class="bell-panel" ${open ? '' : 'hidden'}>
+      ${n ? '' : `<div class="bell-empty muted">${VI.t('alerts.none')}</div>`}
+      ${(ALERTS.items || []).map(it => `
+        <a class="bell-item" href="${it.href}" onclick="closeAlerts()">
+          <span class="bell-kind ${it.kind === 'intake' ? 'k-intake' : 'k-order'}">${it.kind === 'intake' ? '📥' : '📦'}</span>
+          <span class="bell-body">
+            <b>${esc(it.reference)}</b>
+            <span class="muted">${esc(it.who || '')} · ${esc(it.detail || '')}</span>
+          </span>
+          <span class="bell-when muted">${esc(sinceText(it.at))}</span>
+        </a>`).join('')}
+    </div>`;
+}
+// Relative time reads better than a date here: "2h ago" says whether it needs attention now.
+function sinceText(iso) {
+  if (!iso) return '';
+  const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const h = Math.floor(mins / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+function toggleAlerts() {
+  const panel = document.querySelector('#alertMount .bell-panel');
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) loadAlerts();
+}
+function closeAlerts() {
+  const panel = document.querySelector('#alertMount .bell-panel');
+  if (panel) panel.hidden = true;
+}
+function startAlerts() {
+  if (alertTimer) return;
+  loadAlerts();
+  alertTimer = setInterval(loadAlerts, 45000);
+}
+
+/* ---------- portal chat ---------- */
+// Three deployments run the same operation, and coordination between them used to happen
+// entirely outside the system. Messages replicate like any other record, so a note written
+// in Bangkok reaches Manila the same way a box does — which also means it is not instant,
+// and the panel says so rather than pretending otherwise.
+let CHAT = { open: false, branch: null, msgs: [], last: '', unread: 0, to: 'ALL' };
+let chatTimer = null;
+
+function chatMount() {
+  if (document.getElementById('chatFab')) return;
+  const fab = document.createElement('button');
+  fab.id = 'chatFab';
+  fab.className = 'chat-fab no-print';
+  fab.type = 'button';
+  fab.title = 'Portal chat';
+  fab.onclick = toggleChat;
+  fab.innerHTML = '<span>💬</span><span class="chat-badge" hidden></span>';
+  document.body.appendChild(fab);
+
+  const panel = document.createElement('div');
+  panel.id = 'chatPanel';
+  panel.className = 'chat-panel no-print';
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="chat-head">
+      <b>${VI.t('chat.title')}</b>
+      <select id="chatTo" class="chat-to" title="Who sees this"></select>
+      <button type="button" class="chat-x" onclick="toggleChat()" aria-label="Close">×</button>
+    </div>
+    <div class="chat-log" id="chatLog"><div class="muted" style="padding:10px">Loading…</div></div>
+    <form class="chat-form" onsubmit="return sendChat(event)">
+      <input id="chatInput" autocomplete="off" placeholder="${VI.t('chat.placeholder')}" maxlength="2000">
+      <button type="submit" class="small">${VI.t('chat.send')}</button>
+    </form>`;
+  document.body.appendChild(panel);
+}
+
+function chatChannels() {
+  // Head office talks to either branch; a branch talks to head office and the whole network.
+  const opts = [['ALL', VI.t('chat.everyone')]];
+  for (const k of (window.BRANCH_KEYS || ['HQ_MANILA', 'TH_BANGKOK', 'KH_PHNOMPENH'])) {
+    if (k === CHAT.branch) continue;
+    opts.push([k, BRANCH_LABEL[k] || k]);
+  }
+  return opts;
+}
+const BRANCH_LABEL = { HQ_MANILA: 'Manila (HQ)', TH_BANGKOK: 'Thailand', KH_PHNOMPENH: 'Cambodia' };
+
+async function loadChat(initial) {
+  let r;
+  try { r = await api('/api/messages'); }
+  catch (e) { return; }
+  CHAT.branch = r.branch;
+  const fresh = r.messages || [];
+  const grew = fresh.length > CHAT.msgs.length;
+  CHAT.msgs = fresh;
+  if (grew && !CHAT.open) {
+    CHAT.unread += 1;
+    const b = document.querySelector('#chatFab .chat-badge');
+    if (b) { b.hidden = false; b.textContent = CHAT.unread > 9 ? '9+' : String(CHAT.unread); }
+  }
+  if (CHAT.open) paintChat(initial);
+}
+
+function paintChat(scrollToEnd) {
+  const log = document.getElementById('chatLog');
+  const sel = document.getElementById('chatTo');
+  if (!log || !sel) return;
+  if (!sel.options.length) {
+    sel.innerHTML = chatChannels().map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+    sel.value = CHAT.to;
+    sel.onchange = () => { CHAT.to = sel.value; };
+  }
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+  log.innerHTML = CHAT.msgs.length ? CHAT.msgs.map(m => {
+    const mine = m.from_branch === CHAT.branch;
+    const to = m.to_branch === 'ALL' ? VI.t('chat.everyone') : (BRANCH_LABEL[m.to_branch] || m.to_branch);
+    return `<div class="chat-msg ${mine ? 'mine' : ''}">
+      <div class="chat-meta">${esc(m.from_name || '')} · ${esc(BRANCH_LABEL[m.from_branch] || m.from_branch)}
+        <span class="muted">→ ${esc(to)}</span> · ${esc(sinceText(m.created_at))}</div>
+      <div class="chat-bubble">${esc(m.body)}</div>
+    </div>`;
+  }).join('') : `<div class="muted" style="padding:12px">${VI.t('chat.empty')}</div>`;
+  if (scrollToEnd || atEnd) log.scrollTop = log.scrollHeight;
+}
+
+function toggleChat() {
+  chatMount();
+  const panel = document.getElementById('chatPanel');
+  CHAT.open = panel.hidden;
+  panel.hidden = !CHAT.open;
+  const b = document.querySelector('#chatFab .chat-badge');
+  if (CHAT.open) {
+    CHAT.unread = 0;
+    if (b) b.hidden = true;
+    loadChat(true);
+    const i = document.getElementById('chatInput');
+    if (i) i.focus();
+  }
+}
+
+async function sendChat(ev) {
+  ev.preventDefault();
+  const input = document.getElementById('chatInput');
+  const body = input.value.trim();
+  if (!body) return false;
+  input.value = '';
+  try {
+    await api('/api/messages', { method: 'POST', body: { body, to_branch: CHAT.to } });
+    await loadChat(true);
+  } catch (e) { showErr(e); input.value = body; }
+  return false;
+}
+
+function startChat() {
+  chatMount();
+  if (chatTimer) return;
+  loadChat();
+  // Cheap while shut (just the unread badge), livelier once someone is actually reading.
+  chatTimer = setInterval(() => loadChat(), 12000);
+}
+
 function renderShell() {
   document.getElementById('preauth').style.display = 'none';
   const shell = document.getElementById('shell');
   shell.style.display = '';
   shell.classList.toggle('nav-collapsed', isNavCollapsed());
+  startAlerts();
+  startChat();
   document.getElementById('brandOps').textContent = VI.t('shell.ops');
   document.getElementById('logoutBtn').textContent = VI.t('common.logout');
 

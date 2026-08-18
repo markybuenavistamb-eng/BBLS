@@ -238,8 +238,11 @@ async function loadShipments() {
             <td>${esc(b.size_label || '')}</td>
             <td>${esc(b.receiver_name)}${b.receiver_city ? ' · ' + esc(b.receiver_city) : ''}</td>
             <td><span class="badge st-${esc(String(b.status).toLowerCase())}">${esc(b.status_label)}</span></td>
-            <td>${b.track_url ? `<a href="${esc(b.track_url)}" target="_blank">Track →</a>` : ''}</td>
-          </tr>`).join('')}
+            <td>${b.qr_token
+              ? `<button class="small secondary" id="tb-${esc(b.qr_token)}" onclick="toggleTrack('${esc(b.qr_token)}')">Track ▾</button>`
+              : '<span class="muted">—</span>'}</td>
+          </tr>
+          ${b.qr_token ? `<tr class="track-row" id="tr-${esc(b.qr_token)}" hidden><td colspan="5"></td></tr>` : ''}`).join('')}
         </table></div>
       </div>`).join('')
       : `<span class="muted">No shipments yet. Once VFIC receives your box(es), they will appear here with live tracking.</span>`;
@@ -247,6 +250,58 @@ async function loadShipments() {
     gid('requests').innerHTML = `<span class="error">${esc(e.message)}</span>`;
     gid('shipments').innerHTML = '';
   }
+}
+
+/* ---------- tracking, in the account itself ---------- */
+// The sender is already looking at their boxes; sending them to a separate page to ask where
+// one is loses the list they were reading. The journey opens under the box instead, drawn
+// from the same public tracking payload the standalone tracker uses.
+const TRACK_CACHE = {};
+
+async function toggleTrack(token) {
+  const row = gid('tr-' + token);
+  const btn = gid('tb-' + token);
+  if (!row) return;
+  if (!row.hidden) {
+    row.hidden = true;
+    if (btn) btn.textContent = 'Track ▾';
+    return;
+  }
+  row.hidden = false;
+  if (btn) btn.textContent = 'Hide ▴';
+  const cell = row.firstElementChild;
+  if (TRACK_CACHE[token]) return drawTrack(cell, TRACK_CACHE[token]);
+  cell.innerHTML = '<span class="muted">Loading tracking…</span>';
+  try {
+    const d = await api('/api/track/' + encodeURIComponent(token));
+    TRACK_CACHE[token] = d;
+    drawTrack(cell, d);
+  } catch (e) {
+    cell.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  }
+}
+
+function drawTrack(cell, d) {
+  const jLabel = (step) => {
+    const t = window.VI ? VI.t('journey.' + step.key, '') : '';
+    return t ? t.replace('{region}', d.region_label || '') : step.label;
+  };
+  const steps = (d.journey || []).map(step => {
+    const cls = step.done ? (step.current ? 'j-current' : 'j-done') : 'j-upcoming';
+    return `<li class="j-step ${cls}">
+      <div class="j-label">${esc(jLabel(step))}</div>
+      ${step.detail ? `<div class="j-detail">${esc(step.detail)}</div>` : ''}
+      ${step.at ? `<div class="t-meta">${fmtDate(step.at)}</div>`
+                 : (step.done ? '' : '<div class="t-meta j-pending">Pending</div>')}
+    </li>`;
+  }).join('');
+  cell.innerHTML = `
+    <div class="track-inline">
+      ${d.eta_text ? `<div class="muted" style="margin-bottom:8px"><strong>${esc(d.eta_text)}</strong></div>` : ''}
+      ${d.return_note ? `<div class="note-warn" style="padding:8px 10px;margin-bottom:8px">${esc(d.return_note)}</div>` : ''}
+      <ul class="journey-timeline">${steps}</ul>
+      <a href="/track.html?t=${encodeURIComponent(d.qr_token || '')}" target="_blank" class="muted" style="font-size:12px">Open full tracking page →</a>
+    </div>`;
 }
 
 /* ---------- boot ---------- */
