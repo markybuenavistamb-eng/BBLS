@@ -13,6 +13,10 @@
       'shell.viewSite': 'View public site',
 
       /* alerts bell + portal chat */
+      'login.checking': 'Checking…',
+      'login.signin': 'Sign in',
+      'login.welcome': 'Welcome back',
+      'chat.start': 'Open',
       'alerts.title': 'Alerts',
       'alerts.none': 'All caught up. Nothing is waiting on you.',
       'alerts.noneAtAll': 'No alerts at all yet — bookings, box orders and branch messages appear here.',
@@ -162,6 +166,10 @@
       'shell.viewSite': 'Tingnan ang public site',
 
       /* alerts bell + portal chat */
+      'login.checking': 'Sinusuri…',
+      'login.signin': 'Mag-sign in',
+      'login.welcome': 'Maligayang balik',
+      'chat.start': 'Buksan',
       'alerts.title': 'Abiso',
       'alerts.none': 'Wala nang naghihintay sa inyo.',
       'alerts.noneAtAll': 'Wala pang abiso — lilitaw dito ang booking, order ng kahon at mensahe ng sangay.',

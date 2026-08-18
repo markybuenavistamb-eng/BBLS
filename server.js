@@ -1262,9 +1262,30 @@ function chatVisible(m, mine, userId) {
 }
 // How far each person has read. Kept per user rather than per device, so the count does not
 // reset on reload and does not follow them to a second screen already cleared.
-function chatReadAt(d, userId) {
+// Each conversation is read separately, so opening one thread does not silence the rest.
+// Earlier builds kept a single timestamp per person; that value is carried forward as the
+// floor for every thread rather than thrown away, so nothing already read comes back unread.
+const CHAT_LEGACY = 'legacy';    // the one pseudo-thread holding pre-recipient branch notes
+
+function chatReads(d, userId) {
   d.chat_reads = d.chat_reads || {};
-  return d.chat_reads[String(userId)] || '';
+  const key = String(userId);
+  const cur = d.chat_reads[key];
+  if (typeof cur === 'string') d.chat_reads[key] = { _floor: cur };
+  else if (!cur || typeof cur !== 'object') d.chat_reads[key] = {};
+  return d.chat_reads[key];
+}
+function chatReadAt(d, userId, peer) {
+  const reads = chatReads(d, userId);
+  const floor = reads._floor || '';
+  const own = reads[String(peer)] || '';
+  return own > floor ? own : floor;
+}
+// The person on the other side of a message, from my point of view. Messages written before
+// recipients existed have no other side, so they live in one read-only thread together.
+function chatPeerOf(m, userId) {
+  if (m.to_user_id == null) return CHAT_LEGACY;
+  return String(m.from_user_id) === String(userId) ? String(m.to_user_id) : String(m.from_user_id);
 }
 
 // Who this person can write to. The list is the restriction — a Thailand user is never shown
@@ -1292,26 +1313,64 @@ app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
   // Pull peers' messages before answering, or a branch only ever sees its own half.
   await autoSync(d);
   const mine = chatBranchOf(req.user);
-  const since = String(req.query.since || '');
   const visible = d.messages
     .filter(m => chatVisible(m, mine, req.user.id))
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-  const list = (since ? visible.filter(m => String(m.created_at) > since) : visible).slice(-200);
 
-  // Unread is counted from the mark and never includes what this person sent themselves —
-  // your own message coming back from the server is not news.
-  const readAt = chatReadAt(d, req.user.id);
-  const unreadList = visible.filter(m =>
-    String(m.from_user_id) !== String(req.user.id) && String(m.created_at) > readAt);
-  const byBranch = {};
-  for (const m of unreadList) byBranch[m.from_branch] = (byBranch[m.from_branch] || 0) + 1;
+  // Everything is filed under the person it is with, so each correspondent has their own
+  // thread rather than one merged log where two conversations interleave.
+  const byPeer = new Map();
+  for (const m of visible) {
+    const peer = chatPeerOf(m, req.user.id);
+    if (!byPeer.has(peer)) byPeer.set(peer, []);
+    byPeer.get(peer).push(m);
+  }
 
-  res.json({
-    branch: mine, messages: list,
-    unread: unreadList.length, unread_by_branch: byBranch,
-    last_read_at: readAt,
-    first_unread_at: unreadList.length ? unreadList[0].created_at : null
-  });
+  const userById = new Map((d.users || []).map(u => [String(u.id), u]));
+  const unreadIn = (peer, msgs) => {
+    const readAt = chatReadAt(d, req.user.id, peer);
+    return msgs.filter(m => String(m.from_user_id) !== String(req.user.id) && String(m.created_at) > readAt);
+  };
+
+  // One conversation asked for by name.
+  const withPeer = req.query.with != null ? String(req.query.with) : null;
+  if (withPeer) {
+    const msgs = byPeer.get(withPeer) || [];
+    const unread = unreadIn(withPeer, msgs);
+    return res.json({
+      branch: mine, me: req.user.id, peer: withPeer,
+      messages: msgs.slice(-300),
+      unread: unread.length,
+      first_unread_at: unread.length ? unread[0].created_at : null,
+      last_read_at: chatReadAt(d, req.user.id, withPeer)
+    });
+  }
+
+  // Otherwise the list of conversations, most recently spoken in first.
+  const threads = [];
+  let total = 0;
+  for (const [peer, msgs] of byPeer) {
+    const unread = unreadIn(peer, msgs);
+    total += unread.length;
+    const last = msgs[msgs.length - 1];
+    const u = userById.get(peer);
+    const branch = u ? chatBranchOf(u) : null;
+    threads.push({
+      peer,
+      name: peer === CHAT_LEGACY ? 'Earlier branch messages' : (u ? (u.name || u.email) : 'Former colleague'),
+      branch_label: peer === CHAT_LEGACY ? 'Before recipients existed'
+        : (branch ? (BRANCH.BRANCH_LABELS[branch] || branch) : ''),
+      role_label: u ? (ROLE.ROLE_LABELS[ROLE.normalizeRole(u.role)] || u.role) : '',
+      readonly: peer === CHAT_LEGACY,
+      last_body: last ? String(last.body || '').slice(0, 80) : '',
+      last_at: last ? last.created_at : null,
+      last_from_me: last ? String(last.from_user_id) === String(req.user.id) : false,
+      unread: unread.length
+    });
+  }
+  threads.sort((a, b) => String(b.last_at || '').localeCompare(String(a.last_at || '')));
+
+  res.json({ branch: mine, me: req.user.id, threads, unread: total });
 });
 
 // Reading the panel is what clears the count. The same act clears those messages from the
@@ -1321,21 +1380,27 @@ app.post('/api/messages/read', requireRole(...ALL_STAFF), (req, res) => {
   d.messages = d.messages || [];
   d.chat_reads = d.chat_reads || {};
   const at = String((req.body || {}).at || new Date().toISOString());
-  const prev = chatReadAt(d, req.user.id);
+  const peer = (req.body || {}).with != null ? String((req.body || {}).with) : null;
+  if (!peer) return res.status(400).json({ error: 'Which conversation?' });
+  const reads = chatReads(d, req.user.id);
+  const prev = reads[peer] || '';
   // Only ever move forward, or a slow request could un-read newer messages.
-  d.chat_reads[String(req.user.id)] = at > prev ? at : prev;
+  reads[peer] = at > prev ? at : prev;
 
+  // The bell drops only the messages in this conversation — reading one thread says nothing
+  // about the others.
   const mine = chatBranchOf(req.user);
   const state = alertStateFor(d, req.user.id);
   for (const m of d.messages) {
     if (String(m.from_user_id) === String(req.user.id)) continue;
     if (!chatVisible(m, mine, req.user.id)) continue;
+    if (chatPeerOf(m, req.user.id) !== peer) continue;
     if (String(m.created_at) > at) continue;
     const key = 'msg:' + m.id;
     if (state[key] !== 'deleted') state[key] = 'read';
   }
   db.persist();
-  res.json({ ok: true, last_read_at: d.chat_reads[String(req.user.id)] });
+  res.json({ ok: true, peer, last_read_at: reads[peer] });
 });
 app.post('/api/messages', requireRole(...ALL_STAFF), (req, res) => {
   const d = db.get();

@@ -452,7 +452,7 @@ function renderLogin() {
         <div style="font-size:12px;color:#8aa0bf">© ${new Date().getFullYear()} ${VI.t('brand.company')}</div>
       </div>
       <div class="login-formside">
-        <div class="login-box card">
+        <div class="login-box card" id="lgCard">
           <div style="display:flex;justify-content:center;margin-bottom:10px">
             <img class="vf-logo-img" src="/vfic-logo.png" alt="Vîctors Freight International Corporation — Chosen to Deliver" style="width:290px">
           </div>
@@ -461,7 +461,7 @@ function renderLogin() {
           <h1 style="font-size:20px;text-align:center;margin:0 0 14px">${p ? esc(p.name) + ' Sign In' : VI.t('login.title')}</h1>
           <label>${VI.t('common.email')}</label><input id="lgEmail" type="email" autocomplete="username">
           <label>${VI.t('common.password')}</label><input id="lgPass" type="password" autocomplete="current-password">
-          <div style="margin-top:14px"><button style="width:100%" onclick="doLogin()">${VI.t('common.login')}</button></div>
+          <div style="margin-top:14px"><button id="lgBtn" style="width:100%" onclick="doLogin()">${VI.t('common.login')}</button></div>
           <div class="error" id="lgErr"></div>
           <div class="demo-creds">
             <b>${VI.t('login.demo')}</b> (${VI.t('login.password_is')} <code>demo1234</code>):<br>
@@ -483,13 +483,44 @@ function renderLogin() {
   document.getElementById('lgPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 }
 async function doLogin() {
+  const btn = document.getElementById('lgBtn');
   try {
+    document.getElementById('lgErr').textContent = '';
+    if (btn) { btn.disabled = true; btn.textContent = VI.t('login.checking'); }
     ME = await api('/api/login', { method: 'POST', body: { email: lgEmail.value.trim(), password: lgPass.value, portal: PORTAL_SLUG } });
+    // Say plainly that the details were right before the screen changes. Signing in is the
+    // one moment someone is unsure whether they typed their password correctly, and a portal
+    // that simply redraws leaves them guessing what just happened.
+    await loginAccepted();
     await Promise.all([loadBoxSizeCatalog(), loadMyModules()]);
     renderShell();
     location.hash = '#/dashboard';
     route();
-  } catch (e) { document.getElementById('lgErr').textContent = e.message; }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = VI.t('login.signin'); }
+    document.getElementById('lgErr').textContent = e.message;
+  }
+}
+
+// A green circle with a check, drawn over the sign-in card and held just long enough to be
+// read. The circle and tick are stroked rather than dropped in as an image so they animate.
+function loginAccepted() {
+  return new Promise(resolve => {
+    const host = document.getElementById('lgCard') || document.getElementById('view');
+    if (!host) return resolve();
+    const first = ME && ME.name ? String(ME.name).split(' ')[0] : '';
+    const ok = document.createElement('div');
+    ok.className = 'login-ok';
+    ok.innerHTML = [
+      '<div class="login-ok-ring"><svg viewBox="0 0 52 52" aria-hidden="true">',
+      '<circle class="lo-circle" cx="26" cy="26" r="23"/>',
+      '<path class="lo-check" d="M15 27 l7.5 7.5 l14.5 -16"/>',
+      '</svg></div>',
+      '<div class="login-ok-text">' + esc(VI.t('login.welcome')) + (first ? ', ' + esc(first) : '') + '</div>'
+    ].join('');
+    host.appendChild(ok);
+    setTimeout(resolve, 1150);
+  });
 }
 async function logout() {
   await api('/api/logout', { method: 'POST' });
@@ -714,8 +745,9 @@ function startAlerts() {
 // entirely outside the system. Messages replicate like any other record, so a note written
 // in Bangkok reaches Manila the same way a box does — which also means it is not instant,
 // and the panel says so rather than pretending otherwise.
-let CHAT = { open: false, branch: null, msgs: [], unread: 0, byBranch: {}, firstUnreadAt: null,
-             to: null, contacts: [] };
+let CHAT = { open: false, branch: null, me: null, view: 'list', peer: null, peerName: '',
+             peerReadonly: false, threads: [], msgs: [], unread: 0, firstUnreadAt: null,
+             contacts: [] };
 let chatTimer = null;
 let chatToastFor = null;      // which message the toast is currently announcing
 
@@ -736,15 +768,20 @@ function chatMount() {
   panel.hidden = true;
   panel.innerHTML = `
     <div class="chat-head">
-      <b>${VI.t('chat.title')}</b>
-      <select id="chatTo" class="chat-to" title="Who this goes to"></select>
+      <button type="button" class="chat-back" id="chatBack" onclick="chatShowList()" hidden aria-label="Back">‹</button>
+      <b id="chatTitle">${VI.t('chat.title')}</b>
       <button type="button" class="chat-x" onclick="toggleChat()" aria-label="Minimize" title="Minimize">–</button>
     </div>
-    <div class="chat-log" id="chatLog"><div class="muted" style="padding:10px">Loading…</div></div>
-    <form class="chat-form" onsubmit="return sendChat(event)">
+    <div class="chat-threads" id="chatThreads"><div class="muted" style="padding:10px">Loading…</div></div>
+    <div class="chat-log" id="chatLog" hidden></div>
+    <form class="chat-form" id="chatForm" hidden onsubmit="return sendChat(event)">
       <input id="chatInput" autocomplete="off" placeholder="${VI.t('chat.placeholder')}" maxlength="2000">
       <button type="submit" class="small">${VI.t('chat.send')}</button>
-    </form>`;
+    </form>
+    <div class="chat-newbar" id="chatNewBar">
+      <select id="chatTo" class="chat-to" title="Start a conversation"></select>
+      <button type="button" class="small" onclick="chatOpenPicked()">${VI.t('chat.start')}</button>
+    </div>`;
   document.body.appendChild(panel);
 }
 
@@ -756,7 +793,7 @@ async function loadContacts() {
     CHAT.contacts = r.contacts || [];
     if (!CHAT.to && CHAT.contacts.length) CHAT.to = CHAT.contacts[0].id;
   } catch (e) { CHAT.contacts = []; }
-  if (CHAT.open) paintChat();
+  if (CHAT.open) paintChatPicker();
 }
 function chatRecipientOptions() {
   const groups = {};
@@ -768,26 +805,93 @@ function chatRecipientOptions() {
 const BRANCH_LABEL = { HQ_MANILA: 'Manila (HQ)', TH_BANGKOK: 'Thailand', KH_PHNOMPENH: 'Cambodia' };
 
 async function loadChat(initial) {
+  // Always refresh the conversation list: it carries the total unread and drives the badge
+  // whether or not a thread happens to be open.
   let r;
   try { r = await api('/api/messages'); }
   catch (e) { return; }
-  CHAT.branch = r.branch;
+  CHAT.branch = r.branch; CHAT.me = r.me;
   const before = CHAT.unread;
-  CHAT.msgs = r.messages || [];
-  // The count comes from the server against a stored read mark, so it survives a reload and
-  // means "messages you have not read" rather than "times this poll saw the list grow".
+  CHAT.threads = r.threads || [];
   CHAT.unread = r.unread || 0;
-  CHAT.byBranch = r.unread_by_branch || {};
-  CHAT.firstUnreadAt = r.first_unread_at || null;
   paintChatBadge();
 
   // Something new arrived while they were working elsewhere: say so once, quietly, and let
   // them open it. Without this the only sign is a number on a button they are not looking at.
   if (!CHAT.open && CHAT.unread > before) {
-    const newest = CHAT.msgs.filter(m => m.from_branch !== CHAT.branch).slice(-1)[0];
-    if (newest && chatToastFor !== newest.id) { chatToastFor = newest.id; chatToast(newest); }
+    const t = CHAT.threads.find(x => x.unread > 0);
+    if (t && chatToastFor !== t.peer + ':' + t.last_at) {
+      chatToastFor = t.peer + ':' + t.last_at;
+      chatToast(t);
+    }
   }
-  if (CHAT.open) { paintChat(initial); markChatRead(); }
+
+  if (CHAT.open && CHAT.view === 'thread' && CHAT.peer) {
+    let c;
+    try { c = await api('/api/messages?with=' + encodeURIComponent(CHAT.peer)); }
+    catch (e) { return; }
+    CHAT.msgs = c.messages || [];
+    CHAT.firstUnreadAt = c.first_unread_at || null;
+    paintChat(initial);
+    if (c.unread) markChatRead();
+  } else if (CHAT.open) {
+    paintThreadList();
+  }
+}
+
+// The list of correspondents, each with its own unread count — one window per person.
+function paintThreadList() {
+  const host = document.getElementById('chatThreads');
+  if (!host) return;
+  host.innerHTML = CHAT.threads.length ? CHAT.threads.map(t => `
+    <button type="button" class="chat-thread${t.unread ? ' has-unread' : ''}" onclick="chatOpenThread('${esc(t.peer)}')">
+      <span class="chat-thread-top">
+        <b>${esc(t.name)}</b>
+        ${t.unread ? `<span class="chat-thread-badge">${t.unread > 9 ? '9+' : t.unread}</span>` : ''}
+        <span class="chat-when muted">${esc(sinceText(t.last_at))}</span>
+      </span>
+      <span class="muted chat-thread-sub">${esc(t.branch_label)}${t.role_label ? ' · ' + esc(t.role_label) : ''}</span>
+      <span class="muted chat-thread-last">${t.last_from_me ? 'You: ' : ''}${esc(t.last_body)}</span>
+    </button>`).join('')
+    : `<div class="muted" style="padding:12px">${VI.t('chat.empty')}</div>`;
+}
+
+function chatShowList() {
+  CHAT.view = 'list'; CHAT.peer = null; CHAT.msgs = [];
+  chatSwapView();
+  loadChat();
+}
+async function chatOpenThread(peer) {
+  const t = CHAT.threads.find(x => String(x.peer) === String(peer));
+  CHAT.view = 'thread'; CHAT.peer = String(peer);
+  CHAT.peerName = t ? t.name : '';
+  CHAT.peerReadonly = !!(t && t.readonly);
+  chatSwapView();
+  await loadChat(true);
+  const i = document.getElementById('chatInput');
+  if (i && !CHAT.peerReadonly) i.focus();
+}
+// Start a conversation with someone not yet in the list.
+function chatOpenPicked() {
+  const sel = document.getElementById('chatTo');
+  if (!sel || !sel.value) return;
+  const c = CHAT.contacts.find(x => String(x.id) === String(sel.value));
+  CHAT.threads = CHAT.threads.some(t => String(t.peer) === String(sel.value))
+    ? CHAT.threads
+    : [{ peer: String(sel.value), name: c ? c.name : '', branch_label: c ? c.branch_label : '',
+         role_label: c ? c.role_label : '', last_body: '', last_at: null, unread: 0 }, ...CHAT.threads];
+  chatOpenThread(sel.value);
+}
+
+function chatSwapView() {
+  const inThread = CHAT.view === 'thread';
+  const el = (id) => document.getElementById(id);
+  if (el('chatThreads')) el('chatThreads').hidden = inThread;
+  if (el('chatLog')) el('chatLog').hidden = !inThread;
+  if (el('chatForm')) el('chatForm').hidden = !inThread || CHAT.peerReadonly;
+  if (el('chatNewBar')) el('chatNewBar').hidden = inThread;
+  if (el('chatBack')) el('chatBack').hidden = !inThread;
+  if (el('chatTitle')) el('chatTitle').textContent = inThread ? (CHAT.peerName || '') : VI.t('chat.title');
 }
 
 function paintChatBadge() {
@@ -800,31 +904,37 @@ function paintChatBadge() {
 // Tell the server how far they have read. That also clears these messages from the bell,
 // so the two never disagree about whether a note still needs attention.
 async function markChatRead() {
-  if (!CHAT.unread) return;
-  try { await api('/api/messages/read', { method: 'POST', body: { at: new Date().toISOString() } }); }
+  if (!CHAT.peer) return;
+  try { await api('/api/messages/read', { method: 'POST', body: { with: CHAT.peer, at: new Date().toISOString() } }); }
   catch (e) { return; }
-  CHAT.unread = 0; CHAT.byBranch = {};
+  // Only this conversation is cleared; the others keep their own counts.
+  const t = CHAT.threads.find(x => String(x.peer) === String(CHAT.peer));
+  if (t) { CHAT.unread = Math.max(0, CHAT.unread - t.unread); t.unread = 0; }
   paintChatBadge();
   loadAlerts();
 }
 
-function chatToast(m) {
-  document.querySelectorAll('.chat-toast').forEach(t => t.remove());
+function chatToast(t) {
+  document.querySelectorAll('.chat-toast').forEach(x => x.remove());
   const el = document.createElement('div');
   el.className = 'chat-toast no-print';
   el.innerHTML = `
-    <div class="chat-toast-head">💬 ${esc(BRANCH_LABEL[m.from_branch] || m.from_branch)}
-      <span class="muted">· ${esc(m.from_name || '')}</span></div>
-    <div class="chat-toast-body">${esc(String(m.body || '').slice(0, 120))}</div>`;
-  el.onclick = () => { el.remove(); if (!CHAT.open) toggleChat(); };
+    <div class="chat-toast-head">💬 ${esc(t.name)}
+      ${t.branch_label ? `<span class="muted">· ${esc(t.branch_label)}</span>` : ''}</div>
+    <div class="chat-toast-body">${esc(String(t.last_body || '').slice(0, 120))}</div>`;
+  // Straight into their conversation, not just into the panel.
+  el.onclick = () => {
+    el.remove();
+    if (!CHAT.open) toggleChat();
+    setTimeout(() => chatOpenThread(t.peer), 60);
+  };
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 8000);
 }
 
-function paintChat(scrollToEnd) {
-  const log = document.getElementById('chatLog');
+function paintChatPicker() {
   const sel = document.getElementById('chatTo');
-  if (!log || !sel) return;
+  if (!sel) return;
   // Rebuild when the people change, not merely when the box is empty: painting once left
   // head office without Cambodia whenever the first paint beat the contact list back.
   const sig = CHAT.contacts.map(c => c.id).join(',');
@@ -833,26 +943,31 @@ function paintChat(scrollToEnd) {
     sel.innerHTML = chatRecipientOptions();
     sel.dataset.sig = sig;
     if (keep && sel.querySelector('option[value="' + keep + '"]')) sel.value = keep;
-    else if (CHAT.to) sel.value = String(CHAT.to);
-    CHAT.to = sel.value;
-    sel.onchange = () => { CHAT.to = sel.value; };
+    sel.onchange = null;
   }
   if (!CHAT.contacts.length) { sel.innerHTML = '<option value="">No one to message</option>'; delete sel.dataset.sig; }
+}
+
+function paintChat(scrollToEnd) {
+  const log = document.getElementById('chatLog');
+  const sel = document.getElementById('chatTo');
+  if (!log || !sel) return;
+  if (CHAT.view !== 'thread') { paintThreadList(); return; }
+
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
   const mark = CHAT.firstUnreadAt;
   let drewDivider = false;
   log.innerHTML = CHAT.msgs.length ? CHAT.msgs.map(m => {
-    const mine = String(m.from_user_id) === String(ME && ME.id);
-    const to = m.to_name || (m.to_branch === 'ALL' ? VI.t('chat.everyone') : (BRANCH_LABEL[m.to_branch] || m.to_branch));
+    const mine = String(m.from_user_id) === String(CHAT.me);
     // One line showing where they stopped reading, drawn before the first unread message.
     let divider = '';
     if (mark && !drewDivider && !mine && String(m.created_at) >= String(mark)) {
       drewDivider = true;
       divider = `<div class="chat-newline"><span>${VI.t('chat.newFrom')}</span></div>`;
     }
+    // Inside a conversation the two names are already known, so only the time is worth room.
     return divider + `<div class="chat-msg ${mine ? 'mine' : ''}">
-      <div class="chat-meta">${esc(m.from_name || '')} · ${esc(BRANCH_LABEL[m.from_branch] || m.from_branch)}
-        <span class="muted">→ ${esc(to)}</span> · ${esc(sinceText(m.created_at))}</div>
+      <div class="chat-meta">${mine ? 'You' : esc(m.from_name || '')} · ${esc(sinceText(m.created_at))}</div>
       <div class="chat-bubble">${esc(m.body)}</div>
     </div>`;
   }).join('') : `<div class="muted" style="padding:12px">${VI.t('chat.empty')}</div>`;
@@ -866,9 +981,9 @@ function toggleChat() {
   panel.hidden = !CHAT.open;
   if (CHAT.open) {
     document.querySelectorAll('.chat-toast').forEach(t => t.remove());
-    loadContacts().then(() => { paintChat(true); loadChat(true); });
-    const i = document.getElementById('chatInput');
-    if (i) i.focus();
+    if (!CHAT.peer) CHAT.view = 'list';
+    chatSwapView();
+    loadContacts().then(() => { paintChatPicker(); loadChat(true); });
   }
 }
 
@@ -879,7 +994,7 @@ async function sendChat(ev) {
   if (!body) return false;
   input.value = '';
   try {
-    await api('/api/messages', { method: 'POST', body: { body, to_user_id: CHAT.to } });
+    await api('/api/messages', { method: 'POST', body: { body, to_user_id: CHAT.peer } });
     await loadChat(true);
   } catch (e) { showErr(e); input.value = body; }
   return false;

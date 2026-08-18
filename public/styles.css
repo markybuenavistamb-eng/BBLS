@@ -1136,3 +1136,59 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .chat-newline::before, .chat-newline::after { content: ''; flex: 1; height: 1px; background: var(--primary); opacity: .45; }
 .chat-newline span { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .5px; color: var(--primary); white-space: nowrap; }
+
+/* ---------- sign-in accepted ---------- */
+/* Covers the card so the tick is the only thing left to read. */
+.login-ok {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: var(--card); border-radius: inherit; animation: loFade .18s ease-out;
+}
+.login-box { position: relative; }
+.login-ok-ring { width: 92px; height: 92px; }
+.login-ok-ring svg { width: 100%; height: 100%; overflow: visible; }
+.lo-circle {
+  fill: none; stroke: #16a34a; stroke-width: 3;
+  stroke-dasharray: 151; stroke-dashoffset: 151;
+  transform: rotate(-90deg); transform-origin: 50% 50%;
+  animation: loDraw .45s ease-out forwards;
+}
+.lo-check {
+  fill: none; stroke: #16a34a; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 40; stroke-dashoffset: 40;
+  animation: loDraw .3s .4s ease-out forwards;
+}
+.login-ok-text { font-weight: 700; font-size: 16px; color: #15803d; animation: loFade .3s .55s both; }
+@keyframes loDraw { to { stroke-dashoffset: 0 } }
+@keyframes loFade { from { opacity: 0 } to { opacity: 1 } }
+/* Someone who prefers less motion still gets the tick, just without it being drawn. */
+@media (prefers-reduced-motion: reduce) {
+  .lo-circle, .lo-check { animation: none; stroke-dashoffset: 0; }
+  .login-ok, .login-ok-text { animation: none; }
+}
+
+/* ---------- one chat window per person ---------- */
+.chat-back {
+  background: transparent; border: 0; cursor: pointer; color: var(--muted);
+  font-size: 22px; line-height: 1; padding: 0 4px 0 0;
+}
+.chat-back:hover { color: var(--primary); }
+.chat-threads { flex: 1; overflow-y: auto; background: var(--bg); }
+.chat-thread {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid var(--border);
+  padding: 10px 12px; cursor: pointer; font-family: inherit; color: inherit;
+}
+.chat-thread:hover { background: #fff7ed; }
+.chat-thread.has-unread { background: #fffbf5; }
+.chat-thread-top { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.chat-thread-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-thread-badge {
+  background: var(--primary); color: #fff; border-radius: 999px;
+  padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 1.7;
+}
+.chat-when { font-size: 10.5px; white-space: nowrap; }
+.chat-thread-sub { font-size: 11px; }
+.chat-thread-last { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-newbar { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border); background: var(--card); }
+.chat-newbar .chat-to { flex: 1; max-width: none; }
