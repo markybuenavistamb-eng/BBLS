@@ -1029,34 +1029,125 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
   }
 });
 // ---------- alerts: work that arrived on its own ----------
-// Online bookings and empty-box orders come in without anyone asking, so unless the portal
-// says so they sit unseen until someone thinks to open the page. Counted against the same
-// branch scope as the lists themselves, so a branch is never alerted to another's work.
-app.get('/api/alerts', requireRole(...ALL_STAFF), (req, res) => {
+// Anything that lands without someone asking for it sits unseen until they think to look.
+// Alerts are derived from the records themselves rather than stored as their own rows, so
+// they can never drift out of step with the thing they describe: a settlement that gets paid
+// stops being an alert because it stops matching, not because anything cleaned up after it.
+//
+// What a user has already dealt with is the one part that has to be remembered, so read and
+// deleted are kept per user, keyed by the same derived key.
+function alertStateFor(d, userId) {
+  d.alert_state = d.alert_state || {};
+  d.alert_state[String(userId)] = d.alert_state[String(userId)] || {};
+  return d.alert_state[String(userId)];
+}
+
+function buildAlerts(req) {
   const d = db.get();
   const scope = effectiveScope(req);
-  const origin = shippedOnly(req.user);   // Manila's PH-side staff do not do origin intake
+  const origin = shippedOnly(req.user);       // Manila's PH-side staff do not do origin intake
+  const mine = chatBranchOf(req.user);
+  const isHQ = mine === 'HQ_MANILA';
+  const out = [];
 
-  const intakes = origin ? [] : (d.intake_requests || [])
-    .filter(r => r.status === 'PENDING' && (!scope || r.origin_country === scope))
-    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
-    .map(r => ({
-      id: r.id, kind: 'intake', reference: r.reference_code,
-      who: personName(r.sender), detail: `${(r.boxes || []).length} box(es)`,
-      at: r.submitted_at, href: '#/intake-requests'
-    }));
+  // Online bookings waiting to be encoded.
+  if (!origin) for (const r of (d.intake_requests || [])) {
+    if (r.status !== 'PENDING') continue;
+    if (scope && r.origin_country !== scope) continue;
+    out.push({ key: 'intake:' + r.id, kind: 'intake', icon: '📥', reference: r.reference_code,
+      who: personName(r.sender), detail: `${(r.boxes || []).length} box(es) booked online`,
+      at: r.submitted_at, href: '#/intake-requests' });
+  }
 
-  const orders = origin ? [] : (d.box_orders || [])
-    .filter(o => o.status === 'NEW' && (!scope || !o.origin_country || o.origin_country === scope))
-    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))
-    .map(o => ({
-      id: o.id, kind: 'order', reference: o.reference_code,
-      who: (o.contact && o.contact.name) || '', detail: `${o.total_qty || 1} empty box(es)`,
-      at: o.submitted_at, href: '#/box-orders'
-    }));
+  // Empty-box orders placed with this branch.
+  if (!origin) for (const o of (d.box_orders || [])) {
+    if (o.status !== 'NEW') continue;
+    if (scope && o.origin_country && o.origin_country !== scope) continue;
+    out.push({ key: 'order:' + o.id, kind: 'order', icon: '📦', reference: o.reference_code,
+      who: (o.contact && o.contact.name) || '', detail: `${o.total_qty || 1} empty box(es) ordered`,
+      at: o.submitted_at, href: '#/box-orders' });
+  }
 
-  const items = [...intakes, ...orders].sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  res.json({ total: items.length, intake_count: intakes.length, order_count: orders.length, items: items.slice(0, 25) });
+  // Notes from the other portals. Your own branch's messages are not news to you.
+  for (const m of (d.messages || [])) {
+    if (m.from_branch === mine) continue;
+    if (!(m.to_branch === 'ALL' || m.to_branch === mine)) continue;
+    out.push({ key: 'msg:' + m.id, kind: 'message', icon: '💬', reference: BRANCH.BRANCH_LABELS[m.from_branch] || m.from_branch,
+      who: m.from_name || '', detail: String(m.body || '').slice(0, 90),
+      at: m.created_at, href: '#chat' });
+  }
+
+  // Settlements that are waiting on the person looking. A branch owes an answer on anything
+  // issued to it; head office owes an answer on anything disputed or already remitted.
+  for (const i of (d.interbranch_invoices || [])) {
+    const toMe = i.to_branch === mine && i.status === 'ISSUED';
+    const forHQ = isHQ && ['DISPUTED', 'REMITTED'].includes(i.status);
+    if (!toMe && !forHQ) continue;
+    const label = i.status === 'ISSUED' ? 'awaiting your acknowledgement'
+      : i.status === 'DISPUTED' ? 'disputed by the branch' : 'remitted — confirm receipt';
+    out.push({ key: 'ib:' + i.id, kind: 'settlement', icon: '🧾', reference: i.invoice_number,
+      who: BRANCH.BRANCH_LABELS[toMe ? i.from_branch : i.to_branch] || '',
+      detail: label, at: i.issued_at || i.created_at, href: '#/accounting/interbranch' });
+  }
+
+  // Philippine-side work: a container off the vessel, and a box that came back undelivered.
+  if (isHQ) {
+    for (const c of (d.containers || [])) {
+      if (!['ARRIVED', 'AT_CUSTOMS', 'RELEASED'].includes(c.status)) continue;
+      // Said the way the warehouse would say it, rather than as a raw status.
+      const stage = { ARRIVED: 'Berthed at Manila — awaiting customs',
+                      AT_CUSTOMS: 'With customs — awaiting release',
+                      RELEASED: 'Released — ready to strip' }[c.status];
+      out.push({ key: 'cont:' + c.id + ':' + c.status, kind: 'container', icon: '🚢',
+        reference: c.container_number, who: c.vessel_name || '', detail: stage,
+        at: c.eta || c.updated_at || c.created_at, href: '#/containers/' + c.id });
+    }
+    for (const b of (d.boxes || [])) {
+      if (b.status !== 'RETURNED') continue;
+      out.push({ key: 'ret:' + b.id, kind: 'returned', icon: '↩️', reference: b.box_number,
+        who: '', detail: 'Returned undelivered — needs re-dispatch',
+        at: b.status_updated_at, href: '#/returns' });
+    }
+  }
+
+  const state = alertStateFor(d, req.user.id);
+  return out
+    .filter(a => state[a.key] !== 'deleted')
+    .map(a => ({ ...a, read: state[a.key] === 'read' }))
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
+
+app.get('/api/alerts', requireRole(...ALL_STAFF), async (req, res) => {
+  const d = db.get();
+  // Messages arrive by replication, so a peer's note only becomes an alert once we have it.
+  await autoSync(d);
+  const all = buildAlerts(req);
+  const unread = all.filter(a => !a.read);
+  const show = String(req.query.show || 'unread');
+  const items = show === 'all' ? all : unread;
+  const byKind = {};
+  for (const a of unread) byKind[a.kind] = (byKind[a.kind] || 0) + 1;
+  res.json({ total: unread.length, by_kind: byKind, read_count: all.length - unread.length,
+             showing: show, items: items.slice(0, 40) });
+});
+
+// Read, unread or gone. Deleting only hides it for this user — the underlying booking or
+// settlement is untouched, which is why this never removes a record.
+app.post('/api/alerts/mark', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  const { keys, state } = req.body || {};
+  const list = Array.isArray(keys) ? keys : (keys ? [keys] : []);
+  if (!list.length) return res.status(400).json({ error: 'Nothing to mark.' });
+  if (!['read', 'unread', 'deleted'].includes(state)) return res.status(400).json({ error: 'Unknown state.' });
+  const mineState = alertStateFor(d, req.user.id);
+  for (const k of list) {
+    const key = String(k);
+    if (state === 'unread') delete mineState[key];
+    else mineState[key] = state;
+  }
+  db.persist();
+  const all = buildAlerts(req);
+  res.json({ ok: true, total: all.filter(a => !a.read).length });
 });
 
 // ---------- portal chat ----------

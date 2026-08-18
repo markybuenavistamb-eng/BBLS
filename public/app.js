@@ -593,36 +593,87 @@ async function loadMyModules() {
 // Work that arrives on its own is the work most easily missed — nobody refreshes a queue they
 // have no reason to think has changed. The bell carries the count so the queue can be ignored
 // until it matters.
-let ALERTS = { total: 0, items: [], intake_count: 0, order_count: 0 };
+let ALERTS = { total: 0, items: [], by_kind: {}, read_count: 0 };
+let ALERT_SHOW = 'unread';        // an alert that has been read is done with, until asked for
 let alertTimer = null;
+let alertMenuFor = null;          // which row has its ⋯ menu open
 
 async function loadAlerts() {
-  try { ALERTS = await api('/api/alerts'); }
+  try { ALERTS = await api('/api/alerts?show=' + ALERT_SHOW); }
   catch (e) { return; }                       // a failed poll is not worth a banner
   paintBell();
+}
+
+// Marking is what makes the list shrink, so it always repaints from the server's answer
+// rather than guessing locally.
+async function markAlert(key, state) {
+  alertMenuFor = null;
+  try { await api('/api/alerts/mark', { method: 'POST', body: { keys: [key], state } }); }
+  catch (e) { showErr(e); }
+  await loadAlerts();
+}
+async function markAllRead() {
+  const keys = (ALERTS.items || []).filter(i => !i.read).map(i => i.key);
+  if (!keys.length) return;
+  try { await api('/api/alerts/mark', { method: 'POST', body: { keys, state: 'read' } }); }
+  catch (e) { showErr(e); }
+  await loadAlerts();
+}
+function toggleAlertShow() {
+  ALERT_SHOW = ALERT_SHOW === 'unread' ? 'all' : 'unread';
+  loadAlerts();
+}
+function toggleAlertMenu(key) {
+  alertMenuFor = alertMenuFor === key ? null : key;
+  paintBell();
+}
+// Opening the thing is reading it, so the click marks it before it navigates.
+async function openAlert(key, href) {
+  await markAlert(key, 'read');
+  closeAlerts();
+  if (href === '#chat') { toggleChat(); return; }
+  location.hash = href;
 }
 function paintBell() {
   const host = document.getElementById('alertMount');
   if (!host) return;
   const open = host.querySelector('.bell-panel:not([hidden])');
   const n = ALERTS.total || 0;
+  const items = ALERTS.items || [];
+  const showingAll = ALERT_SHOW === 'all';
   host.innerHTML = `
-    <button type="button" class="bell" onclick="toggleAlerts()" title="New online bookings and box orders">
+    <button type="button" class="bell" onclick="toggleAlerts()" title="Bookings, box orders, branch messages and anything else waiting on you">
       <span class="bell-ico">🔔</span>
       <span class="bell-txt">${VI.t('alerts.title')}</span>
       ${n ? `<span class="bell-badge">${n > 99 ? '99+' : n}</span>` : ''}
     </button>
     <div class="bell-panel" ${open ? '' : 'hidden'}>
-      ${n ? '' : `<div class="bell-empty muted">${VI.t('alerts.none')}</div>`}
-      ${(ALERTS.items || []).map(it => `
-        <a class="bell-item" href="${it.href}" onclick="closeAlerts()">
-          <span class="bell-kind ${it.kind === 'intake' ? 'k-intake' : 'k-order'}">${it.kind === 'intake' ? '📥' : '📦'}</span>
-          <span class="bell-body">
-            <b>${esc(it.reference)}</b>
-            <span class="muted">${esc(it.who || '')} · ${esc(it.detail || '')}</span>
-          </span>
-          <span class="bell-when muted">${esc(sinceText(it.at))}</span>
-        </a>`).join('')}
+      <div class="bell-tools">
+        <button type="button" class="bell-link" onclick="toggleAlertShow()">
+          ${showingAll ? VI.t('alerts.showUnread') : VI.t('alerts.showAll')}${!showingAll && ALERTS.read_count ? ` (${ALERTS.read_count})` : ''}
+        </button>
+        ${n ? `<button type="button" class="bell-link" onclick="markAllRead()">${VI.t('alerts.markAll')}</button>` : ''}
+      </div>
+      ${items.length ? '' : `<div class="bell-empty muted">${showingAll ? VI.t('alerts.noneAtAll') : VI.t('alerts.none')}</div>`}
+      ${items.map(it => `
+        <div class="bell-item${it.read ? ' is-read' : ''}">
+          <button type="button" class="bell-open" onclick="openAlert('${esc(it.key)}', '${esc(it.href)}')">
+            <span class="bell-kind">${it.icon || '🔔'}</span>
+            <span class="bell-body">
+              <b>${esc(it.reference || '')}</b>
+              <span class="muted">${esc([it.who, it.detail].filter(Boolean).join(' · '))}</span>
+            </span>
+            <span class="bell-when muted">${esc(sinceText(it.at))}</span>
+          </button>
+          <button type="button" class="bell-more" onclick="toggleAlertMenu('${esc(it.key)}')" aria-label="More">⋯</button>
+          ${alertMenuFor === it.key ? `
+            <div class="bell-menu">
+              ${it.read
+                ? `<button type="button" onclick="markAlert('${esc(it.key)}','unread')">${VI.t('alerts.markUnread')}</button>`
+                : `<button type="button" onclick="markAlert('${esc(it.key)}','read')">${VI.t('alerts.markRead')}</button>`}
+              <button type="button" class="danger" onclick="markAlert('${esc(it.key)}','deleted')">${VI.t('alerts.delete')}</button>
+            </div>` : ''}
+        </div>`).join('')}
     </div>`;
 }
 // Relative time reads better than a date here: "2h ago" says whether it needs attention now.
@@ -639,8 +690,15 @@ function toggleAlerts() {
   const panel = document.querySelector('#alertMount .bell-panel');
   if (!panel) return;
   panel.hidden = !panel.hidden;
+  alertMenuFor = null;
   if (!panel.hidden) loadAlerts();
 }
+document.addEventListener('click', (e) => {
+  const host = document.getElementById('alertMount');
+  if (!host || host.contains(e.target)) return;
+  const panel = host.querySelector('.bell-panel');
+  if (panel && !panel.hidden) { panel.hidden = true; alertMenuFor = null; }
+});
 function closeAlerts() {
   const panel = document.querySelector('#alertMount .bell-panel');
   if (panel) panel.hidden = true;
@@ -678,7 +736,7 @@ function chatMount() {
     <div class="chat-head">
       <b>${VI.t('chat.title')}</b>
       <select id="chatTo" class="chat-to" title="Who sees this"></select>
-      <button type="button" class="chat-x" onclick="toggleChat()" aria-label="Close">×</button>
+      <button type="button" class="chat-x" onclick="toggleChat()" aria-label="Minimize" title="Minimize">–</button>
     </div>
     <div class="chat-log" id="chatLog"><div class="muted" style="padding:10px">Loading…</div></div>
     <form class="chat-form" onsubmit="return sendChat(event)">

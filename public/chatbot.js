@@ -236,7 +236,7 @@
             <b>Kuya Vic</b>
             <div class="bot-sub">VFIC helper · sumasagot agad</div>
           </div>
-          <button class="bot-x" type="button" aria-label="Isara">×</button>
+          <button class="bot-x" type="button" aria-label="I-minimize" title="I-minimize">–</button>
         </div>
         <div class="bot-log"></div>
         <div class="bot-chips"></div>
@@ -294,11 +294,13 @@
       }
       input.focus();
     }
-    function close() { panel.hidden = true; fab.classList.remove('bot-hidden'); }
+    // Minimise, not close: the conversation stays exactly as it was, so reopening carries on
+    // rather than greeting them again as though they had never asked anything.
+    function minimize() { panel.hidden = true; fab.classList.remove('bot-hidden'); }
 
     fab.addEventListener('click', open);
-    panel.querySelector('.bot-x').addEventListener('click', close);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) close(); });
+    panel.querySelector('.bot-x').addEventListener('click', minimize);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) minimize(); });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);

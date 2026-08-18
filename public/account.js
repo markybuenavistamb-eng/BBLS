@@ -83,11 +83,20 @@ function flash(msg, cls = 'success') {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
-function mountToggle() { const el = gid('langMount'); if (el && window.VI) el.innerHTML = VI.toggleHtml(); }
+// The sender's portal keeps one language: whatever was chosen on the public site carries
+// over through VI, but the toggle itself is gone from here — a person signing in to check
+// their boxes should not be offered a settings control at the top of the page.
+// A way back to the site they came from is more use in that spot.
+function wireBack() {
+  const b = gid('acctBack');
+  if (!b) return;
+  b.addEventListener('click', (e) => {
+    if (history.length > 1) { e.preventDefault(); history.back(); }
+  });
+}
 
 /* ---------- signed-out: sign in / sign up ---------- */
 function renderAuth(mode) {
-  mountToggle();
   const signup = mode === 'signup';
   gid('app').innerHTML = `
     <div style="text-align:center;margin:6px 0 14px">
@@ -162,7 +171,6 @@ async function doSignout() {
 
 /* ---------- signed-in ---------- */
 async function renderAccount() {
-  mountToggle();
   gid('app').innerHTML = `
     <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px">
       <div>
@@ -306,7 +314,7 @@ function drawTrack(cell, d) {
 
 /* ---------- boot ---------- */
 (async () => {
-  mountToggle();
+  wireBack();
   try { ME = await api('/api/public/sender/me'); renderAccount(); }
   catch (e) { renderAuth('signin'); }
 })();

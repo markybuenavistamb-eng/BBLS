@@ -14,7 +14,14 @@
 
       /* alerts bell + portal chat */
       'alerts.title': 'Alerts',
-      'alerts.none': 'Nothing new. Online bookings and empty-box orders appear here as they arrive.',
+      'alerts.none': 'All caught up. Nothing is waiting on you.',
+      'alerts.noneAtAll': 'No alerts at all yet — bookings, box orders and branch messages appear here.',
+      'alerts.showAll': 'Show read',
+      'alerts.showUnread': 'Show unread only',
+      'alerts.markAll': 'Mark all read',
+      'alerts.markRead': 'Mark as read',
+      'alerts.markUnread': 'Mark as unread',
+      'alerts.delete': 'Delete',
       'chat.title': 'Portal chat',
       'chat.placeholder': 'Message your team…',
       'chat.send': 'Send',
@@ -155,7 +162,14 @@
 
       /* alerts bell + portal chat */
       'alerts.title': 'Abiso',
-      'alerts.none': 'Walang bago. Lilitaw dito ang online booking at order ng walang lamang kahon pagdating.',
+      'alerts.none': 'Wala nang naghihintay sa inyo.',
+      'alerts.noneAtAll': 'Wala pang abiso — lilitaw dito ang booking, order ng kahon at mensahe ng sangay.',
+      'alerts.showAll': 'Ipakita ang nabasa',
+      'alerts.showUnread': 'Hindi pa nabasa lang',
+      'alerts.markAll': 'Markahang lahat nabasa',
+      'alerts.markRead': 'Markahang nabasa',
+      'alerts.markUnread': 'Markahang hindi pa nabasa',
+      'alerts.delete': 'Burahin',
       'chat.title': 'Chat ng portal',
       'chat.placeholder': 'Magmensahe sa inyong grupo…',
       'chat.send': 'Ipadala',
