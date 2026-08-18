@@ -27,6 +27,7 @@
       'chat.send': 'Send',
       'chat.everyone': 'Everyone',
       'chat.empty': 'No messages yet. Notes reach the other branches as the portals sync.',
+      'chat.newFrom': 'New messages',
 
       /* nav */
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
@@ -175,6 +176,7 @@
       'chat.send': 'Ipadala',
       'chat.everyone': 'Lahat',
       'chat.empty': 'Wala pang mensahe. Naaabot ang mga nota sa ibang sangay kapag nag-sync ang mga portal.',
+      'chat.newFrom': 'Mga bagong mensahe',
 
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',

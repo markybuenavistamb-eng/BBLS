@@ -1239,6 +1239,13 @@ function chatBranchOf(user) {
 function chatVisible(m, mine) {
   return m.to_branch === 'ALL' || m.to_branch === mine || m.from_branch === mine;
 }
+// How far each person has read. Kept per user rather than per device, so the count does not
+// reset on reload and does not follow them to a second screen already cleared.
+function chatReadAt(d, userId) {
+  d.chat_reads = d.chat_reads || {};
+  return d.chat_reads[String(userId)] || '';
+}
+
 app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
   const d = db.get();
   d.messages = d.messages || [];
@@ -1246,12 +1253,47 @@ app.get('/api/messages', requireRole(...ALL_STAFF), async (req, res) => {
   await autoSync(d);
   const mine = chatBranchOf(req.user);
   const since = String(req.query.since || '');
-  const list = d.messages
+  const visible = d.messages
     .filter(m => chatVisible(m, mine))
-    .filter(m => !since || String(m.created_at) > since)
-    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-    .slice(-200);
-  res.json({ branch: mine, messages: list });
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const list = (since ? visible.filter(m => String(m.created_at) > since) : visible).slice(-200);
+
+  // Unread is counted from the mark, and never includes what this branch said itself —
+  // your own message coming back from the server is not news.
+  const readAt = chatReadAt(d, req.user.id);
+  const unreadList = visible.filter(m => m.from_branch !== mine && String(m.created_at) > readAt);
+  const byBranch = {};
+  for (const m of unreadList) byBranch[m.from_branch] = (byBranch[m.from_branch] || 0) + 1;
+
+  res.json({
+    branch: mine, messages: list,
+    unread: unreadList.length, unread_by_branch: byBranch,
+    last_read_at: readAt,
+    first_unread_at: unreadList.length ? unreadList[0].created_at : null
+  });
+});
+
+// Reading the panel is what clears the count. The same act clears those messages from the
+// bell, because a note read in the chat is not still waiting for you anywhere else.
+app.post('/api/messages/read', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  d.messages = d.messages || [];
+  d.chat_reads = d.chat_reads || {};
+  const at = String((req.body || {}).at || new Date().toISOString());
+  const prev = chatReadAt(d, req.user.id);
+  // Only ever move forward, or a slow request could un-read newer messages.
+  d.chat_reads[String(req.user.id)] = at > prev ? at : prev;
+
+  const mine = chatBranchOf(req.user);
+  const state = alertStateFor(d, req.user.id);
+  for (const m of d.messages) {
+    if (m.from_branch === mine || !chatVisible(m, mine)) continue;
+    if (String(m.created_at) > at) continue;
+    const key = 'msg:' + m.id;
+    if (state[key] !== 'deleted') state[key] = 'read';
+  }
+  db.persist();
+  res.json({ ok: true, last_read_at: d.chat_reads[String(req.user.id)] });
 });
 app.post('/api/messages', requireRole(...ALL_STAFF), (req, res) => {
   const d = db.get();

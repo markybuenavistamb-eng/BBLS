@@ -714,8 +714,9 @@ function startAlerts() {
 // entirely outside the system. Messages replicate like any other record, so a note written
 // in Bangkok reaches Manila the same way a box does — which also means it is not instant,
 // and the panel says so rather than pretending otherwise.
-let CHAT = { open: false, branch: null, msgs: [], last: '', unread: 0, to: 'ALL' };
+let CHAT = { open: false, branch: null, msgs: [], unread: 0, byBranch: {}, firstUnreadAt: null, to: 'ALL' };
 let chatTimer = null;
+let chatToastFor = null;      // which message the toast is currently announcing
 
 function chatMount() {
   if (document.getElementById('chatFab')) return;
@@ -762,15 +763,53 @@ async function loadChat(initial) {
   try { r = await api('/api/messages'); }
   catch (e) { return; }
   CHAT.branch = r.branch;
-  const fresh = r.messages || [];
-  const grew = fresh.length > CHAT.msgs.length;
-  CHAT.msgs = fresh;
-  if (grew && !CHAT.open) {
-    CHAT.unread += 1;
-    const b = document.querySelector('#chatFab .chat-badge');
-    if (b) { b.hidden = false; b.textContent = CHAT.unread > 9 ? '9+' : String(CHAT.unread); }
+  const before = CHAT.unread;
+  CHAT.msgs = r.messages || [];
+  // The count comes from the server against a stored read mark, so it survives a reload and
+  // means "messages you have not read" rather than "times this poll saw the list grow".
+  CHAT.unread = r.unread || 0;
+  CHAT.byBranch = r.unread_by_branch || {};
+  CHAT.firstUnreadAt = r.first_unread_at || null;
+  paintChatBadge();
+
+  // Something new arrived while they were working elsewhere: say so once, quietly, and let
+  // them open it. Without this the only sign is a number on a button they are not looking at.
+  if (!CHAT.open && CHAT.unread > before) {
+    const newest = CHAT.msgs.filter(m => m.from_branch !== CHAT.branch).slice(-1)[0];
+    if (newest && chatToastFor !== newest.id) { chatToastFor = newest.id; chatToast(newest); }
   }
-  if (CHAT.open) paintChat(initial);
+  if (CHAT.open) { paintChat(initial); markChatRead(); }
+}
+
+function paintChatBadge() {
+  const b = document.querySelector('#chatFab .chat-badge');
+  if (!b) return;
+  b.hidden = !CHAT.unread;
+  b.textContent = CHAT.unread > 9 ? '9+' : String(CHAT.unread);
+}
+
+// Tell the server how far they have read. That also clears these messages from the bell,
+// so the two never disagree about whether a note still needs attention.
+async function markChatRead() {
+  if (!CHAT.unread) return;
+  try { await api('/api/messages/read', { method: 'POST', body: { at: new Date().toISOString() } }); }
+  catch (e) { return; }
+  CHAT.unread = 0; CHAT.byBranch = {};
+  paintChatBadge();
+  loadAlerts();
+}
+
+function chatToast(m) {
+  document.querySelectorAll('.chat-toast').forEach(t => t.remove());
+  const el = document.createElement('div');
+  el.className = 'chat-toast no-print';
+  el.innerHTML = `
+    <div class="chat-toast-head">💬 ${esc(BRANCH_LABEL[m.from_branch] || m.from_branch)}
+      <span class="muted">· ${esc(m.from_name || '')}</span></div>
+    <div class="chat-toast-body">${esc(String(m.body || '').slice(0, 120))}</div>`;
+  el.onclick = () => { el.remove(); if (!CHAT.open) toggleChat(); };
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 8000);
 }
 
 function paintChat(scrollToEnd) {
@@ -783,10 +822,18 @@ function paintChat(scrollToEnd) {
     sel.onchange = () => { CHAT.to = sel.value; };
   }
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+  const mark = CHAT.firstUnreadAt;
+  let drewDivider = false;
   log.innerHTML = CHAT.msgs.length ? CHAT.msgs.map(m => {
     const mine = m.from_branch === CHAT.branch;
     const to = m.to_branch === 'ALL' ? VI.t('chat.everyone') : (BRANCH_LABEL[m.to_branch] || m.to_branch);
-    return `<div class="chat-msg ${mine ? 'mine' : ''}">
+    // One line showing where they stopped reading, drawn before the first unread message.
+    let divider = '';
+    if (mark && !drewDivider && !mine && String(m.created_at) >= String(mark)) {
+      drewDivider = true;
+      divider = `<div class="chat-newline"><span>${VI.t('chat.newFrom')}</span></div>`;
+    }
+    return divider + `<div class="chat-msg ${mine ? 'mine' : ''}">
       <div class="chat-meta">${esc(m.from_name || '')} · ${esc(BRANCH_LABEL[m.from_branch] || m.from_branch)}
         <span class="muted">→ ${esc(to)}</span> · ${esc(sinceText(m.created_at))}</div>
       <div class="chat-bubble">${esc(m.body)}</div>
@@ -800,10 +847,8 @@ function toggleChat() {
   const panel = document.getElementById('chatPanel');
   CHAT.open = panel.hidden;
   panel.hidden = !CHAT.open;
-  const b = document.querySelector('#chatFab .chat-badge');
   if (CHAT.open) {
-    CHAT.unread = 0;
-    if (b) b.hidden = true;
+    document.querySelectorAll('.chat-toast').forEach(t => t.remove());
     loadChat(true);
     const i = document.getElementById('chatInput');
     if (i) i.focus();

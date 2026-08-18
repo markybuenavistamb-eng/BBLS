@@ -1115,3 +1115,24 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .chat-panel[hidden],
 .bot-panel[hidden],
 .bell-panel[hidden] { display: none !important; }
+
+/* ---------- chat notifications ---------- */
+/* Sits above the chat button so a message can be noticed without watching for a badge. */
+.chat-toast {
+  position: fixed; right: 18px; bottom: 82px; z-index: 61;
+  width: min(300px, calc(100vw - 36px)); cursor: pointer;
+  background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--primary);
+  border-radius: 10px; padding: 9px 12px; box-shadow: 0 8px 22px rgba(0,0,0,.2);
+  animation: chatToastIn .18s ease-out;
+}
+.chat-toast:hover { border-color: var(--primary); }
+.chat-toast-head { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+.chat-toast-body { font-size: 12.5px; color: var(--muted); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@keyframes chatToastIn { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+/* Where the reader left off. */
+.chat-newline { display: flex; align-items: center; gap: 8px; margin: 10px 0 8px; }
+.chat-newline::before, .chat-newline::after { content: ''; flex: 1; height: 1px; background: var(--primary); opacity: .45; }
+.chat-newline span { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--primary); white-space: nowrap; }
