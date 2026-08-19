@@ -237,11 +237,38 @@ function cmpValues(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// A table on a phone is a row you read a quarter of at a time. Rather than shrink it, each
+// row becomes a card and every cell carries its column name — the heading moves next to the
+// value instead of sitting a screen and a half away at the top.
+//
+// The labels are stamped here, in markup, so the same table serves both layouts and no page
+// has to know which one it is in.
+function labelCellsForCards(table) {
+  const all = Array.from(table.rows);
+  const head = all.find(r => r.querySelector('th'));
+  if (!head) return;
+  head.classList.add('tbl-head-row');
+  const labels = Array.from(head.cells).map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+  for (const row of all) {
+    if (row === head) continue;
+    // A row spanning the table is a placeholder, not a record; it reads fine as it is.
+    if (row.querySelector('[colspan]')) { row.classList.add('tbl-filler-row'); continue; }
+    Array.from(row.cells).forEach((td, i) => {
+      if (!td.hasAttribute('data-label')) td.setAttribute('data-label', labels[i] || '');
+    });
+  }
+  table.classList.add('as-cards');
+}
+
 function enhanceTables(root) {
   (root || document).querySelectorAll('.table-scroll table').forEach(table => {
-    if (table.dataset.tools) return;                       // already wired
     if (table.closest('.receipt, .boc-page, .no-tools')) return;   // printed documents keep their shape
     if (table.classList.contains('rc-table')) return;
+
+    // Card labels go on every list, however short — the toolbar below has its own thresholds.
+    if (!table.dataset.carded) { table.dataset.carded = '1'; labelCellsForCards(table); }
+
+    if (table.dataset.tools) return;                       // already wired
 
     const all = Array.from(table.rows);
     const head = all.find(r => r.querySelector('th'));

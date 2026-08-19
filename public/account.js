@@ -286,6 +286,7 @@ async function loadDrafts() {
         </tr>`).join('')}
       </table></div>`
       : `<span class="muted">No saved drafts yet. When you start a booking you can save it and come back later.</span>`;
+    cardifyTables();
   } catch (e) { gid('drafts').innerHTML = `<span class="error">${esc(e.message)}</span>`; }
 }
 async function delDraft(id) {
@@ -330,10 +331,32 @@ async function loadShipments() {
         </table></div>
       </div>`).join('')
       : `<span class="muted">No shipments yet. Once VFIC receives your box(es), they will appear here with live tracking.</span>`;
+    cardifyTables();
   } catch (e) {
     gid('requests').innerHTML = `<span class="error">${esc(e.message)}</span>`;
     gid('shipments').innerHTML = '';
   }
+}
+
+// Stamp each cell with the column it came from, so the same table can stand up as a stack
+// of cards on a narrow screen. The staff portal does this inside its table enhancer; here
+// there is no enhancer, so the render calls it directly.
+function cardifyTables() {
+  document.querySelectorAll('.table-scroll table').forEach(table => {
+    const rows = Array.from(table.rows);
+    const head = rows.find(r => r.querySelector('th'));
+    if (!head) return;
+    head.classList.add('tbl-head-row');
+    const labels = Array.from(head.cells).map(c => (c.textContent || '').replace(/\s+/g, ' ').trim());
+    for (const row of rows) {
+      if (row === head) continue;
+      if (row.querySelector('[colspan]')) { row.classList.add('tbl-filler-row'); continue; }
+      Array.from(row.cells).forEach((td, i) => {
+        if (!td.hasAttribute('data-label')) td.setAttribute('data-label', labels[i] || '');
+      });
+    }
+    table.classList.add('as-cards');
+  });
 }
 
 /* ---------- tracking, in the account itself ---------- */
