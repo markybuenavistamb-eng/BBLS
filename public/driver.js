@@ -61,7 +61,24 @@
       </div>`;
     const box = gid('drvCode');
     box.focus();
-    box.addEventListener('input', () => { box.value = box.value.toUpperCase(); });
+    // The code is read out over the phone as two halves, so the dash appears on its own
+    // rather than being one more thing to get right while somebody is talking. It is only
+    // added once there is a fifth character, or backspacing into it would put it straight
+    // back and the field would refuse to empty.
+    const format = (raw) => {
+      const clean = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+      return clean.length > 4 ? clean.slice(0, 4) + '-' + clean.slice(4) : clean;
+    };
+    box.addEventListener('input', () => {
+      const atEnd = box.selectionStart === box.value.length;
+      const before = box.value;
+      const next = format(before);
+      if (next === before) return;
+      box.value = next;
+      // Typing forwards is the normal case; keep the caret at the end so the inserted dash
+      // does not push it backwards. Editing mid-code is rare enough to leave alone.
+      if (atEnd) box.setSelectionRange(next.length, next.length);
+    });
     box.addEventListener('keydown', e => { if (e.key === 'Enter') drvLogin(); });
   }
 
