@@ -1861,10 +1861,16 @@ async function runShipmentQuote() {
 }
 
 // Display name from BOC name parts (Given Middle Family, Suffix).
+// "N/A" is a real answer on the BOC form, not a missing value — a person with no middle name
+// types it. It must never reach a customer record, or the same consignee comes back as a new
+// one on every booking.
+const NOT_GIVEN = (v) => !v || /^n\.?\/?a\.?$/i.test(String(v).trim());
 function personName(p) {
   if (!p) return '';
-  const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
-  return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim() + (suffix ? ' ' + suffix : '');
+  return [p.given_name, p.middle_name, p.family_name, p.suffix]
+    .filter(v => !NOT_GIVEN(v))
+    .map(v => String(v).trim())
+    .join(' ');
 }
 // PSGC region names → the 17-region delivery-region code (used for sorting/dispatch).
 function mapPsgcRegion(name) {

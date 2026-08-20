@@ -207,11 +207,13 @@ function sanitizeItems(items) {
 }
 function customerPublic(c) { return c; }
 // Build a display name from BOC name parts (Given Middle Family, Suffix).
+const NOT_GIVEN = (v) => !v || /^n\.?\/?a\.?$/i.test(String(v).trim());
 function personName(p) {
   if (!p) return '';
-  const suffix = p.suffix && !/^n\/?a$/i.test(p.suffix) ? p.suffix : '';
-  return [p.given_name, p.middle_name, p.family_name].filter(Boolean).join(' ').trim()
-    + (suffix ? ` ${suffix}` : '');
+  return [p.given_name, p.middle_name, p.family_name, p.suffix]
+    .filter(v => !NOT_GIVEN(v))
+    .map(v => String(v).trim())
+    .join(' ');
 }
 function boxDetail(box) {
   const d = db.get();
