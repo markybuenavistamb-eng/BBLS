@@ -1225,16 +1225,24 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     boxIds = (d.boxes || []).filter(x => x.trucking_assignment_id === trip.id).map(x => x.id);
     if (!boxIds.length) return res.status(400).json({ error: 'That trip has no boxes assigned yet.' });
   } else {
-    // At origin the run is whatever is sitting at the branch counter waiting to be collected.
+    // A collection run is the senders who asked to be picked up and are still waiting. A
+    // sender who chose to drop the box off is not on anyone's route.
     const scope = effectiveScope(req);
     const wanted = Array.isArray(b.box_ids) ? b.box_ids.map(Number) : null;
     const shipById = new Map((d.shipments || []).map(x => [x.id, x]));
     boxIds = (d.boxes || [])
-      .filter(x => x.status === 'RECEIVED_BRANCH')
-      .filter(x => { const sh = shipById.get(x.shipment_id); return !scope || (sh && sh.origin_country === scope); })
+      .filter(x => x.status === 'CREATED')
+      .filter(x => {
+        const sh = shipById.get(x.shipment_id);
+        if (!sh) return false;
+        if (scope && sh.origin_country !== scope) return false;
+        return sh.collection === 'PICKUP';
+      })
       .filter(x => !wanted || wanted.includes(x.id))
       .map(x => x.id);
-    if (!boxIds.length) return res.status(400).json({ error: 'No boxes are waiting at the branch office for collection.' });
+    if (!boxIds.length) {
+      return res.status(400).json({ error: 'No senders are waiting for a pick-up right now. Bookings marked for drop-off are brought in by the sender.' });
+    }
   }
 
   const pass = {
@@ -1300,20 +1308,34 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
     const receiver = (d.customers || []).find(c => c.id === x.receiver_id) || {};
     const shipment = (d.shipments || []).find(sh => sh.id === x.shipment_id) || {};
     const sender = (d.customers || []).find(c => c.id === shipment.sender_id) || {};
-    return {
+    const base = {
       id: x.id, box_number: x.box_number, status: x.status,
       status_label: SM.FRIENDLY[x.status] || x.status,
       size_label: (BOXSIZE.bySize(x.size_category) || {}).label || x.size_category,
       weight_kg: x.weight_kg,
       receiver_name: receiver.full_name || '',
-      receiver_phone: pass.kind === 'DELIVERY' ? (receiver.phone_primary || '') : '',
-      address: pass.kind === 'DELIVERY'
-        ? [receiver.address_line, receiver.barangay, receiver.city_municipality, receiver.province]
-            .filter(Boolean).join(', ')
-        : '',
-      landmark: pass.kind === 'DELIVERY' ? (receiver.landmark || '') : '',
       sender_name: sender.full_name || ''
     };
+    if (pass.kind === 'DELIVERY') {
+      // Manila loads at the Philippine warehouse and drives to the consignee's door.
+      return { ...base,
+        who: receiver.full_name || '',
+        phone: receiver.phone_primary || '',
+        address: [receiver.address_line, receiver.barangay, receiver.city_municipality, receiver.province]
+          .filter(Boolean).join(', '),
+        landmark: receiver.landmark || '',
+        window: '' };
+    }
+    // A collection driver is going to the sender's own address, so that is the address that
+    // matters — the one the sender gave when they asked to be picked up, falling back to the
+    // address on their record.
+    const pu = (shipment.boc && shipment.boc.pickup) || {};
+    return { ...base,
+      who: sender.full_name || '',
+      phone: sender.phone_primary || '',
+      address: pu.address || sender.address_line || '',
+      landmark: pu.notes || sender.landmark || '',
+      window: [pu.date, pu.time_window].filter(Boolean).join(' · ') };
   });
   res.json({
     kind: pass.kind, driver_name: pass.driver_name,
@@ -1347,17 +1369,18 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
   // did it. The role is borrowed only so the state machine can judge the transition.
   const actor = { id: null, name: pass.driver_name + ' (driver)', role: 'WAREHOUSE' };
 
-  // Collection at the branch counter is a timeline entry rather than a state change: the box
-  // is still the branch's until the warehouse books it in.
+  // Collecting from the sender is a timeline entry rather than a state change: the box has
+  // left the sender but nobody at VFIC has booked it in yet, and inventing a status for the
+  // back of a van would be a place boxes could get lost.
   if (pass.kind === 'PICKUP' && action === 'PICKUP') {
-    if (box.status !== 'RECEIVED_BRANCH') {
-      return res.status(400).json({ error: box.box_number + ' is not waiting at the branch office.' });
+    if (box.status !== 'CREATED') {
+      return res.status(400).json({ error: box.box_number + ' is not waiting for collection.' });
     }
     d.status_events.push({
       id: db.nextId('status_event'), box_id: box.id,
       from_status: box.status, to_status: box.status,
       actor_user_id: null,
-      note: 'Collected from the branch office by ' + pass.driver_name,
+      note: 'Collected from the sender by ' + pass.driver_name,
       created_at: new Date().toISOString()
     });
     box.picked_up_at = new Date().toISOString();

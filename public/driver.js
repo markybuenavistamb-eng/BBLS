@@ -33,14 +33,14 @@
   // the shift reads rather than as a list of statuses.
   const ACTIONS = {
     DELIVERY: [
-      { key: 'LOAD',    label: 'Load on truck',   hint: 'Scan each box as it goes on' },
-      { key: 'DEPART',  label: 'Out for delivery', hint: 'Scan when you set off' },
-      { key: 'DELIVER', label: 'Delivered',        hint: 'Scan at the door, once handed over' },
-      { key: 'RETURN',  label: 'Could not deliver', hint: 'Scan if it is coming back with you', danger: true }
+      { key: 'LOAD',    label: 'Loaded at PH warehouse', hint: 'Scan each box as it goes on the truck' },
+      { key: 'DEPART',  label: 'Out for delivery',       hint: 'Scan when you set off on the route' },
+      { key: 'DELIVER', label: 'Delivered',              hint: "Scan at the receiver's door, once handed over" },
+      { key: 'RETURN',  label: 'Could not deliver',      hint: 'Scan if it is coming back with you', danger: true }
     ],
     PICKUP: [
-      { key: 'PICKUP', label: 'Collected at branch', hint: 'Scan each box as you load it' },
-      { key: 'DROP',   label: 'Handed to warehouse', hint: 'Scan on arrival at the origin warehouse' }
+      { key: 'PICKUP', label: 'Picked up from sender',  hint: "Scan each box as you load it at the sender's address" },
+      { key: 'DROP',   label: 'Handed to warehouse',    hint: 'Scan on arrival at the origin warehouse' }
     ]
   };
 
@@ -92,7 +92,7 @@
     const actions = ACTIONS[RUN.kind];
     const title = RUN.kind === 'DELIVERY'
       ? (RUN.trip_number ? 'Delivery · ' + RUN.trip_number : 'Delivery run')
-      : 'Collection · ' + RUN.branch_label;
+      : 'Sender pick-ups · ' + RUN.branch_label;
 
     gid('drvApp').innerHTML = `
       <div class="drv-head">
@@ -118,7 +118,7 @@
 
       <div id="drvLog" class="drv-log"></div>
 
-      <div class="drv-list-title">On this run</div>
+      <div class="drv-list-title" id="drvListTitle">On this run</div>
       <div id="drvList" class="drv-list"></div>`;
 
     gid('drvBox').addEventListener('keydown', e => { if (e.key === 'Enter') drvManual(); });
@@ -213,16 +213,20 @@
     const done = RUN.kind === 'DELIVERY'
       ? ['DELIVERED', 'RETURNED', 'CANCELLED']
       : ['RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT'];
+    const heading = RUN.kind === 'DELIVERY' ? 'Deliver to' : 'Collect from';
+    const t = gid('drvListTitle');
+    if (t) t.textContent = heading;
     gid('drvList').innerHTML = RUN.boxes.map(b => `
       <div class="drv-box${done.includes(b.status) ? ' done' : ''}">
         <div class="drv-box-top">
           <b>${esc(b.box_number)}</b>
           <span class="drv-box-status">${esc(b.status_label)}</span>
         </div>
-        <div class="muted">${esc(b.receiver_name || b.sender_name || '')}${b.size_label ? ' · ' + esc(b.size_label) : ''}</div>
+        <div class="drv-box-who">${esc(b.who || b.receiver_name || b.sender_name || '')}${b.size_label ? ' · ' + esc(b.size_label) : ''}</div>
         ${b.address ? `<div class="drv-box-addr">${esc(b.address)}</div>` : ''}
-        ${b.landmark ? `<div class="muted drv-box-lm">Landmark: ${esc(b.landmark)}</div>` : ''}
-        ${b.receiver_phone ? `<a class="drv-call" href="tel:${esc(b.receiver_phone)}">📞 ${esc(b.receiver_phone)}</a>` : ''}
+        ${b.window ? `<div class="drv-box-when">🕑 ${esc(b.window)}</div>` : ''}
+        ${b.landmark ? `<div class="muted drv-box-lm">${esc(b.landmark)}</div>` : ''}
+        ${b.phone ? `<a class="drv-call" href="tel:${esc(b.phone)}">📞 ${esc(b.phone)}</a>` : ''}
       </div>`).join('');
   }
 

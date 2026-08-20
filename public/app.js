@@ -3172,15 +3172,15 @@ async function pageDriverPasses() {
             .map(t => `<option value="${t.id}">${esc(t.trip_number)} · ${esc(t.driver_name || '')} · ${t.box_count} box(es)</option>`).join('')}
         </select>
         <div class="muted" style="font-size:12px;margin-top:4px">
-          The pass covers the boxes already assigned to that trip, and closes when they are all delivered.
+          The driver loads these at the PH warehouse and delivers to the receivers. The pass closes when every box is delivered or comes back.
         </div>
         <button style="margin-top:12px" onclick="issuePass('DELIVERY')">Issue delivery pass</button>`
       : `
         <div class="muted" style="font-size:12.5px;margin-top:6px">
-          A collection pass covers every box currently waiting at this branch office, and closes
+          A pick-up pass covers every sender who asked to be collected and is still waiting, and closes
           once the origin warehouse has booked them all in.
         </div>
-        <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue collection pass</button>`}
+        <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue pick-up pass</button>`}
       <div class="error" id="dpErr"></div>
       <div id="dpIssued"></div>
     </div>
