@@ -609,7 +609,7 @@ const NAV2 = [
   ['#/origin-warehouse', 'nav.originwh', 'warehouse', 'origin_warehouse'],
   ['#/warehouse', 'nav.warehouse', 'warehouse', 'ph_warehouse'],
   ['#/trips', 'nav.trips', 'truck', 'trips'],
-  ['#/driver-passes', 'nav.driverpasses', 'truck', 'trips'],
+  ['#/driver-passes', 'nav.driverpasses', 'truck', 'driver_passes'],
   ['#/returns', 'nav.returns', 'undo', 'returns'],
   { section: 'nav.section.people' },
   ['#/customers', 'nav.customers', 'users', 'customers'],
