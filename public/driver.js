@@ -176,10 +176,99 @@
     submit(v);
   };
 
-  async function submit(code) {
+  // Who took the box, remembered per stop. Three boxes handed to one person at one door is
+  // one answer, not three — asking again for each is how a driver learns to type anything.
+  const receivedByStop = {};
+  let lastAnswerFor = null;
+
+  function askText({ title, hint, value = '', confirmLabel = 'Save' }) {
+    return new Promise(resolve => {
+      const back = document.createElement('div');
+      back.className = 'drv-ask';
+      back.innerHTML = `
+        <div class="drv-ask-box">
+          <h2>${esc(title)}</h2>
+          ${hint ? `<p class="muted">${esc(hint)}</p>` : ''}
+          <input class="drv-ask-input" value="${esc(value)}" autocomplete="name" enterkeyhint="done">
+          <div class="drv-ask-actions">
+            <button class="drv-btn secondary" data-no>Cancel</button>
+            <button class="drv-btn" data-yes>${esc(confirmLabel)}</button>
+          </div>
+        </div>`;
+      const input = back.querySelector('.drv-ask-input');
+      const done = (v) => { back.remove(); resolve(v); };
+      back.addEventListener('click', (e) => {
+        if (e.target.hasAttribute('data-no') || e.target === back) done(null);
+        if (e.target.hasAttribute('data-yes')) done(input.value.trim() || null);
+      });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') done(input.value.trim() || null); });
+      document.body.appendChild(back);
+      input.focus(); input.select();
+    });
+  }
+
+  function askChoice({ title, options }) {
+    return new Promise(resolve => {
+      const back = document.createElement('div');
+      back.className = 'drv-ask';
+      back.innerHTML = `
+        <div class="drv-ask-box">
+          <h2>${esc(title)}</h2>
+          <div class="drv-ask-list">
+            ${options.map(o => `<button class="drv-btn secondary" data-pick="${esc(o.value)}">${esc(o.label)}</button>`).join('')}
+          </div>
+          <div class="drv-ask-actions"><button class="drv-btn secondary" data-no>Cancel</button></div>
+        </div>`;
+      const done = (v) => { back.remove(); resolve(v); };
+      back.addEventListener('click', (e) => {
+        const pick = e.target.getAttribute && e.target.getAttribute('data-pick');
+        if (pick) return done(pick);
+        if (e.target.hasAttribute('data-no') || e.target === back) done(null);
+      });
+      document.body.appendChild(back);
+    });
+  }
+
+  const REASON_LABELS = {
+    UNREACHABLE: 'Could not reach them by phone',
+    ADDRESS_NOT_FOUND: 'Address could not be found',
+    RECEIVER_ABSENT: 'Nobody there to receive it',
+    REFUSED: 'They refused it',
+    OTHER: 'Something else'
+  };
+
+  // Which stop a box belongs to, so one answer covers everything handed over together.
+  function stopKeyFor(code) {
+    const b = (RUN.boxes || []).find(x =>
+      String(x.box_number).toLowerCase() === String(code).trim().toLowerCase());
+    return b ? [b.who || '', b.address || ''].join('¦') : String(code);
+  }
+
+  async function submit(code, extra) {
     let r;
+    const body = { box_number: code, action: MODE, ...(extra || {}) };
+    // Delivering needs a name; a failed delivery needs a reason. Ask once per stop.
+    if (!extra && MODE === 'DELIVER') {
+      const key = stopKeyFor(code);
+      let name = receivedByStop[key];
+      if (!name) {
+        name = await askText({ title: 'Who received it?',
+          hint: 'The name of the person taking the box. It goes on the proof of delivery.',
+          confirmLabel: 'Delivered' });
+        if (!name) { LOG.unshift({ ok: false, text: 'Not recorded — no name given' }); paintLog(); return; }
+        receivedByStop[key] = name;
+        lastAnswerFor = key;
+      }
+      body.received_by_name = name;
+    }
+    if (!extra && MODE === 'RETURN') {
+      const reason = await askChoice({ title: 'Why could it not be delivered?',
+        options: Object.keys(REASON_LABELS).map(k => ({ value: k, label: REASON_LABELS[k] })) });
+      if (!reason) { LOG.unshift({ ok: false, text: 'Not recorded — no reason given' }); paintLog(); return; }
+      body.failure_reason = reason;
+    }
     try {
-      r = await api('/api/driver/scan', { method: 'POST', body: { box_number: code, action: MODE } });
+      r = await api('/api/driver/scan', { method: 'POST', body });
     } catch (e) {
       LOG.unshift({ ok: false, text: String(code).slice(0, 30) + ' — ' + e.message });
       paintLog();

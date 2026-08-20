@@ -1413,3 +1413,24 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .pass-stop span { display: flex; flex-direction: column; gap: 1px; }
 .pass-stop .muted { font-size: 11.5px; }
 .pass-addr { font-size: 11.5px; }
+
+/* ---------- driver prompts ---------- */
+.drv-ask {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: end center;
+  background: rgba(15, 35, 80, .5); padding: 16px;
+}
+.drv-ask-box {
+  background: #fff; border-radius: 16px; padding: 20px; width: min(460px, 100%);
+  margin-bottom: 6vh; box-shadow: 0 16px 40px rgba(0,0,0,.3);
+}
+.drv-ask-box h2 { margin: 0 0 6px; font-size: 18px; }
+.drv-ask-box .muted { font-size: 13px; margin: 0 0 12px; }
+.drv-ask-input {
+  width: 100%; padding: 14px; font-size: 17px; border: 2px solid var(--border);
+  border-radius: 12px; margin-bottom: 14px;
+}
+.drv-ask-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.drv-ask-list .drv-btn { text-align: left; padding: 0 16px; }
+.drv-ask-actions { display: flex; gap: 8px; }
+.drv-ask-actions .drv-btn { flex: 1; }
+.drv-btn.secondary { background: #e4e4e7; color: var(--chrome, #0f2350); }

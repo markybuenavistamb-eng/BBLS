@@ -1393,8 +1393,59 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
   if (box.status === target) {
     return res.json({ box_number: box.box_number, status: box.status, message: box.box_number + ' was already done' });
   }
-  const err = changeBoxStatus(box, target, actor, 'Scanned by ' + pass.driver_name + ' (driver pass)');
+
+  const body = req.body || {};
+  const receivedBy = String(body.received_by_name || '').trim();
+  const failureReason = String(body.failure_reason || '').trim();
+
+  // A delivery outcome needs saying who took it, or the proof proves nothing.
+  if (action === 'DELIVER' && !receivedBy) {
+    return res.status(400).json({ error: 'needs_receiver', needs: 'received_by_name',
+      message: 'Who received ' + box.box_number + '?' });
+  }
+  if (action === 'RETURN' && !SM.FAILURE_REASONS.includes(failureReason)) {
+    return res.status(400).json({ error: 'needs_reason', needs: 'failure_reason',
+      reasons: SM.FAILURE_REASONS, message: 'Why could ' + box.box_number + ' not be delivered?' });
+  }
+
+  const note = action === 'DELIVER' ? 'Delivered by ' + pass.driver_name + ' (driver pass)'
+    : action === 'RETURN' ? 'Could not deliver — ' + failureReason + ' (' + pass.driver_name + ')'
+    : 'Scanned by ' + pass.driver_name + ' (driver pass)';
+  const extra = action === 'DELIVER' ? { received_by_name: receivedBy }
+    : action === 'RETURN' ? { reason: notif.REASON_TEXT[failureReason] } : {};
+  const err = changeBoxStatus(box, target, actor, note, extra);
   if (err) return res.status(400).json({ error: err });
+
+  // The same record the office's delivery form writes, so Proof of Delivery has something to
+  // print and the failed-delivery report has something to count.
+  if (action === 'DELIVER' || action === 'RETURN') {
+    const nowIso = new Date().toISOString();
+    d.delivery_attempts = d.delivery_attempts || [];
+    d.delivery_attempts.push({
+      id: db.nextId('attempt'), box_id: box.id,
+      trucking_assignment_id: box.trucking_assignment_id,
+      attempt_number: d.delivery_attempts.filter(a => a.box_id === box.id).length + 1,
+      attempted_at: nowIso,
+      outcome: action === 'DELIVER' ? 'DELIVERED' : 'FAILED',
+      failure_reason: action === 'RETURN' ? failureReason : null,
+      pod_receipt_photo: null, pod_receiver_photo: null,
+      received_by_name: action === 'DELIVER' ? receivedBy : null,
+      notes: String(body.notes || '').trim(),
+      // Recorded from a phone at the door: real, but without the two photos the office form
+      // insists on, so anyone reading it knows what is still missing.
+      recorded_by_driver: pass.driver_name,
+      photos_pending: action === 'DELIVER',
+      created_at: nowIso
+    });
+    // A box that came back is nobody's delivery until it is assigned again.
+    if (action === 'RETURN') box.trucking_assignment_id = null;
+    // And a trip with nothing left out on the road is finished.
+    const trip = (d.trips || []).find(t => t.id === pass.trip_id);
+    if (trip && !(d.boxes || []).some(b2 => b2.trucking_assignment_id === trip.id
+        && ['OUT_FOR_DELIVERY', 'LOADED_TRUCK', 'ASSIGNED'].includes(b2.status))) {
+      trip.status = 'COMPLETED';
+    }
+  }
   db.persist();
   settlePass(d, pass);
   const left = passOutstanding(d, pass).length;

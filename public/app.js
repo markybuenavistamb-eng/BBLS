@@ -2383,6 +2383,12 @@ async function pageDeliveryReceipt(boxId) {
       <div class="rc-line"><span>Received by</span><b>${esc(attempt.received_by_name || '')}</b></div>
       ${b.trip ? `<div class="rc-line"><span>Driver / trip</span>${esc(b.trip.driver_name)} (${esc(b.trip.driver_contact)}) · ${esc(b.trip.trip_number)}${b.trip.plate_number ? ' · Plate ' + esc(b.trip.plate_number) : ''}</div>` : ''}
       ${attempt.notes ? `<div class="rc-line"><span>Notes</span>${esc(attempt.notes)}</div>` : ''}
+      ${attempt.recorded_by_driver ? `<div class="pod-provisional">
+        Recorded at the door by <b>${esc(attempt.recorded_by_driver)}</b> on a driver pass.${
+          attempt.photos_pending
+            ? ' The signed receipt and receiver photos are not attached yet — this is not complete proof until they are.'
+            : ''}
+      </div>` : ''}
       <div class="rc-label" style="margin-top:14px">REQUIRED PHOTO EVIDENCE</div>
       <div class="rc-photos">
         <div>
