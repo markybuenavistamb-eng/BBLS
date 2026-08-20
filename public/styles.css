@@ -1434,3 +1434,6 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .drv-ask-actions { display: flex; gap: 8px; }
 .drv-ask-actions .drv-btn { flex: 1; }
 .drv-btn.secondary { background: #e4e4e7; color: var(--chrome, #0f2350); }
+.drv-shot-preview { margin-bottom: 12px; }
+.drv-shot-preview img { width: 100%; max-height: 220px; object-fit: cover; border-radius: 12px; display: block; }
+.drv-ask-actions .drv-btn[data-take], .drv-ask-actions .drv-btn[data-use] { flex: 1; }

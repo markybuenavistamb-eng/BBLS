@@ -1349,14 +1349,15 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
 
 // Scanning is the whole interface. One box, one action, and the pass closes itself when the
 // last box is done rather than relying on anyone to remember to end it.
-app.post('/api/driver/scan', requireDriver, (req, res) => {
+app.post('/api/driver/scan', requireDriver,
+  podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }]),
+  async (req, res) => {
   const d = db.get();
   const pass = req.pass;
   const code = String((req.body || {}).box_number || '').trim();
   const action = String((req.body || {}).action || '');
-  const box = (d.boxes || []).find(x =>
-    String(x.box_number).toLowerCase() === code.toLowerCase() || x.qr_token === code);
-  if (!box) return res.status(404).json({ error: 'No box with that number.' });
+  const box = findScannedBox(d, code);
+  if (!box) return res.status(404).json({ error: 'That label is not a box we know.' });
   if (!pass.box_ids.includes(box.id)) {
     return res.status(403).json({ error: box.box_number + ' is not on this run.' });
   }
@@ -1403,6 +1404,22 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
     return res.status(400).json({ error: 'needs_receiver', needs: 'received_by_name',
       message: 'Who received ' + box.box_number + '?' });
   }
+  // And the two photographs, which are the proof itself. Either freshly taken with this
+  // scan, or carried over from the same handover a moment ago — three boxes through one door
+  // is one signature and one photograph, not three.
+  const files = req.files || {};
+  const carried = {
+    receipt: String(body.pod_receipt_ref || '').trim(),
+    receiver: String(body.pod_receiver_ref || '').trim()
+  };
+  if (action === 'DELIVER' && !files.pod_receipt_photo && !carried.receipt) {
+    return res.status(400).json({ error: 'needs_photo', needs: 'pod_receipt_photo',
+      message: 'Photograph the signed receipt for ' + box.box_number + '.' });
+  }
+  if (action === 'DELIVER' && !files.pod_receiver_photo && !carried.receiver) {
+    return res.status(400).json({ error: 'needs_photo', needs: 'pod_receiver_photo',
+      message: 'Photograph the receiver holding the box.' });
+  }
   if (action === 'RETURN' && !SM.FAILURE_REASONS.includes(failureReason)) {
     return res.status(400).json({ error: 'needs_reason', needs: 'failure_reason',
       reasons: SM.FAILURE_REASONS, message: 'Why could ' + box.box_number + ' not be delivered?' });
@@ -1418,8 +1435,17 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
 
   // The same record the office's delivery form writes, so Proof of Delivery has something to
   // print and the failed-delivery report has something to count.
+  const podRefs = { receipt: carried.receipt || null, receiver: carried.receiver || null };
   if (action === 'DELIVER' || action === 'RETURN') {
     const nowIso = new Date().toISOString();
+    if (files.pod_receipt_photo) {
+      podRefs.receipt = '/files/' + await storage.save(files.pod_receipt_photo[0].buffer,
+        files.pod_receipt_photo[0].originalname, 'pod');
+    }
+    if (files.pod_receiver_photo) {
+      podRefs.receiver = '/files/' + await storage.save(files.pod_receiver_photo[0].buffer,
+        files.pod_receiver_photo[0].originalname, 'pod');
+    }
     d.delivery_attempts = d.delivery_attempts || [];
     d.delivery_attempts.push({
       id: db.nextId('attempt'), box_id: box.id,
@@ -1428,13 +1454,14 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
       attempted_at: nowIso,
       outcome: action === 'DELIVER' ? 'DELIVERED' : 'FAILED',
       failure_reason: action === 'RETURN' ? failureReason : null,
-      pod_receipt_photo: null, pod_receiver_photo: null,
+      pod_receipt_photo: action === 'DELIVER' ? podRefs.receipt : null,
+      pod_receiver_photo: action === 'DELIVER' ? podRefs.receiver : null,
       received_by_name: action === 'DELIVER' ? receivedBy : null,
       notes: String(body.notes || '').trim(),
       // Recorded from a phone at the door: real, but without the two photos the office form
       // insists on, so anyone reading it knows what is still missing.
       recorded_by_driver: pass.driver_name,
-      photos_pending: action === 'DELIVER',
+      photos_pending: false,
       created_at: nowIso
     });
     // A box that came back is nobody's delivery until it is assigned again.
@@ -1453,7 +1480,8 @@ app.post('/api/driver/scan', requireDriver, (req, res) => {
     box_number: box.box_number, status: box.status,
     message: box.box_number + ' → ' + (SM.FRIENDLY[box.status] || box.status),
     outstanding: left,
-    finished: left === 0
+    finished: left === 0,
+    pod: action === 'DELIVER' ? { receipt: podRefs.receipt, receiver: podRefs.receiver } : null
   });
 });
 
@@ -2031,13 +2059,24 @@ app.get('/api/boxes/:id', requireAuth, (req, res) => {
   res.json(boxDetail(box));
 });
 // Staff lookup by box number OR qr token (scan screens)
+// What a scanner hands us is whatever is printed in the code: a tracking URL from a box
+// label, or a box number typed by hand. Reduce both to the thing that identifies the box.
+function scanNeedle(raw) {
+  const key = String(raw || '').trim();
+  const tokenMatch = key.match(/[?&]t=([A-Za-z0-9_-]+)/);
+  return (tokenMatch ? tokenMatch[1] : key).toLowerCase();
+}
+function findScannedBox(d, raw) {
+  const needle = scanNeedle(raw);
+  if (!needle) return null;
+  return (d.boxes || []).find(b =>
+    String(b.qr_token || '').toLowerCase() === needle ||
+    String(b.box_number || '').toLowerCase() === needle) || null;
+}
+
 app.get('/api/boxes/lookup/:key', requireAuth, (req, res) => {
   const d = db.get();
-  const key = String(req.params.key).trim();
-  // QR labels encode the public tracking URL; accept a pasted URL too
-  const tokenMatch = key.match(/[?&]t=([A-Za-z0-9_-]+)/);
-  const needle = (tokenMatch ? tokenMatch[1] : key).toLowerCase();
-  const box = d.boxes.find(b => b.qr_token.toLowerCase() === needle || b.box_number.toLowerCase() === needle);
+  const box = findScannedBox(d, req.params.key);
   if (!box) return res.status(404).json({ error: 'No box matches that code' });
   // Scanning a code is still a read of that record, so the same rules apply.
   const parent = d.shipments.find(x => x.id === box.shipment_id) || {};

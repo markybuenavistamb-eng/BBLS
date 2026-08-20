@@ -18,10 +18,11 @@
   let scanner = null;
 
   async function api(path, opts = {}) {
+    const form = opts.body instanceof FormData;
     const res = await fetch(path, {
       method: opts.method || 'GET',
-      headers: opts.body ? { 'Content-Type': 'application/json' } : {},
-      body: opts.body ? JSON.stringify(opts.body) : undefined
+      headers: (opts.body && !form) ? { 'Content-Type': 'application/json' } : {},
+      body: opts.body ? (form ? opts.body : JSON.stringify(opts.body)) : undefined
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { const e = new Error(data.error || 'Something went wrong'); Object.assign(e, data); throw e; }
@@ -229,6 +230,50 @@
     });
   }
 
+  // A photograph is what makes a proof of delivery a proof, so it is taken at the door rather
+  // than chased afterwards. The file input with capture opens the camera straight away on
+  // both phones, which is more reliable than driving the camera ourselves and leaves the
+  // driver their own gallery if they would rather pick a shot they already took.
+  function askPhoto({ title, hint }) {
+    return new Promise(resolve => {
+      const back = document.createElement('div');
+      back.className = 'drv-ask';
+      back.innerHTML = `
+        <div class="drv-ask-box">
+          <h2>${esc(title)}</h2>
+          <p class="muted">${esc(hint)}</p>
+          <input type="file" accept="image/*" capture="environment" class="drv-shot" hidden>
+          <div class="drv-shot-preview" hidden><img alt=""></div>
+          <div class="drv-ask-actions">
+            <button class="drv-btn secondary" data-no>Cancel</button>
+            <button class="drv-btn" data-take>📷 Take photo</button>
+            <button class="drv-btn" data-use hidden>Use this</button>
+          </div>
+        </div>`;
+      const input = back.querySelector('.drv-shot');
+      const preview = back.querySelector('.drv-shot-preview');
+      const img = preview.querySelector('img');
+      const take = back.querySelector('[data-take]');
+      const use = back.querySelector('[data-use]');
+      let chosen = null;
+      const done = (v) => { back.remove(); resolve(v); };
+      input.addEventListener('change', () => {
+        chosen = input.files && input.files[0];
+        if (!chosen) return;
+        img.src = URL.createObjectURL(chosen);
+        preview.hidden = false;
+        take.textContent = '📷 Retake';
+        use.hidden = false;
+      });
+      back.addEventListener('click', (e) => {
+        if (e.target.hasAttribute('data-no') || e.target === back) return done(null);
+        if (e.target.hasAttribute('data-take')) return input.click();
+        if (e.target.hasAttribute('data-use')) return done(chosen);
+      });
+      document.body.appendChild(back);
+    });
+  }
+
   const REASON_LABELS = {
     UNREACHABLE: 'Could not reach them by phone',
     ADDRESS_NOT_FOUND: 'Address could not be found',
@@ -244,22 +289,47 @@
     return b ? [b.who || '', b.address || ''].join('¦') : String(code);
   }
 
+  // Photographs already taken at this stop, so a second and third box through the same door
+  // reuse the one signature and the one photograph rather than asking again.
+  const podByStop = {};
+
   async function submit(code, extra) {
     let r;
-    const body = { box_number: code, action: MODE, ...(extra || {}) };
-    // Delivering needs a name; a failed delivery needs a reason. Ask once per stop.
+    let body = { box_number: code, action: MODE, ...(extra || {}) };
     if (!extra && MODE === 'DELIVER') {
       const key = stopKeyFor(code);
       let name = receivedByStop[key];
       if (!name) {
         name = await askText({ title: 'Who received it?',
           hint: 'The name of the person taking the box. It goes on the proof of delivery.',
-          confirmLabel: 'Delivered' });
+          confirmLabel: 'Next' });
         if (!name) { LOG.unshift({ ok: false, text: 'Not recorded — no name given' }); paintLog(); return; }
         receivedByStop[key] = name;
-        lastAnswerFor = key;
       }
       body.received_by_name = name;
+
+      // The two photographs the office form requires. Taken once per handover.
+      const have = podByStop[key] || {};
+      let receiptFile = null, receiverFile = null;
+      if (!have.receipt) {
+        receiptFile = await askPhoto({ title: 'Photo of the signed receipt',
+          hint: 'The delivery receipt with the receiver\'s signature on it.' });
+        if (!receiptFile) { LOG.unshift({ ok: false, text: 'Not delivered — no receipt photo' }); paintLog(); return; }
+      }
+      if (!have.receiver) {
+        receiverFile = await askPhoto({ title: 'Photo of the receiver with the box',
+          hint: 'Show the person and the box together at the door.' });
+        if (!receiverFile) { LOG.unshift({ ok: false, text: 'Not delivered — no receiver photo' }); paintLog(); return; }
+      }
+
+      const fd = new FormData();
+      Object.entries(body).forEach(([k, v]) => fd.append(k, v));
+      if (receiptFile) fd.append('pod_receipt_photo', receiptFile);
+      else fd.append('pod_receipt_ref', have.receipt);
+      if (receiverFile) fd.append('pod_receiver_photo', receiverFile);
+      else fd.append('pod_receiver_ref', have.receiver);
+      body = fd;
+      body._stopKey = key;
     }
     if (!extra && MODE === 'RETURN') {
       const reason = await askChoice({ title: 'Why could it not be delivered?',
@@ -274,6 +344,10 @@
       paintLog();
       buzz(false);
       return;
+    }
+    if (r.pod && body instanceof FormData) {
+      const key = stopKeyFor(code);
+      podByStop[key] = { receipt: r.pod.receipt, receiver: r.pod.receiver };
     }
     LOG.unshift({ ok: true, text: r.message });
     buzz(true);
