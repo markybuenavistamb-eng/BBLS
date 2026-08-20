@@ -1255,3 +1255,74 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
   .tbl-tools .tbl-filter, .tbl-tools .tbl-sort { font-size: 16px; }
   .chat-form input, .bot-input { font-size: 16px; }
 }
+
+/* ---------- driver app ---------- */
+/* Built for a phone held in one hand at a tailgate: large targets, one decision at a time. */
+.drv-body { background: #eef0f3; margin: 0; }
+.drv-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--chrome, #0f2350); padding: 10px 14px; position: sticky; top: 0; z-index: 5;
+}
+.drv-who { color: #fff; font-size: 13px; font-weight: 600; }
+.drv-main { max-width: 620px; margin: 0 auto; padding: 14px 12px 40px; }
+.drv-card { background: #fff; border-radius: 14px; padding: 22px 18px; text-align: center; }
+.drv-card h1 { font-size: 20px; margin: 0 0 6px; }
+.drv-code {
+  width: 100%; margin: 14px 0 6px; padding: 14px; text-align: center;
+  font-size: 26px; letter-spacing: 5px; font-weight: 700; text-transform: uppercase;
+  border: 2px solid var(--border); border-radius: 12px;
+}
+.drv-btn {
+  width: 100%; min-height: 52px; font-size: 16px; font-weight: 700;
+  border: 0; border-radius: 12px; background: var(--primary); color: #fff; cursor: pointer;
+}
+.drv-btn.small { width: auto; min-height: 46px; padding: 0 18px; }
+.drv-note { font-size: 12px; margin-top: 12px; }
+
+.drv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.drv-title { font-size: 17px; font-weight: 800; }
+.drv-out {
+  background: transparent; border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 14px; min-height: 40px; cursor: pointer; font-size: 13px;
+}
+
+/* The action the next scan performs. Only one can be on. */
+.drv-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.drv-mode {
+  min-height: 52px; border-radius: 12px; border: 2px solid var(--border);
+  background: #fff; font-size: 14px; font-weight: 700; cursor: pointer; padding: 8px;
+}
+.drv-mode.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+.drv-mode.danger.on { background: #b91c1c; border-color: #b91c1c; }
+.drv-hint { font-size: 12.5px; margin: 8px 2px 10px; }
+
+.drv-scanner { background: #000; border-radius: 14px; overflow: hidden; min-height: 210px; }
+.drv-scanner video { width: 100% !important; height: auto !important; display: block; }
+.drv-nocam { color: #fff; padding: 26px 14px; text-align: center; font-size: 13px; }
+.drv-manual { display: flex; gap: 8px; margin: 10px 0 6px; }
+.drv-manual input {
+  flex: 1; min-height: 46px; padding: 10px 12px; font-size: 16px;
+  border: 1px solid var(--border); border-radius: 12px;
+}
+
+.drv-log { margin: 8px 0 14px; }
+.drv-line { padding: 8px 12px; border-radius: 10px; font-size: 13.5px; margin-bottom: 6px; font-weight: 600; }
+.drv-line.ok { background: #dcfce7; color: #166534; }
+.drv-line.bad { background: #fee2e2; color: #991b1b; }
+
+.drv-list-title { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--muted); margin: 6px 2px 8px; }
+.drv-box { background: #fff; border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+.drv-box.done { opacity: .5; }
+.drv-box-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.drv-box-status { font-size: 11px; color: var(--muted); text-align: right; }
+.drv-box-addr { font-size: 13px; margin-top: 4px; }
+.drv-box-lm { font-size: 12px; }
+.drv-call {
+  display: inline-flex; align-items: center; min-height: 44px; margin-top: 6px;
+  font-weight: 700; text-decoration: none; color: var(--primary);
+}
+.drv-done .drv-tick {
+  width: 74px; height: 74px; margin: 0 auto 12px; border-radius: 50%;
+  background: #16a34a; color: #fff; font-size: 40px; display: grid; place-items: center;
+}

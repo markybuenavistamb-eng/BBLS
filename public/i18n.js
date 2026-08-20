@@ -36,7 +36,8 @@
       /* nav */
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
-      'nav.returns': 'Returns', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
+      'nav.returns': 'Returns',
+      'nav.driverpasses': 'Driver Passes', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
       // Sidebar submenus (tabs inside a module)
       'sub.rates': 'Rate Cards', 'sub.interbranch': 'Inter-branch', 'sub.expenses': 'Expenses', 'sub.pnl': 'Profit & Loss',
       'sub.stock': 'Stock & load plan', 'sub.printable': 'Printable report',
@@ -61,7 +62,9 @@
       'login.track': 'Track a box', 'login.home': 'Back to home',
 
       /* statuses */
-      'status.CREATED': 'Created', 'status.RECEIVED_ORIGIN': 'Received (origin)',
+      'status.CREATED': 'Created',
+      'status.RECEIVED_BRANCH': 'Received (branch office)',
+      'status.RECEIVED_ORIGIN': 'Received (origin WH)',
       'status.LOADED_CONTAINER': 'Loaded in container', 'status.IN_TRANSIT': 'In transit',
       'status.ARRIVED_PORT': 'Arrived (PH port)', 'status.RECEIVED_WAREHOUSE': 'Received (warehouse)',
       'status.SORTED': 'Sorted', 'status.ASSIGNED': 'Assigned to trip', 'status.LOADED_TRUCK': 'Loaded on truck',
@@ -122,7 +125,9 @@
       'track.btn': 'Track', 'track.needBoth': 'Please enter both the box number and the last 4 digits of the receiver’s phone.',
       'track.loading': 'Looking up your box…', 'track.timeline': 'Shipment progress',
       'track.pending': 'Pending', 'track.detailedLog': 'View detailed status log',
-      'journey.CREATED': 'Booking Confirmed', 'journey.RECEIVED_ORIGIN': 'Received at origin',
+      'journey.CREATED': 'Booking Confirmed',
+      'journey.RECEIVED_BRANCH': 'Received at origin branch office',
+      'journey.RECEIVED_ORIGIN': 'Received at origin warehouse',
       'journey.LOADED_CONTAINER': 'Loaded into container', 'journey.IN_TRANSIT': 'On the way to Destination',
       'journey.ARRIVED_PORT': 'Arrived at Destination', 'journey.RECEIVED_WAREHOUSE': 'Received at VFIC warehouse',
       'journey.SORTED': 'Sorted for {region}', 'journey.FORWARDED_REGION': 'Forwarded to {region}',
@@ -188,7 +193,8 @@
 
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',
-      'nav.returns': 'Mga Naibalik', 'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
+      'nav.returns': 'Mga Naibalik', 'nav.driverpasses': 'Pass ng Drayber',
+      'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
       // Mga submenu sa sidebar (mga tab sa loob ng module)
       'sub.rates': 'Mga Rate Card', 'sub.interbranch': 'Sa pagitan ng sangay', 'sub.expenses': 'Mga Gastos', 'sub.pnl': 'Tubo at Lugi',
       'sub.stock': 'Stock at load plan', 'sub.printable': 'Ulat na naiimprenta',
@@ -210,7 +216,9 @@
       'login.demo': 'Demo na account', 'login.password_is': 'password',
       'login.track': 'I-track ang kahon', 'login.home': 'Bumalik sa home',
 
-      'status.CREATED': 'Nairehistro', 'status.RECEIVED_ORIGIN': 'Natanggap (pinagmulan)',
+      'status.CREATED': 'Nairehistro',
+      'status.RECEIVED_BRANCH': 'Natanggap (tanggapan ng sangay)',
+      'status.RECEIVED_ORIGIN': 'Natanggap (bodega)',
       'status.LOADED_CONTAINER': 'Nakakarga sa container', 'status.IN_TRANSIT': 'Nasa biyahe',
       'status.ARRIVED_PORT': 'Dumating (PH pantalan)', 'status.RECEIVED_WAREHOUSE': 'Natanggap (bodega)',
       'status.SORTED': 'Nabukod', 'status.ASSIGNED': 'Nakatalaga sa biyahe', 'status.LOADED_TRUCK': 'Nakakarga sa truck',
@@ -266,7 +274,9 @@
       'track.btn': 'I-track', 'track.needBoth': 'Pakilagay ang box number at ang huling 4 na digit ng telepono ng tatanggap.',
       'track.loading': 'Hinahanap ang inyong kahon…', 'track.timeline': 'Progreso ng padala',
       'track.pending': 'Nakabinbin', 'track.detailedLog': 'Tingnan ang detalyadong talaan ng status',
-      'journey.CREATED': 'Kumpirmado ang Booking', 'journey.RECEIVED_ORIGIN': 'Natanggap sa pinagmulan',
+      'journey.CREATED': 'Kumpirmado ang Booking',
+      'journey.RECEIVED_BRANCH': 'Natanggap sa tanggapan ng sangay',
+      'journey.RECEIVED_ORIGIN': 'Natanggap sa bodega ng pinagmulan',
       'journey.LOADED_CONTAINER': 'Nakakarga sa container', 'journey.IN_TRANSIT': 'Papunta na sa Destinasyon',
       'journey.ARRIVED_PORT': 'Dumating na sa Destinasyon', 'journey.RECEIVED_WAREHOUSE': 'Natanggap sa bodega ng VFIC',
       'journey.SORTED': 'Nabukod para sa {region}', 'journey.FORWARDED_REGION': 'Ipinadala sa {region}',

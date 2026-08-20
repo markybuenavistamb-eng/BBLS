@@ -256,7 +256,7 @@ function changeBoxStatus(box, to, actor, note = '', extraVars = {}) {
   });
   box.status = to;
   box.status_updated_at = nowIso;
-  if (['RECEIVED_ORIGIN', 'ARRIVED_PORT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED'].includes(to)) {
+  if (['RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'ARRIVED_PORT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED'].includes(to)) {
     notif.queueForTrigger(box, to, extraVars);
   }
   return null;
@@ -971,10 +971,23 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
       };
     });
 
-    const passportKey = await storage.save(req.file.buffer, req.file.originalname, 'intake');
     const d = db.get();
+    // A booking carries a key minted once, when the sender is shown the review screen. A
+    // second arrival of the same key is the same booking — a double tap, an impatient
+    // refresh, a retry on a slow connection abroad — so it is answered with the original
+    // rather than filed again. Checked before the upload is stored, or the duplicate leaves
+    // an orphaned passport scan behind even when the record is not written.
+    const submitKey = String(b.submission_key || '').trim().slice(0, 64);
+    if (submitKey) {
+      const already = (d.intake_requests || []).find(r => r.submission_key === submitKey);
+      if (already) {
+        return res.json({ reference_code: already.reference_code, submitted_at: already.submitted_at, duplicate: true });
+      }
+    }
+    const passportKey = await storage.save(req.file.buffer, req.file.originalname, 'intake');
     const rec = {
       id: db.nextId('intake_request'),
+      submission_key: submitKey || null,
       reference_code: db.nextIntakeRefCode(),
       status: 'PENDING',
       submitted_at: new Date().toISOString(),
@@ -1106,6 +1119,263 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
     return res.status(400).json({ error: e.message || 'Invalid order' });
   }
 });
+// ---------- driver passes ----------
+// A driver is not staff. They need one run's worth of access, on their own phone, for a few
+// hours — and then not to have it any more. So instead of an account there is a pass: a code
+// tied to a specific set of boxes, which stops working the moment that work is finished.
+//
+// Two kinds, because the two ends of the journey are different jobs. In Manila a pass covers
+// a delivery trip and dies when every box on it has been delivered or come back. At origin it
+// covers a collection from the branch office and dies once the warehouse has the boxes.
+const DRIVER_PASS_TTL_MS = 16 * 60 * 60 * 1000;   // a long shift, not a standing key
+
+function driverPasses(d) { d.driver_passes = d.driver_passes || []; return d.driver_passes; }
+
+// Read aloud over a phone, so no characters that sound or look alike (no O/0, I/1, S/5).
+function newPassCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRTUVWXY2346789';
+  let out = '';
+  for (let i = 0; i < 8; i += 1) out += alphabet[crypto.randomInt(0, alphabet.length)];
+  return out.slice(0, 4) + '-' + out.slice(4);
+}
+
+// What still needs doing on this pass. A pass is finished when nothing does.
+function passOutstanding(d, pass) {
+  const done = pass.kind === 'DELIVERY' ? ['DELIVERED', 'RETURNED', 'CANCELLED']
+                                        : ['RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT',
+                                           'ARRIVED_PORT', 'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED',
+                                           'LOADED_TRUCK', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
+  return (d.boxes || []).filter(b => pass.box_ids.includes(b.id) && !done.includes(b.status));
+}
+
+function passState(d, pass) {
+  if (pass.revoked_at) return 'REVOKED';
+  if (Date.now() > Date.parse(pass.expires_at)) return 'EXPIRED';
+  if (!passOutstanding(d, pass).length) return 'COMPLETED';
+  return 'ACTIVE';
+}
+
+// Close a pass the moment its work is done, rather than leaving a working code in a pocket.
+function settlePass(d, pass) {
+  if (pass.completed_at || pass.revoked_at) return;
+  if (!passOutstanding(d, pass).length) {
+    pass.completed_at = new Date().toISOString();
+    db.persist();
+  }
+}
+
+function driverFromRequest(req) {
+  const cookies = sess.parseCookies(req.headers.cookie);
+  const payload = sess.verify(cookies[sess.DRIVER_COOKIE_NAME] || '');
+  if (!sess.isDriverToken(payload)) return null;
+  const d = db.get();
+  const pass = driverPasses(d).find(p => p.id === payload.pid);
+  if (!pass) return null;
+  return passState(d, pass) === 'ACTIVE' ? pass : null;
+}
+
+function requireDriver(req, res, next) {
+  const pass = driverFromRequest(req);
+  if (!pass) return res.status(401).json({ error: 'This pass is no longer active. Ask the office for a new one.' });
+  req.pass = pass;
+  next();
+}
+
+// --- staff side: issue and manage passes ---
+app.get('/api/driver-passes', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  const mine = chatBranchOf(req.user);
+  const list = driverPasses(d)
+    .filter(p => mine === 'HQ_MANILA' || p.branch === mine)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 50)
+    .map(p => ({
+      id: p.id, code: p.code, kind: p.kind, driver_name: p.driver_name,
+      trip_id: p.trip_id || null, trip_number: p.trip_number || null,
+      branch: p.branch, created_at: p.created_at, expires_at: p.expires_at,
+      completed_at: p.completed_at || null, revoked_at: p.revoked_at || null,
+      state: passState(d, p),
+      boxes_total: p.box_ids.length,
+      boxes_left: passOutstanding(d, p).length
+    }));
+  res.json(list);
+});
+
+app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH',
+                                          'SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'), (req, res) => {
+  const d = db.get();
+  const b = req.body || {};
+  const kind = b.kind === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
+  const driverName = String(b.driver_name || '').trim();
+  if (!driverName) return res.status(400).json({ error: "The driver's name is required." });
+  const branch = chatBranchOf(req.user);
+
+  let boxIds = [];
+  let trip = null;
+  if (kind === 'DELIVERY') {
+    // Manila hands a driver a trip that already exists, with its boxes already assigned.
+    trip = (d.trips || []).find(t => t.id === +b.trip_id);
+    if (!trip) return res.status(400).json({ error: 'Choose a trip for this delivery run.' });
+    boxIds = (d.boxes || []).filter(x => x.trucking_assignment_id === trip.id).map(x => x.id);
+    if (!boxIds.length) return res.status(400).json({ error: 'That trip has no boxes assigned yet.' });
+  } else {
+    // At origin the run is whatever is sitting at the branch counter waiting to be collected.
+    const scope = effectiveScope(req);
+    const wanted = Array.isArray(b.box_ids) ? b.box_ids.map(Number) : null;
+    const shipById = new Map((d.shipments || []).map(x => [x.id, x]));
+    boxIds = (d.boxes || [])
+      .filter(x => x.status === 'RECEIVED_BRANCH')
+      .filter(x => { const sh = shipById.get(x.shipment_id); return !scope || (sh && sh.origin_country === scope); })
+      .filter(x => !wanted || wanted.includes(x.id))
+      .map(x => x.id);
+    if (!boxIds.length) return res.status(400).json({ error: 'No boxes are waiting at the branch office for collection.' });
+  }
+
+  const pass = {
+    id: db.nextId('driver_pass'),
+    code: newPassCode(),
+    kind, branch,
+    driver_name: driverName,
+    driver_contact: String(b.driver_contact || '').trim(),
+    trip_id: trip ? trip.id : null,
+    trip_number: trip ? trip.trip_number : null,
+    box_ids: boxIds,
+    issued_by: req.user.id, issued_by_name: req.user.name || req.user.email,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + DRIVER_PASS_TTL_MS).toISOString(),
+    completed_at: null, revoked_at: null
+  };
+  driverPasses(d).push(pass);
+  db.persist();
+  res.status(201).json({ ...pass, state: 'ACTIVE', boxes_total: boxIds.length, boxes_left: boxIds.length });
+});
+
+app.post('/api/driver-passes/:id/revoke', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH'), (req, res) => {
+  const d = db.get();
+  const pass = driverPasses(d).find(p => p.id === +req.params.id);
+  if (!pass) return res.status(404).json({ error: 'Not found' });
+  if (chatBranchOf(req.user) !== 'HQ_MANILA' && pass.branch !== chatBranchOf(req.user)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  pass.revoked_at = new Date().toISOString();
+  db.persist();
+  res.json({ ok: true });
+});
+
+// --- driver side ---
+app.post('/api/driver/login', rateLimit, (req, res) => {
+  const d = db.get();
+  const code = String((req.body || {}).code || '').trim().toUpperCase().replace(/\s+/g, '');
+  const pass = driverPasses(d).find(p => p.code.replace('-', '') === code.replace('-', ''));
+  if (!pass) return res.status(401).json({ error: 'That code is not recognised.' });
+  const state = passState(d, pass);
+  if (state !== 'ACTIVE') {
+    const why = state === 'COMPLETED' ? 'This run is already finished.'
+      : state === 'REVOKED' ? 'This pass was cancelled by the office.'
+      : 'This pass has expired.';
+    return res.status(403).json({ error: why });
+  }
+  const ttl = Date.parse(pass.expires_at) - Date.now();
+  res.cookie(sess.DRIVER_COOKIE_NAME, sess.driverTokenFor(pass.id, ttl), { ...sess.cookieOptions, maxAge: ttl });
+  res.json({ ok: true });
+});
+
+app.post('/api/driver/logout', (req, res) => {
+  res.clearCookie(sess.DRIVER_COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
+
+// The run: who the driver is, and every box with just enough to work from. Addresses and
+// contact numbers are here because a delivery driver needs them; nothing else is.
+app.get('/api/driver/me', requireDriver, (req, res) => {
+  const d = db.get();
+  const pass = req.pass;
+  const boxes = (d.boxes || []).filter(x => pass.box_ids.includes(x.id)).map(x => {
+    const receiver = (d.customers || []).find(c => c.id === x.receiver_id) || {};
+    const shipment = (d.shipments || []).find(sh => sh.id === x.shipment_id) || {};
+    const sender = (d.customers || []).find(c => c.id === shipment.sender_id) || {};
+    return {
+      id: x.id, box_number: x.box_number, status: x.status,
+      status_label: SM.FRIENDLY[x.status] || x.status,
+      size_label: (BOXSIZE.bySize(x.size_category) || {}).label || x.size_category,
+      weight_kg: x.weight_kg,
+      receiver_name: receiver.full_name || '',
+      receiver_phone: pass.kind === 'DELIVERY' ? (receiver.phone_primary || '') : '',
+      address: pass.kind === 'DELIVERY'
+        ? [receiver.address_line, receiver.barangay, receiver.city_municipality, receiver.province]
+            .filter(Boolean).join(', ')
+        : '',
+      landmark: pass.kind === 'DELIVERY' ? (receiver.landmark || '') : '',
+      sender_name: sender.full_name || ''
+    };
+  });
+  res.json({
+    kind: pass.kind, driver_name: pass.driver_name,
+    trip_number: pass.trip_number || null,
+    branch_label: BRANCH.BRANCH_LABELS[pass.branch] || pass.branch,
+    expires_at: pass.expires_at,
+    boxes, outstanding: passOutstanding(d, pass).length
+  });
+});
+
+// Scanning is the whole interface. One box, one action, and the pass closes itself when the
+// last box is done rather than relying on anyone to remember to end it.
+app.post('/api/driver/scan', requireDriver, (req, res) => {
+  const d = db.get();
+  const pass = req.pass;
+  const code = String((req.body || {}).box_number || '').trim();
+  const action = String((req.body || {}).action || '');
+  const box = (d.boxes || []).find(x =>
+    String(x.box_number).toLowerCase() === code.toLowerCase() || x.qr_token === code);
+  if (!box) return res.status(404).json({ error: 'No box with that number.' });
+  if (!pass.box_ids.includes(box.id)) {
+    return res.status(403).json({ error: box.box_number + ' is not on this run.' });
+  }
+
+  const ALLOWED = pass.kind === 'DELIVERY'
+    ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
+    : { PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
+  if (!(action in ALLOWED)) return res.status(400).json({ error: 'Unknown action.' });
+
+  // A pass is not a user account, so the event records no user id — the note carries who
+  // did it. The role is borrowed only so the state machine can judge the transition.
+  const actor = { id: null, name: pass.driver_name + ' (driver)', role: 'WAREHOUSE' };
+
+  // Collection at the branch counter is a timeline entry rather than a state change: the box
+  // is still the branch's until the warehouse books it in.
+  if (pass.kind === 'PICKUP' && action === 'PICKUP') {
+    if (box.status !== 'RECEIVED_BRANCH') {
+      return res.status(400).json({ error: box.box_number + ' is not waiting at the branch office.' });
+    }
+    d.status_events.push({
+      id: db.nextId('status_event'), box_id: box.id,
+      from_status: box.status, to_status: box.status,
+      actor_user_id: null,
+      note: 'Collected from the branch office by ' + pass.driver_name,
+      created_at: new Date().toISOString()
+    });
+    box.picked_up_at = new Date().toISOString();
+    db.persist();
+    return res.json({ box_number: box.box_number, status: box.status, message: box.box_number + ' collected' });
+  }
+
+  const target = ALLOWED[action];
+  if (box.status === target) {
+    return res.json({ box_number: box.box_number, status: box.status, message: box.box_number + ' was already done' });
+  }
+  const err = changeBoxStatus(box, target, actor, 'Scanned by ' + pass.driver_name + ' (driver pass)');
+  if (err) return res.status(400).json({ error: err });
+  db.persist();
+  settlePass(d, pass);
+  const left = passOutstanding(d, pass).length;
+  res.json({
+    box_number: box.box_number, status: box.status,
+    message: box.box_number + ' → ' + (SM.FRIENDLY[box.status] || box.status),
+    outstanding: left,
+    finished: left === 0
+  });
+});
+
 // ---------- alerts: work that arrived on its own ----------
 // Anything that lands without someone asking for it sits unseen until they think to look.
 // Alerts are derived from the records themselves rather than stored as their own rows, so
@@ -1898,6 +2168,25 @@ app.get('/api/trips', requireRole(...ROLE.PH_SIDE, 'ACCOUNTING'), (req, res) => 
   res.json(d.trips.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(t => ({ ...t, box_count: d.boxes.filter(b => b.trucking_assignment_id === t.id).length })));
 });
+// A trip number has to be unique to be worth anything — a driver quoting "TRIP-2026-0001"
+// must identify one run. The counter alone was not enough: seeded trips took numbers without
+// advancing it, so the first booked trip collided with one already on the road. Reading the
+// highest number actually in use makes the mint self-correcting, and repairs databases that
+// already drifted rather than needing them migrated.
+function nextTripNumber(d) {
+  const year = new Date().getFullYear();
+  const prefix = `TRIP-${year}-`;
+  let highest = 0;
+  for (const t of (d.trips || [])) {
+    const m = String(t.trip_number || '').startsWith(prefix)
+      ? parseInt(String(t.trip_number).slice(prefix.length), 10) : NaN;
+    if (Number.isFinite(m)) highest = Math.max(highest, m);
+  }
+  const seq = Math.max(Number(d.seq.trip_number) || 0, highest);
+  d.seq.trip_number = seq + 1;
+  return prefix + String(d.seq.trip_number).padStart(4, '0');
+}
+
 app.post('/api/trips', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => {
   const b = req.body || {};
   if (!b.driver_name || !b.region) return res.status(400).json({ error: 'Driver name and region are required' });
@@ -1905,7 +2194,7 @@ app.post('/api/trips', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => 
   const d = db.get();
   const t = {
     id: db.nextId('trip'),
-    trip_number: `TRIP-${new Date().getFullYear()}-${String(db.nextId('trip_number')).padStart(4, '0')}`,
+    trip_number: nextTripNumber(d),
     driver_name: b.driver_name, driver_contact: b.driver_contact || '', plate_number: b.plate_number || '',
     trucking_company: b.trucking_company || '', region: b.region, scheduled_date: b.scheduled_date || null,
     status: 'PLANNED', created_at: new Date().toISOString()
@@ -3797,7 +4086,7 @@ app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
     // Box movement: where each box was loaded, its container, and the timestamp of every
     // milestone it has passed through.
     case 'box-movement': {
-      const MILESTONES = ['RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
+      const MILESTONES = ['RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
         'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
       const q = String(req.query.container || '').toLowerCase();
       let boxes = d.boxes.slice();
@@ -3924,8 +4213,10 @@ function buildJourney(box) {
   const steps = [
     { key: 'CREATED', on: ['CREATED'], label: 'Booking registered',
       detail: 'Your box is registered in our system.' },
-    { key: 'RECEIVED_ORIGIN', on: ['RECEIVED_ORIGIN'], label: 'Received at origin',
-      detail: 'We received your box at our origin branch.' },
+    { key: 'RECEIVED_BRANCH', on: ['RECEIVED_BRANCH'], label: 'Received at origin branch office',
+      detail: 'Your box is with our branch office.' },
+    { key: 'RECEIVED_ORIGIN', on: ['RECEIVED_ORIGIN'], label: 'Received at origin warehouse',
+      detail: 'Your box reached our warehouse and is waiting for its container.' },
     { key: 'LOADED_CONTAINER', on: ['LOADED_CONTAINER'], label: 'Loaded into container',
       detail: container ? `Container ${container.container_number}.` : 'Loaded for shipping.' },
     { key: 'IN_TRANSIT', on: ['IN_TRANSIT'], label: 'On the way to Destination',

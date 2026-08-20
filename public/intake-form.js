@@ -373,7 +373,7 @@ function boxBlockHtml() {
     <div class="form-grid">
       <div><label class="sub">House No. / Street / Subdivision *</label><input id="rStreet${n}" required></div>
       <div><label class="sub">Landmark *</label><input id="rLandmark${n}" placeholder="Helps the driver find it" required></div>
-      <div><label class="sub">ZIP / Postal Code</label><input id="rZip${n}" inputmode="numeric" maxlength="4" placeholder="e.g. 1002"></div>
+      <div><label class="sub">ZIP / Postal Code *</label><input id="rZip${n}" inputmode="numeric" maxlength="4" placeholder="e.g. 1002"></div>
     </div>
 
     <label>Relationship to Sender * <span class="muted">(by affinity or consanguinity)</span></label>
@@ -655,6 +655,10 @@ const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '
 // Whether the sender has seen and confirmed the summary. Reset whenever they go back to
 // change something, so an edit is always re-read before it is sent.
 let CONFIRMED = false;
+// Minted when the review screen is drawn and kept until the booking is filed, so every retry
+// of the same booking carries the same key and the server can recognise it.
+let SUBMIT_KEY = null;
+let SUBMITTING = false;
 const BOC_AVAILMENT_LABELS = {
   BB_1ST: 'Balikbayan Box privilege — 1st time', BB_2ND: 'Balikbayan Box privilege — 2nd time',
   BB_3RD: 'Balikbayan Box privilege — 3rd time', DE_MINIMIS: 'De Minimis Value', NONE: 'None'
@@ -667,6 +671,10 @@ const sizeLabel = (key) => {
 // Read the booking back in plain terms. Deliberately not a re-render of the form: it shows
 // what will actually be filed — who is sending, who receives each box, and what it costs.
 function showBookingSummary(d) {
+  if (!SUBMIT_KEY) {
+    SUBMIT_KEY = (crypto.randomUUID ? crypto.randomUUID()
+      : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  }
   const host = document.getElementById('bookingSummary');
   if (!host) { CONFIRMED = true; return submitIntake(); }
   const row = (label, value) => `<div class="sum-row"><span>${esc(label)}</span><b>${esc(value || '—')}</b></div>`;
@@ -722,7 +730,7 @@ function showBookingSummary(d) {
       </div>` : ''}
 
       <div class="row" style="gap:8px;margin-top:14px">
-        <button onclick="confirmBooking()">Everything is correct — submit</button>
+        <button onclick="confirmBooking(event)">Everything is correct — submit</button>
         <button class="secondary" onclick="editBooking()">Go back and change something</button>
       </div>
     </div>`;
@@ -730,9 +738,18 @@ function showBookingSummary(d) {
   host.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function confirmBooking() {
+function confirmBooking(ev) {
+  // The press that files a booking must not be repeatable while it is in flight; a second
+  // tap on a slow connection is exactly how a sender ends up with two identical bookings.
+  if (SUBMITTING) return;
+  SUBMITTING = true;
+  const btn = ev && ev.target ? ev.target : document.querySelector('.sum-card button');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending your booking…'; }
   CONFIRMED = true;
-  submitIntake();
+  Promise.resolve(submitIntake()).finally(() => {
+    SUBMITTING = false;
+    if (btn && document.body.contains(btn)) { btn.disabled = false; btn.textContent = 'Everything is correct — submit'; }
+  });
 }
 function editBooking() {
   CONFIRMED = false;
@@ -793,6 +810,10 @@ async function submitIntake() {
       if (val('rEmail' + n) && !looksLikeEmail(val('rEmail' + n))) {
         failAt('rEmail' + n, `Box ${num}: that email address does not look right — check for a missing @ or domain.`);
       }
+      // The sorting hub routes on the postal code, so a wrong one costs a delivery run.
+      const zip = digits(val('rZip' + n));
+      if (!zip) failAt('rZip' + n, `Box ${num}: the ZIP / postal code is required — deliveries are sorted by it.`);
+      if (zip.length !== 4) failAt('rZip' + n, `Box ${num}: a Philippine ZIP code is 4 digits (e.g. 1002).`);
       const goods = collectGoods(n);
       if (!goods.length) throw new Error(`Box ${num}: please enter a quantity for at least one item.`);
       if (goods.some(g => g.category === 'Others') && !val('othersSpec' + n)) {
@@ -815,7 +836,7 @@ async function submitIntake() {
           barangay: val('rBrgyName' + n) || val('rBrgy' + n),
           street_address: need('rStreet', 'House No. / Street'),
           landmark: need('rLandmark', 'Landmark'),
-          postal_code: val('rZip' + n),
+          postal_code: need('rZip', 'ZIP / Postal Code'),
           relationship: need('rRel', 'Relationship to Sender')
         },
         size_category: val('bSize' + n),
@@ -863,6 +884,7 @@ async function submitIntake() {
     // First pass reviews; the sender confirms what they entered before any of it is sent.
     if (!CONFIRMED) return showBookingSummary({ availment, senderType, serviceLevel, collection, pickup, boxes });
 
+    fd.append('submission_key', SUBMIT_KEY || '');
     const res = await fetch('/api/public/intake-requests', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Something went wrong. Please try again.');

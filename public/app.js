@@ -3,7 +3,8 @@ let ME = null;
 let scanner = null;
 
 const STATUS_LABELS_EN = {
-  CREATED: 'Created', RECEIVED_ORIGIN: 'Received (origin)', LOADED_CONTAINER: 'Loaded in container',
+  CREATED: 'Created', RECEIVED_BRANCH: 'Received (branch office)', RECEIVED_ORIGIN: 'Received (origin WH)',
+  LOADED_CONTAINER: 'Loaded in container',
   IN_TRANSIT: 'In transit', ARRIVED_PORT: 'Arrived (PH port)', RECEIVED_WAREHOUSE: 'Received (warehouse)',
   SORTED: 'Sorted', ASSIGNED: 'Assigned to trip', LOADED_TRUCK: 'Loaded on truck',
   OUT_FOR_DELIVERY: 'Out for delivery', DELIVERED: 'Delivered', RETURNED: 'Returned', CANCELLED: 'Cancelled'
@@ -12,7 +13,7 @@ const STATUS_LABELS_EN = {
 const STATUS_LABELS = new Proxy(STATUS_LABELS_EN, {
   get: (tgt, k) => (typeof k === 'string' && tgt[k] != null) ? VI.t('status.' + k, tgt[k]) : tgt[k]
 });
-const PIPELINE = ['CREATED', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
+const PIPELINE = ['CREATED', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
   'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED', 'LOADED_TRUCK', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
 const NEXT_STATUS = {
   // Note: LOADED_CONTAINER → IN_TRANSIT is deliberately NOT a manual action — a box goes
@@ -608,6 +609,7 @@ const NAV2 = [
   ['#/origin-warehouse', 'nav.originwh', 'warehouse', 'origin_warehouse'],
   ['#/warehouse', 'nav.warehouse', 'warehouse', 'ph_warehouse'],
   ['#/trips', 'nav.trips', 'truck', 'trips'],
+  ['#/driver-passes', 'nav.driverpasses', 'truck', 'trips'],
   ['#/returns', 'nav.returns', 'undo', 'returns'],
   { section: 'nav.section.people' },
   ['#/customers', 'nav.customers', 'users', 'customers'],
@@ -630,6 +632,7 @@ const NAV = [
   ['#/origin-warehouse', 'nav.originwh', 'warehouse', R_ADMINS.concat(R_SHIPPERS)],
   ['#/warehouse', 'nav.warehouse', 'warehouse', R_ADMINS.concat(['CONSIGNEE_AGENT','WAREHOUSE'])],
   ['#/trips', 'nav.trips', 'truck', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
+  ['#/driver-passes', 'nav.driverpasses', 'truck', R_ADMINS.concat(['CONSIGNEE_AGENT'], R_SHIPPERS)],
   ['#/returns', 'nav.returns', 'undo', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
   { section: 'nav.section.people' },
   ['#/customers', 'nav.customers', 'users', R_AGENTS],
@@ -1218,6 +1221,7 @@ async function route() {
     if (p[0] === 'truck-receipt' && p[1] === 'b') return pageTruckReceipt('box', +p[2]);
     if (p[0] === 'delivery-receipt') return pageDeliveryReceipt(+p[1]);
     if (p[0] === 'sender-receipt') return pageSenderReceipt(+p[1]);
+    if (p[0] === 'driver-passes') return pageDriverPasses();
     if (p[0] === 'boxes' && p[1]) return pageBoxDetail(+p[1]);
     if (p[0] === 'boxes') return pageBoxes();
     if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
@@ -2914,7 +2918,7 @@ async function pageOriginWarehouse(size, util) {
         be worked without stopping.
       </div>
       <div class="seg-toggle" id="owScanMode">
-        <button type="button" class="seg on" data-mode="receive" onclick="setOwScanMode('receive')">Receive at origin</button>
+        <button type="button" class="seg on" data-mode="receive" onclick="setOwScanMode('receive')">Receive at Origin WH</button>
         <button type="button" class="seg" data-mode="load" onclick="setOwScanMode('load')">Stuff into container</button>
       </div>
       ${scannerHtml('Scan a box label, or type its number')}
@@ -3116,6 +3120,103 @@ async function pageOriginWarehouseDoc() {
 }
 
 /* ---------- trips ---------- */
+// A driver gets a code, not an account. This is where the office hands one out and takes it
+// back — and it deliberately shows what is left on each run, because that is what decides
+// whether a pass is still doing anything.
+async function pageDriverPasses() {
+  const [passes, trips] = await Promise.all([
+    api('/api/driver-passes'),
+    canDispatch() ? api('/api/trips').catch(() => []) : Promise.resolve([])
+  ]);
+  const hq = isHqSide();
+  const STATE_BADGE = { ACTIVE: 'st-received_origin', COMPLETED: 'st-delivered',
+                        EXPIRED: 'st-cancelled', REVOKED: 'st-cancelled' };
+  view(`
+    <h1>Driver passes</h1>
+    <div class="muted" style="margin-bottom:12px">
+      A pass lets a driver work one run from their own phone — scanning box labels to move the
+      timeline — without an account on the system. It stops working on its own once every box
+      on the run is done, and can be cancelled here at any time.
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Issue a pass</h2>
+      <div class="form-grid">
+        <div><label>Driver's name *</label><input id="dpName" placeholder="e.g. Ramon Cruz"></div>
+        <div><label>Contact number</label><input id="dpPhone" placeholder="Optional"></div>
+      </div>
+      ${hq ? `
+        <label>Delivery trip *</label>
+        <select id="dpTrip">
+          <option value="">— choose a trip —</option>
+          ${(trips || []).filter(t => t.status !== 'COMPLETED')
+            .map(t => `<option value="${t.id}">${esc(t.trip_number)} · ${esc(t.driver_name || '')} · ${t.box_count} box(es)</option>`).join('')}
+        </select>
+        <div class="muted" style="font-size:12px;margin-top:4px">
+          The pass covers the boxes already assigned to that trip, and closes when they are all delivered.
+        </div>
+        <button style="margin-top:12px" onclick="issuePass('DELIVERY')">Issue delivery pass</button>`
+      : `
+        <div class="muted" style="font-size:12.5px;margin-top:6px">
+          A collection pass covers every box currently waiting at this branch office, and closes
+          once the origin warehouse has booked them all in.
+        </div>
+        <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue collection pass</button>`}
+      <div class="error" id="dpErr"></div>
+      <div id="dpIssued"></div>
+    </div>
+
+    <div class="card table-scroll">
+      <table><tr><th>Code</th><th>Driver</th><th>Run</th><th>Boxes left</th><th>Issued</th><th>State</th><th></th></tr>
+      ${passes.map(x => `<tr>
+        <td><code style="font-size:14px;font-weight:700">${esc(x.code)}</code></td>
+        <td>${esc(x.driver_name)}</td>
+        <td>${x.kind === 'DELIVERY' ? 'Delivery' + (x.trip_number ? ' · ' + esc(x.trip_number) : '') : 'Collection'}</td>
+        <td>${x.boxes_left} of ${x.boxes_total}</td>
+        <td>${fmtDay(x.created_at)}</td>
+        <td><span class="badge ${STATE_BADGE[x.state] || ''}">${esc(x.state)}</span></td>
+        <td>${x.state === 'ACTIVE' ? `<button class="small secondary danger" onclick="revokePass(${x.id})">Cancel</button>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">No passes issued yet</td></tr>'}
+      </table>
+    </div>`);
+}
+
+async function issuePass(kind) {
+  const err = document.getElementById('dpErr');
+  err.textContent = '';
+  try {
+    const body = { kind, driver_name: document.getElementById('dpName').value.trim(),
+                   driver_contact: document.getElementById('dpPhone').value.trim() };
+    const tripSel = document.getElementById('dpTrip');
+    if (tripSel) body.trip_id = +tripSel.value || null;
+    const r = await api('/api/driver-passes', { method: 'POST', body });
+    // The code is the whole handover, so it is shown big enough to read down a phone line.
+    document.getElementById('dpIssued').innerHTML = `
+      <div class="note-warn" style="margin-top:12px;padding:14px;border-radius:10px;text-align:center">
+        <div class="muted" style="font-size:12px">Give this code to ${esc(r.driver_name)}</div>
+        <div style="font-size:32px;font-weight:800;letter-spacing:4px;margin:6px 0">${esc(r.code)}</div>
+        <div class="muted" style="font-size:12px">
+          They open <b>${esc(location.origin)}/driver.html</b> and enter it.
+          Covers ${r.boxes_total} box(es); expires ${fmtDay(r.expires_at)}.
+        </div>
+      </div>`;
+    flash('Pass issued for ' + r.driver_name);
+    setTimeout(() => { const box = document.getElementById('dpIssued').innerHTML; pageDriverPasses().then(() => {
+      const host = document.getElementById('dpIssued'); if (host) host.innerHTML = box;
+    }); }, 400);
+  } catch (e) { err.textContent = e.message; }
+}
+
+async function revokePass(id) {
+  if (!confirm('Cancel this pass? The driver will be signed out immediately.')) return;
+  try { await api('/api/driver-passes/' + id + '/revoke', { method: 'POST' }); pageDriverPasses(); }
+  catch (e) { showErr(e); }
+}
+
+// Manila dispatches deliveries; a branch collects from its own counter. canDispatch already
+// names the Manila dispatch roles, so a pass form follows the same line.
+function isHqSide() { return canDispatch(); }
+
 async function pageTrips() {
   const list = await api('/api/trips');
   view(`
@@ -4380,7 +4481,7 @@ function setOwScanMode(mode) {
       // it happens constantly when a pallet is re-checked. Say so and move on.
       if (box.status === 'RECEIVED_ORIGIN') return box.box_number + ' was already received';
       await api('/api/boxes/' + box.id + '/status', { method: 'POST', body: { status: 'RECEIVED_ORIGIN', note: 'Received at origin warehouse (scanned)' } });
-      return box.box_number + ' received at origin';
+      return box.box_number + ' received at origin WH';
     });
   } else {
     scanRunner('', async (box) => {
