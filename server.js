@@ -461,9 +461,10 @@ function scopeCustomerList(req, customers) {
   const receivers = new Set(d.boxes.filter(b => mine.has(b.shipment_id)).map(b => b.receiver_id));
   const senders = new Set(d.shipments.filter(s => mine.has(s.id)).map(s => s.sender_id));
   return customers.filter(c =>
-    c.country === scope ||          // a sender in this branch's country
-    senders.has(c.id) ||            // named as sender on one of its shipments
-    receivers.has(c.id));           // a consignee it has actually shipped to
+    c.country === scope ||              // a sender in this branch's country
+    senders.has(c.id) ||                // named as sender on one of its shipments
+    receivers.has(c.id) ||              // a consignee it has actually shipped to
+    c.created_by_branch === scope);     // or one it entered itself, before any box exists
 }
 
 app.get('/api/customers', requireAuth, (req, res) => {
@@ -582,6 +583,9 @@ app.post('/api/customers', requireRole(...AGENTS), (req, res) => {
     province: b.province || '', region: b.region || null, country: b.country || 'Philippines', postal_code: b.postal_code || '',
     landmark: b.landmark || '', notes: b.notes || '',
     type: ['SENDER', 'RECEIVER', 'BOTH'].includes(b.type) ? b.type : 'RECEIVER',
+    // Which branch entered this person. A consignee in Manila belongs to whichever branch
+    // ships to them, and until a box exists there is nothing else linking the two.
+    created_by_branch: branchScope(req.user) || null,
     created_at: new Date().toISOString()
   };
   d.customers.push(c);

@@ -1752,7 +1752,20 @@ async function pageShipmentNew(intakeId) {
       postal_code: r.postal_code || ''
     });
     await loadCustomers();
-    document.getElementById('bxReceiver' + n).innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
+    const rSel = document.getElementById('bxReceiver' + n);
+    rSel.innerHTML = customerOptions('RECEIVER', receiverCustomer.id);
+    // The customer list is branch-scoped, so a consignee entered seconds ago can legitimately
+    // be missing from it. Falling back to an empty picker reads as "no receiver" and is easy
+    // to save straight past, so put the person we just matched in and select them.
+    if (!rSel.value && receiverCustomer && receiverCustomer.id) {
+      const label = [receiverCustomer.full_name, receiverCustomer.phone_primary, receiverCustomer.city_municipality]
+        .filter(Boolean).join(' · ');
+      const opt = document.createElement('option');
+      opt.value = String(receiverCustomer.id);
+      opt.textContent = label;
+      rSel.appendChild(opt);
+      rSel.value = String(receiverCustomer.id);
+    }
     document.getElementById('bxSize' + n).value = bx.size_category;
     if (bx.weight_kg) document.getElementById('bxWeight' + n).value = bx.weight_kg;
     // Show the sender's declared goods in the same grid the agent would type into, so the
