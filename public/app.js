@@ -2490,7 +2490,7 @@ async function pageBoxDetail(id) {
              <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
           : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
         ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
-        ${R_AGENTS.concat(['WAREHOUSE']).includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
+        ${R_AGENTS.concat(['WAREHOUSE']).includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}', '${esc(STATUS_LABELS[b.events[b.events.length - 1].from_status] || '')}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
         ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No forward actions available at this status.</span>' : ''}
       </div>
       ${b.status === 'OUT_FOR_DELIVERY' ? podFormHtml(b.id) : ''}
@@ -2542,8 +2542,14 @@ async function cancelBox(id) {
   if (!reason) return;
   await doStatus(id, 'CANCELLED', reason);
 }
-async function revertBox(id, lastLabel) {
-  if (!confirm(`Undo the last action${lastLabel ? ` (“${lastLabel}”)` : ''}? The box rolls back to the previous status.`)) return;
+async function revertBox(id, lastLabel, backTo) {
+  const ok = await confirmAction({
+    title: 'Undo the last action?',
+    body: `<p>${lastLabel ? `This removes <b>${esc(lastLabel)}</b> from the box's history` : "This removes the box's last step"}${backTo ? ` and puts it back to <b>${esc(backTo)}</b>` : ''}.</p>
+           <p class="muted">The step disappears from the timeline rather than being marked undone, so use it for a mis-click rather than to record a change of plan.</p>`,
+    confirmLabel: 'Undo it', cancelLabel: 'Leave it', danger: true
+  });
+  if (!ok) return;
   try {
     const b = await api(`/api/boxes/${id}/revert`, { method: 'POST' });
     flash(`Reverted to ${STATUS_LABELS[b.status] || b.status}`);

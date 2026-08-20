@@ -2126,7 +2126,7 @@ app.post('/api/boxes/:id/status', requireAuth, (req, res) => {
 });
 // Undo the last status change — for a mis-clicked Action. Removes the most recent status
 // event and rolls the box back to the prior status, reconciling any side effects.
-app.post('/api/boxes/:id/revert', requireRole(...ADMINS), (req, res) => {
+app.post('/api/boxes/:id/revert', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS), (req, res) => {
   const d = db.get();
   const box = getBox(req, res, req.params.id);
   if (!box) return;
@@ -2139,6 +2139,13 @@ app.post('/api/boxes/:id/revert', requireRole(...ADMINS), (req, res) => {
   }
   if (['DELIVERED', 'RETURNED', 'CANCELLED'].includes(last.to_status) && !ROLE.isAdmin(req.user.role)) {
     return res.status(403).json({ error: 'Only an admin can undo a Delivered / Returned / Cancelled box.' });
+  }
+  // A branch corrects its own end. Once a box has sailed, what happens to it is Manila's to
+  // undo — the branch is a continent away from the thing being corrected.
+  if (ROLE.isBranchAdmin(req.user.role) && !SM.ORIGIN_SIDE_STATUSES.includes(last.to_status)) {
+    return res.status(403).json({
+      error: `${box.box_number} has already left the origin — ask Manila to undo "${SM.FRIENDLY[last.to_status] || last.to_status}".`
+    });
   }
   d.status_events = d.status_events.filter(e => e.id !== last.id);
   box.status = last.from_status;
@@ -2302,12 +2309,18 @@ app.post('/api/containers/:id/arrive', requireRole(...AGENTS), (req, res) => {
 });
 // Revert / correct a container's status by one step (undo a mis-clicked action). Reverses the
 // box cascade for Depart (IN_TRANSIT→LOADING) and Arrive (ARRIVED→IN_TRANSIT).
-app.post('/api/containers/:id/revert', requireRole(...ADMINS), (req, res) => {
+app.post('/api/containers/:id/revert', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS), (req, res) => {
   const d = db.get();
   const c = getContainer(req, res, req.params.id);
   if (!c) return;
   const prev = CONTAINER_PREV[c.status];
   if (!prev) return res.status(400).json({ error: `Container is at ${c.status} — there is no earlier status to revert to.` });
+  // A branch books and stuffs its own containers; once one has sailed it is Manila's.
+  if (ROLE.isBranchAdmin(req.user.role) && !SM.CONTAINER_ORIGIN_STATUSES.includes(c.status)) {
+    return res.status(403).json({
+      error: `${c.container_number} has already departed — ask Manila to undo this.`
+    });
+  }
   let reversed = 0;
   if (c.status === 'IN_TRANSIT') {
     for (const box of d.boxes.filter(b => b.container_id === c.id && b.status === 'IN_TRANSIT')) {
