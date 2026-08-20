@@ -1311,6 +1311,7 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
     const base = {
       id: x.id, box_number: x.box_number, status: x.status,
       status_label: SM.FRIENDLY[x.status] || x.status,
+      picked_up: !!x.picked_up_at,
       size_label: (BOXSIZE.bySize(x.size_category) || {}).label || x.size_category,
       weight_kg: x.weight_kg,
       receiver_name: receiver.full_name || '',
@@ -1748,11 +1749,94 @@ app.put('/api/box-orders/:id', requireRole(...AGENTS), (req, res) => {
   const o = (d.box_orders || []).find(x => x.id === +req.params.id);
   if (!o) return res.status(404).json({ error: 'Not found' });
   if (o.origin_country && outOfScope(req, res, o.origin_country)) return;
-  const { status } = req.body || {};
-  if (!['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  o.status = status;
+  const b = req.body || {};
+  if ('status' in b) {
+    if (!['NEW', 'PREPARING', 'DISPATCHED', 'FULFILLED', 'CANCELLED'].includes(b.status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    o.status = b.status;
+  }
+  // An order arrives without a date — the customer says what they want, the branch says when
+  // it can go out. Until someone sets one it has no place on a calendar, which is why the
+  // schedule lists undated orders separately rather than hiding them.
+  if ('scheduled_date' in b) {
+    const v = String(b.scheduled_date || '').trim();
+    if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return res.status(400).json({ error: 'Use a date like 2026-08-22.' });
+    o.scheduled_date = v || null;
+  }
+  if ('scheduled_window' in b) o.scheduled_window = String(b.scheduled_window || '').trim() || null;
   db.persist();
   res.json(o);
+});
+
+// ---------- schedule ----------
+// Two things are promised to a customer on a date: a driver coming for boxes that are packed
+// and ready, and empty boxes going out to someone who ordered them. They live in different
+// records and were only visible by opening each one, so nobody could see a day's work at
+// once — or notice that four pick-ups had been promised for the same morning.
+app.get('/api/schedule', requireRole(...ALL_STAFF), (req, res) => {
+  const d = db.get();
+  const scope = effectiveScope(req);
+  const from = String(req.query.from || '');
+  const to = String(req.query.to || '');
+  const inRange = (date) => !!date && (!from || date >= from) && (!to || date <= to);
+
+  const events = [];
+
+  // Pick-ups: a booking that asked to be collected and still has boxes waiting.
+  const boxesByShipment = new Map();
+  for (const b of (d.boxes || [])) {
+    if (!boxesByShipment.has(b.shipment_id)) boxesByShipment.set(b.shipment_id, []);
+    boxesByShipment.get(b.shipment_id).push(b);
+  }
+  for (const sh of (d.shipments || [])) {
+    if (sh.collection !== 'PICKUP') continue;
+    if (scope && sh.origin_country !== scope) continue;
+    const pu = (sh.boc && sh.boc.pickup) || {};
+    if (!pu.date) continue;
+    const boxes = boxesByShipment.get(sh.id) || [];
+    const waiting = boxes.filter(x => x.status === 'CREATED');
+    const sender = (d.customers || []).find(c => c.id === sh.sender_id) || {};
+    events.push({
+      kind: 'PICKUP', date: pu.date, window: pu.time_window || '',
+      ref: sh.shipment_number, who: sender.full_name || '',
+      phone: sender.phone_primary || '',
+      address: pu.address || sender.address_line || '',
+      note: pu.notes || '',
+      count: waiting.length, total: boxes.length,
+      box_numbers: waiting.map(x => x.box_number),
+      done: waiting.length === 0,
+      href: '#/shipments/' + sh.id
+    });
+  }
+
+  // Empty boxes going out to whoever ordered them.
+  for (const o of (d.box_orders || [])) {
+    if (scope && o.origin_country && o.origin_country !== scope) continue;
+    if (['FULFILLED', 'CANCELLED'].includes(o.status)) continue;
+    const addr = o.address || {};
+    events.push({
+      kind: 'BOX_ORDER', date: o.scheduled_date || null, window: o.scheduled_window || '',
+      ref: o.reference_code, who: (o.contact && o.contact.name) || '',
+      phone: (o.contact && o.contact.phone) || '',
+      address: o.delivery_method === 'PICKUP_BRANCH'
+        ? 'Collecting at the branch office'
+        : [addr.street_address, addr.city, addr.country].filter(Boolean).join(', '),
+      note: o.notes || '',
+      count: o.total_qty || 0, total: o.total_qty || 0,
+      sizes: (o.items || []).map(i => i.qty + '× ' + i.size).join(', '),
+      done: false, status: o.status,
+      id: o.id,
+      href: '#/box-orders'
+    });
+  }
+
+  const dated = events.filter(e => inRange(e.date))
+    .sort((a, b) => (a.date + (a.window || '')).localeCompare(b.date + (b.window || '')));
+  // Anything promised but not yet placed on a day. Hiding these would make the calendar
+  // look calm while the work still exists.
+  const undated = events.filter(e => !e.date);
+  res.json({ events: dated, undated });
 });
 
 // ---------- global search ----------

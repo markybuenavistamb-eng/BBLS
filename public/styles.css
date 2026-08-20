@@ -1328,3 +1328,48 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 }
 .drv-box-who { font-weight: 600; font-size: 13.5px; margin-top: 2px; }
 .drv-box-when { font-size: 12.5px; color: var(--primary); font-weight: 600; margin-top: 3px; }
+/* The labels to scan at this stop — the driver checks the load against these. */
+.drv-stop-boxes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.drv-chip {
+  background: #eef0f3; border-radius: 8px; padding: 5px 9px;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.drv-chip.got { background: #dcfce7; color: #166534; }
+
+/* ---------- schedule calendar ---------- */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-head { margin-bottom: 6px; }
+.cal-head div { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--muted); text-align: center; padding: 2px 0; }
+.cal-cell {
+  min-height: 74px; border: 1px solid var(--border); border-radius: 10px;
+  padding: 6px; cursor: pointer; background: var(--card); overflow: hidden;
+}
+.cal-cell.empty { border: 0; background: transparent; cursor: default; }
+.cal-cell.has:hover { border-color: var(--primary); }
+.cal-cell.is-today { border-color: var(--primary); border-width: 2px; }
+.cal-cell.is-open { background: #fff7ed; border-color: var(--primary); }
+.cal-day { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+.cal-pill {
+  display: block; font-size: 10.5px; font-weight: 700; border-radius: 6px;
+  padding: 2px 5px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* One colour per promise, used on the pills, the key and the day's detail. */
+.k-pickup { background: #dbeafe; color: #1e40af; }
+.k-order  { background: #fef3c7; color: #92400e; }
+.sched-key { margin-left: 12px; font-size: 12px; }
+.sched-key i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: baseline; }
+.sched-item { border-left: 4px solid; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; background: var(--bg); }
+.sched-item.k-pickup { border-left-color: #1e40af; background: #f5f8ff; color: inherit; }
+.sched-item.k-order { border-left-color: #92400e; background: #fffbf2; color: inherit; }
+.sched-item.done { opacity: .55; }
+.sched-boxes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+@media (max-width: 640px) {
+  /* Seven columns of nothing is unreadable on a phone; the day list below carries the detail. */
+  .cal-cell { min-height: 58px; padding: 4px; }
+  .cal-pill { font-size: 9.5px; padding: 1px 3px; }
+  .cal-day { font-size: 11px; }
+}
+.k-done { background: #dcfce7; color: #166534; }
+.drv-chip.loaded { background: #fef3c7; color: #92400e; }

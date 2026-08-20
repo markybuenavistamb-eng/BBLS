@@ -98,7 +98,7 @@
       <div class="drv-head">
         <div>
           <div class="drv-title">${esc(title)}</div>
-          <div class="muted">${RUN.boxes.length} box(es) · <b>${RUN.outstanding}</b> still to do</div>
+          <div class="muted">${stopsFor(RUN.boxes).length} stop(s) · ${RUN.boxes.length} box(es) · <b>${RUN.outstanding}</b> still to do</div>
         </div>
         <button class="drv-out" onclick="drvLogout()">End</button>
       </div>
@@ -209,6 +209,21 @@
       `<div class="drv-line ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${esc(l.text)}</div>`).join('');
   }
 
+  // One card per stop. Boxes going to (or coming from) the same person at the same address
+  // belong together — that is what the driver loads and checks off in one visit.
+  function stopsFor(boxes) {
+    const stops = new Map();
+    for (const b of boxes) {
+      const key = [b.who || '', b.address || '', b.window || ''].join('¦');
+      if (!stops.has(key)) {
+        stops.set(key, { who: b.who, address: b.address, window: b.window,
+                         landmark: b.landmark, phone: b.phone, boxes: [] });
+      }
+      stops.get(key).boxes.push(b);
+    }
+    return [...stops.values()];
+  }
+
   function paintList() {
     const done = RUN.kind === 'DELIVERY'
       ? ['DELIVERED', 'RETURNED', 'CANCELLED']
@@ -216,18 +231,35 @@
     const heading = RUN.kind === 'DELIVERY' ? 'Deliver to' : 'Collect from';
     const t = gid('drvListTitle');
     if (t) t.textContent = heading;
-    gid('drvList').innerHTML = RUN.boxes.map(b => `
-      <div class="drv-box${done.includes(b.status) ? ' done' : ''}">
+
+    const stops = stopsFor(RUN.boxes);
+    gid('drvList').innerHTML = stops.map(st => {
+      // On a collection run "to go" means not yet on the van; on a delivery it means not yet
+      // delivered. Either way it is the number of labels still to scan at this stop.
+      const left = st.boxes.filter(b => RUN.kind === 'PICKUP'
+        ? !(b.picked_up || done.includes(b.status))
+        : !done.includes(b.status)).length;
+      return `
+      <div class="drv-box${left === 0 ? ' done' : ''}">
         <div class="drv-box-top">
-          <b>${esc(b.box_number)}</b>
-          <span class="drv-box-status">${esc(b.status_label)}</span>
+          <b>${esc(st.who || '')}</b>
+          <span class="drv-box-status">${left ? left + ' of ' + st.boxes.length + ' to go' : 'all done'}</span>
         </div>
-        <div class="drv-box-who">${esc(b.who || b.receiver_name || b.sender_name || '')}${b.size_label ? ' · ' + esc(b.size_label) : ''}</div>
-        ${b.address ? `<div class="drv-box-addr">${esc(b.address)}</div>` : ''}
-        ${b.window ? `<div class="drv-box-when">🕑 ${esc(b.window)}</div>` : ''}
-        ${b.landmark ? `<div class="muted drv-box-lm">${esc(b.landmark)}</div>` : ''}
-        ${b.phone ? `<a class="drv-call" href="tel:${esc(b.phone)}">📞 ${esc(b.phone)}</a>` : ''}
-      </div>`).join('');
+        ${st.address ? `<div class="drv-box-addr">${esc(st.address)}</div>` : ''}
+        ${st.window ? `<div class="drv-box-when">🕑 ${esc(st.window)}</div>` : ''}
+        ${st.landmark ? `<div class="muted drv-box-lm">${esc(st.landmark)}</div>` : ''}
+        <div class="drv-stop-boxes">
+          ${st.boxes.map(b => {
+            const isDone = done.includes(b.status);
+            const onVan = !isDone && b.picked_up;
+            const cls = isDone ? ' got' : (onVan ? ' loaded' : '');
+            const tick = isDone ? '✓ ' : (onVan ? '▪ ' : '');
+            return `<span class="drv-chip${cls}" title="${esc(onVan ? 'On the van' : b.status_label)}">${tick}${esc(b.box_number)}${b.size_label ? ' · ' + esc(b.size_label) : ''}</span>`;
+          }).join('')}
+        </div>
+        ${st.phone ? `<a class="drv-call" href="tel:${esc(st.phone)}">📞 ${esc(st.phone)}</a>` : ''}
+      </div>`;
+    }).join('');
   }
 
   function finishRun() {

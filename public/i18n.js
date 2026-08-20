@@ -37,7 +37,8 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Shipments', 'nav.boxorders': 'Box Orders', 'nav.boxes': 'Boxes',
       'nav.containers': 'Containers', 'nav.originwh': 'Origin Warehouse', 'nav.warehouse': 'PH Warehouse', 'nav.trips': 'Trips',
       'nav.returns': 'Returns',
-      'nav.driverpasses': 'Driver Passes', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
+      'nav.driverpasses': 'Driver Passes',
+      'nav.schedule': 'Schedule', 'nav.customers': 'Customers', 'nav.sms': 'SMS',
       // Sidebar submenus (tabs inside a module)
       'sub.rates': 'Rate Cards', 'sub.interbranch': 'Inter-branch', 'sub.expenses': 'Expenses', 'sub.pnl': 'Profit & Loss',
       'sub.stock': 'Stock & load plan', 'sub.printable': 'Printable report',
@@ -194,6 +195,7 @@
       'nav.dashboard': 'Dashboard', 'nav.shipments': 'Mga Padala', 'nav.boxorders': 'Order ng Kahon', 'nav.boxes': 'Mga Kahon',
       'nav.containers': 'Mga Container', 'nav.originwh': 'Bodega sa Pinagmulan', 'nav.warehouse': 'Bodega sa PH', 'nav.trips': 'Mga Biyahe',
       'nav.returns': 'Mga Naibalik', 'nav.driverpasses': 'Pass ng Drayber',
+      'nav.schedule': 'Iskedyul',
       'nav.customers': 'Mga Kustomer', 'nav.sms': 'SMS',
       // Mga submenu sa sidebar (mga tab sa loob ng module)
       'sub.rates': 'Mga Rate Card', 'sub.interbranch': 'Sa pagitan ng sangay', 'sub.expenses': 'Mga Gastos', 'sub.pnl': 'Tubo at Lugi',

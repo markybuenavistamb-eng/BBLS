@@ -610,6 +610,7 @@ const NAV2 = [
   ['#/warehouse', 'nav.warehouse', 'warehouse', 'ph_warehouse'],
   ['#/trips', 'nav.trips', 'truck', 'trips'],
   ['#/driver-passes', 'nav.driverpasses', 'truck', 'driver_passes'],
+  ['#/schedule', 'nav.schedule', 'grid', 'schedule'],
   ['#/returns', 'nav.returns', 'undo', 'returns'],
   { section: 'nav.section.people' },
   ['#/customers', 'nav.customers', 'users', 'customers'],
@@ -633,6 +634,7 @@ const NAV = [
   ['#/warehouse', 'nav.warehouse', 'warehouse', R_ADMINS.concat(['CONSIGNEE_AGENT','WAREHOUSE'])],
   ['#/trips', 'nav.trips', 'truck', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
   ['#/driver-passes', 'nav.driverpasses', 'truck', R_ADMINS.concat(['CONSIGNEE_AGENT'], R_SHIPPERS)],
+  ['#/schedule', 'nav.schedule', 'grid', R_ADMINS.concat(['CONSIGNEE_AGENT'], R_SHIPPERS)],
   ['#/returns', 'nav.returns', 'undo', R_ADMINS.concat(['CONSIGNEE_AGENT'])],
   { section: 'nav.section.people' },
   ['#/customers', 'nav.customers', 'users', R_AGENTS],
@@ -1222,6 +1224,7 @@ async function route() {
     if (p[0] === 'delivery-receipt') return pageDeliveryReceipt(+p[1]);
     if (p[0] === 'sender-receipt') return pageSenderReceipt(+p[1]);
     if (p[0] === 'driver-passes') return pageDriverPasses();
+    if (p[0] === 'schedule') return pageSchedule();
     if (p[0] === 'boxes' && p[1]) return pageBoxDetail(+p[1]);
     if (p[0] === 'boxes') return pageBoxes();
     if (p[0] === 'container-manifest') return pageContainerManifest(+p[1]);
@@ -3139,6 +3142,154 @@ async function pageOriginWarehouseDoc() {
 }
 
 /* ---------- trips ---------- */
+/* ---------- schedule ---------- */
+// Two promises sit on a date: a driver coming for boxes that are packed, and empty boxes
+// going out to whoever ordered them. Both were only visible by opening the record they live
+// in, so nobody could see a day's work at once — or notice four pick-ups promised for the
+// same morning until the morning arrived.
+let SCHED_MONTH = null;      // first of the month being shown
+let SCHED_DAY = null;        // the day whose detail is open
+
+const ymd = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+
+async function pageSchedule() {
+  if (!SCHED_MONTH) { const t = new Date(); SCHED_MONTH = new Date(t.getFullYear(), t.getMonth(), 1); }
+  const first = SCHED_MONTH;
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+  const data = await api(`/api/schedule?from=${ymd(first)}&to=${ymd(last)}`);
+
+  const byDay = {};
+  for (const e of data.events) (byDay[e.date] = byDay[e.date] || []).push(e);
+
+  // A calendar starts on Monday here — the working week the branches keep.
+  const startPad = (first.getDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < startPad; i += 1) cells.push(null);
+  for (let dnum = 1; dnum <= last.getDate(); dnum += 1) {
+    cells.push(new Date(first.getFullYear(), first.getMonth(), dnum));
+  }
+  const today = ymd(new Date());
+  const monthLabel = first.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+
+  view(`
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h1>Schedule</h1>
+      <div class="row" style="gap:6px">
+        <button class="small secondary" onclick="schedMove(-1)">‹</button>
+        <b style="min-width:150px;text-align:center">${esc(monthLabel)}</b>
+        <button class="small secondary" onclick="schedMove(1)">›</button>
+        <button class="small secondary" onclick="schedToday()">Today</button>
+      </div>
+    </div>
+    <div class="muted" style="margin:-6px 0 12px">
+      Pick-ups of packed boxes and deliveries of empty boxes people have ordered.
+      <span class="sched-key"><i class="k-pickup"></i> pick-up</span>
+      <span class="sched-key"><i class="k-order"></i> empty boxes</span>
+    </div>
+
+    <div class="card">
+      <div class="cal-grid cal-head">
+        ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x => `<div>${x}</div>`).join('')}
+      </div>
+      <div class="cal-grid">
+        ${cells.map(dt => {
+          if (!dt) return '<div class="cal-cell empty"></div>';
+          const key = ymd(dt);
+          const evs = byDay[key] || [];
+          const pick = evs.filter(e => e.kind === 'PICKUP');
+          const ord = evs.filter(e => e.kind === 'BOX_ORDER');
+          return `<div class="cal-cell${key === today ? ' is-today' : ''}${key === SCHED_DAY ? ' is-open' : ''}${evs.length ? ' has' : ''}"
+                       onclick="schedOpen('${key}')">
+            <div class="cal-day">${dt.getDate()}</div>
+            ${(() => {
+              if (!pick.length) return '';
+              const left = pick.reduce((n, e) => n + e.count, 0);
+              // A pick-up whose boxes are already in says so, rather than advertising zero.
+              return left
+                ? `<div class="cal-pill k-pickup">${left} box${left === 1 ? '' : 'es'}</div>`
+                : '<div class="cal-pill k-done">collected</div>';
+            })()}
+            ${ord.length ? `<div class="cal-pill k-order">${ord.length} order${ord.length === 1 ? '' : 's'}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div id="schedDay"></div>
+
+    ${data.undated.length ? `<div class="card">
+      <h2 style="margin-top:0">Not yet scheduled</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Orders waiting for a date. They are listed here rather than hidden, because the work
+        exists whether or not the calendar shows it.
+      </div>
+      <div class="table-scroll"><table>
+        <tr><th>Reference</th><th>Who</th><th>Boxes</th><th>Where</th><th>Give it a date</th></tr>
+        ${data.undated.map(e => `<tr>
+          <td>${esc(e.ref)}</td><td>${esc(e.who)}</td>
+          <td>${esc(e.sizes || String(e.count))}</td>
+          <td class="wrap-cell">${esc(e.address)}</td>
+          <td class="inline-actions">
+            <input type="date" id="sd${e.id}" style="max-width:150px">
+            <button class="small" onclick="setOrderDate(${e.id})">Set</button>
+          </td>
+        </tr>`).join('')}
+      </table></div>
+    </div>` : ''}`);
+
+  if (SCHED_DAY) schedOpen(SCHED_DAY, byDay[SCHED_DAY] || []);
+}
+
+function schedMove(delta) {
+  SCHED_MONTH = new Date(SCHED_MONTH.getFullYear(), SCHED_MONTH.getMonth() + delta, 1);
+  SCHED_DAY = null;
+  pageSchedule();
+}
+function schedToday() {
+  const t = new Date();
+  SCHED_MONTH = new Date(t.getFullYear(), t.getMonth(), 1);
+  SCHED_DAY = ymd(t);
+  pageSchedule();
+}
+
+// The day's detail: who, where, and which box numbers the driver is going for.
+async function schedOpen(day, preloaded) {
+  SCHED_DAY = day;
+  document.querySelectorAll('.cal-cell').forEach(c => c.classList.remove('is-open'));
+  const data = preloaded || (await api(`/api/schedule?from=${day}&to=${day}`)).events;
+  const host = document.getElementById('schedDay');
+  if (!host) return;
+  const pretty = new Date(day + 'T00:00:00').toLocaleDateString('en-PH', { weekday: 'long', day: 'numeric', month: 'long' });
+  host.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">${esc(pretty)}</h2>
+      ${data.length ? data.map(e => `
+        <div class="sched-item ${e.kind === 'PICKUP' ? 'k-pickup' : 'k-order'}${e.done ? ' done' : ''}">
+          <div class="row" style="justify-content:space-between;align-items:baseline">
+            <b>${e.kind === 'PICKUP' ? 'Pick-up' : 'Empty boxes'} · <a href="${esc(e.href)}">${esc(e.ref)}</a></b>
+            <span class="muted">${esc(e.window || '')}</span>
+          </div>
+          <div>${esc(e.who)}${e.phone ? ` · <a href="tel:${esc(e.phone)}">${esc(e.phone)}</a>` : ''}</div>
+          <div class="muted">${esc(e.address)}</div>
+          ${e.note ? `<div class="muted" style="font-size:12px">${esc(e.note)}</div>` : ''}
+          ${e.kind === 'PICKUP'
+            ? (e.box_numbers && e.box_numbers.length
+                ? `<div class="sched-boxes">${e.box_numbers.map(n => `<span class="drv-chip">${esc(n)}</span>`).join('')}</div>`
+                : '<div class="muted" style="font-size:12px">All boxes already collected.</div>')
+            : `<div class="sched-boxes"><span class="drv-chip">${esc(e.sizes || e.count + ' box(es)')}</span></div>`}
+        </div>`).join('')
+      : '<div class="muted">Nothing scheduled for this day.</div>'}
+    </div>`;
+  host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function setOrderDate(id) {
+  const v = (document.getElementById('sd' + id) || {}).value;
+  if (!v) return flash('Choose a date first', 'error');
+  try { await api('/api/box-orders/' + id, { method: 'PUT', body: { scheduled_date: v } }); pageSchedule(); }
+  catch (e) { showErr(e); }
+}
+
 // A driver gets a code, not an account. This is where the office hands one out and takes it
 // back — and it deliberately shows what is left on each run, because that is what decides
 // whether a pass is still doing anything.
@@ -3161,16 +3312,21 @@ async function pageDriverPasses() {
     <div class="card">
       <h2 style="margin-top:0">Issue a pass</h2>
       <div class="form-grid">
-        <div><label>Driver's name *</label><input id="dpName" placeholder="e.g. Ramon Cruz"></div>
-        <div><label>Contact number</label><input id="dpPhone" placeholder="Optional"></div>
+        <div><label>Driver's name *</label><input id="dpName" placeholder="e.g. Ramon Cruz" oninput="this.dataset.touched='1'"></div>
+        <div><label>Contact number</label><input id="dpPhone" placeholder="Optional" oninput="this.dataset.touched='1'"></div>
       </div>
       ${hq ? `
         <label>Delivery trip *</label>
-        <select id="dpTrip">
+        <select id="dpTrip" onchange="tripPicked()">
           <option value="">— choose a trip —</option>
           ${(trips || []).filter(t => t.status !== 'COMPLETED')
-            .map(t => `<option value="${t.id}">${esc(t.trip_number)} · ${esc(t.driver_name || '')} · ${t.box_count} box(es)</option>`).join('')}
+            .map(t => `<option value="${t.id}"
+              data-driver="${esc(t.driver_name || '')}"
+              data-contact="${esc(t.driver_contact || '')}"
+              data-plate="${esc(t.plate_number || '')}"
+            >${esc(t.trip_number)} · ${esc(t.driver_name || '')} · ${t.box_count} box(es)</option>`).join('')}
         </select>
+        <div class="muted" id="dpTripInfo" style="font-size:12px;margin-top:4px"></div>
         <div class="muted" style="font-size:12px;margin-top:4px">
           The driver loads these at the PH warehouse and delivers to the receivers. The pass closes when every box is delivered or comes back.
         </div>
@@ -3198,6 +3354,24 @@ async function pageDriverPasses() {
       </tr>`).join('') || '<tr><td colspan="7" class="muted">No passes issued yet</td></tr>'}
       </table>
     </div>`);
+}
+
+// Selecting the trip fills in who is driving it. Typed-over values are respected — an
+// agent correcting the name is telling us the trip's own record is out of date, not making a
+// mistake — so only untouched fields are replaced.
+function tripPicked() {
+  const sel = document.getElementById('dpTrip');
+  const opt = sel.options[sel.selectedIndex];
+  const name = document.getElementById('dpName');
+  const phone = document.getElementById('dpPhone');
+  const info = document.getElementById('dpTripInfo');
+  if (!opt || !opt.value) { if (info) info.textContent = ''; return; }
+  const driver = opt.dataset.driver || '';
+  const contact = opt.dataset.contact || '';
+  const plate = opt.dataset.plate || '';
+  if (name && !name.dataset.touched) name.value = driver;
+  if (phone && !phone.dataset.touched) phone.value = contact;
+  if (info) info.textContent = plate ? `Plate ${plate} — from the trip record.` : 'Driver details taken from the trip.';
 }
 
 async function issuePass(kind) {
