@@ -378,6 +378,36 @@ function watchTables() {
   }).observe(host, { childList: true, subtree: true });
 }
 
+/* ---------- confirmation ---------- */
+// Returns a promise for yes/no. The body may be HTML, because the useful part of a
+// confirmation is usually a list of what is about to happen rather than a sentence about it.
+function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
+  return new Promise(resolve => {
+    document.querySelectorAll('.confirm-back').forEach(x => x.remove());
+    const back = document.createElement('div');
+    back.className = 'confirm-back no-print';
+    back.innerHTML = `
+      <div class="confirm-box" role="dialog" aria-modal="true">
+        <h2>${esc(title)}</h2>
+        <div class="confirm-body">${body}</div>
+        <div class="confirm-actions">
+          <button class="secondary" data-no>${esc(cancelLabel)}</button>
+          <button class="${danger ? 'danger' : ''}" data-yes>${esc(confirmLabel)}</button>
+        </div>
+      </div>`;
+    const done = (answer) => { back.remove(); document.removeEventListener('keydown', onKey); resolve(answer); };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+    back.addEventListener('click', (e) => {
+      if (e.target.hasAttribute('data-no') || e.target === back) done(false);
+      if (e.target.hasAttribute('data-yes')) done(true);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(back);
+    const yes = back.querySelector('[data-yes]');
+    if (yes) yes.focus();
+  });
+}
+
 function flash(msg, cls = 'success') {
   const el = document.createElement('div');
   el.className = cls;
@@ -3294,10 +3324,18 @@ async function setOrderDate(id) {
 // back — and it deliberately shows what is left on each run, because that is what decides
 // whether a pass is still doing anything.
 async function pageDriverPasses() {
-  const [passes, trips] = await Promise.all([
+  const [passes, trips, sched] = await Promise.all([
     api('/api/driver-passes'),
-    canDispatch() ? api('/api/trips').catch(() => []) : Promise.resolve([])
+    canDispatch() ? api('/api/trips').catch(() => []) : Promise.resolve([]),
+    canDispatch() ? Promise.resolve(null) : api('/api/schedule').catch(() => null)
   ]);
+  // A branch hands a driver a route, and a route is a set of stops on particular days. Which
+  // ones go on this run is the decision being made here, so it is made from the schedule
+  // rather than by handing over everything outstanding.
+  const stops = sched
+    ? (sched.events || []).filter(e => e.kind === 'PICKUP' && !e.pending && (e.box_ids || []).length)
+    : [];
+  const pendingStops = sched ? (sched.events || []).filter(e => e.kind === 'PICKUP' && e.pending) : [];
   const hq = isHqSide();
   const STATE_BADGE = { ACTIVE: 'st-received_origin', COMPLETED: 'st-delivered',
                         EXPIRED: 'st-cancelled', REVOKED: 'st-cancelled' };
@@ -3332,11 +3370,31 @@ async function pageDriverPasses() {
         </div>
         <button style="margin-top:12px" onclick="issuePass('DELIVERY')">Issue delivery pass</button>`
       : `
-        <div class="muted" style="font-size:12.5px;margin-top:6px">
-          A pick-up pass covers every sender who asked to be collected and is still waiting, and closes
-          once the origin warehouse has booked them all in.
+        <div class="muted" style="font-size:12.5px;margin:6px 0 8px">
+          Tick the stops going on this run. The pass closes on its own once the origin
+          warehouse has booked in every box on it.
         </div>
-        <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue pick-up pass</button>`}
+        ${stops.length ? `
+          <div class="pass-pick">
+            <label class="pass-all"><input type="checkbox" id="dpAll" onchange="passPickAll(this.checked)"> Select all</label>
+            ${stops.map((e, i) => `
+              <label class="pass-stop">
+                <input type="checkbox" class="dpStop" data-ids="${esc((e.box_ids || []).join(','))}"
+                       data-label="${esc(e.ref + ' · ' + e.who)}" onchange="passPickCount()">
+                <span>
+                  <b>${esc(e.date)}${e.window ? ' · ' + esc(e.window) : ''}</b> — ${esc(e.who)}
+                  <span class="muted">${esc(e.ref)} · ${e.count} box(es)</span>
+                  <span class="muted pass-addr">${esc(e.address)}</span>
+                </span>
+              </label>`).join('')}
+          </div>
+          <div class="muted" id="dpCount" style="font-size:12px;margin-top:6px"></div>
+          <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue pick-up pass</button>`
+        : '<div class="muted">Nothing is scheduled for collection yet. Bookings appear here once they are encoded as shipments.</div>'}
+        ${pendingStops.length ? `<div class="note-warn" style="margin-top:12px;padding:10px 12px;border-radius:8px;font-size:12.5px">
+          ${pendingStops.length} online booking(s) have a pick-up date but are not encoded yet, so they cannot go on a run.
+          <a href="#/intake-requests">Review them →</a>
+        </div>` : ''}`}
       <div class="error" id="dpErr"></div>
       <div id="dpIssued"></div>
     </div>
@@ -3374,14 +3432,51 @@ function tripPicked() {
   if (info) info.textContent = plate ? `Plate ${plate} — from the trip record.` : 'Driver details taken from the trip.';
 }
 
+function passPickAll(on) {
+  document.querySelectorAll('.dpStop').forEach(c => { c.checked = on; });
+  passPickCount();
+}
+function passPickCount() {
+  const chosen = [...document.querySelectorAll('.dpStop:checked')];
+  const boxes = chosen.reduce((n, c) => n + (c.dataset.ids ? c.dataset.ids.split(',').length : 0), 0);
+  const el = document.getElementById('dpCount');
+  if (el) el.textContent = chosen.length ? `${chosen.length} stop(s) · ${boxes} box(es) selected` : 'No stops selected yet.';
+}
+
 async function issuePass(kind) {
   const err = document.getElementById('dpErr');
   err.textContent = '';
   try {
     const body = { kind, driver_name: document.getElementById('dpName').value.trim(),
                    driver_contact: document.getElementById('dpPhone').value.trim() };
+    if (!body.driver_name) { err.textContent = "The driver's name is required."; return; }
     const tripSel = document.getElementById('dpTrip');
     if (tripSel) body.trip_id = +tripSel.value || null;
+
+    let summary = '';
+    if (kind === 'PICKUP') {
+      const chosen = [...document.querySelectorAll('.dpStop:checked')];
+      if (!chosen.length) { err.textContent = 'Tick at least one stop for this run.'; return; }
+      body.box_ids = chosen.flatMap(c => c.dataset.ids.split(',').map(Number));
+      summary = `<ul>${chosen.map(c => `<li>${esc(c.dataset.label)}</li>`).join('')}</ul>
+        <p class="muted">${body.box_ids.length} box(es) in total.</p>`;
+    } else {
+      const opt = tripSel && tripSel.options[tripSel.selectedIndex];
+      if (!body.trip_id) { err.textContent = 'Choose a trip for this delivery run.'; return; }
+      summary = `<ul><li>${esc(opt ? opt.textContent.trim() : '')}</li></ul>`;
+    }
+
+    // A pass is access to real customer addresses and phone numbers on somebody's own phone.
+    // Worth reading back before it is handed over.
+    const ok = await confirmAction({
+      title: 'Issue this pass?',
+      body: `<p><b>${esc(body.driver_name)}</b>${body.driver_contact ? ' · ' + esc(body.driver_contact) : ''}
+             will be able to work the following on their own phone:</p>${summary}
+             <p class="muted">The pass stops working once every box on it is done, and you can cancel it here at any time.</p>`,
+      confirmLabel: 'Issue pass'
+    });
+    if (!ok) return;
+
     const r = await api('/api/driver-passes', { method: 'POST', body });
     // The code is the whole handover, so it is shown big enough to read down a phone line.
     document.getElementById('dpIssued').innerHTML = `
@@ -3401,7 +3496,12 @@ async function issuePass(kind) {
 }
 
 async function revokePass(id) {
-  if (!confirm('Cancel this pass? The driver will be signed out immediately.')) return;
+  const ok = await confirmAction({
+    title: 'Cancel this pass?',
+    body: '<p>The driver is signed out immediately and the code stops working. Anything they have already scanned stays recorded.</p>',
+    confirmLabel: 'Cancel the pass', cancelLabel: 'Keep it', danger: true
+  });
+  if (!ok) return;
   try { await api('/api/driver-passes/' + id + '/revoke', { method: 'POST' }); pageDriverPasses(); }
   catch (e) { showErr(e); }
 }

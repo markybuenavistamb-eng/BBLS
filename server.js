@@ -1805,8 +1805,30 @@ app.get('/api/schedule', requireRole(...ALL_STAFF), (req, res) => {
       note: pu.notes || '',
       count: waiting.length, total: boxes.length,
       box_numbers: waiting.map(x => x.box_number),
+      box_ids: waiting.map(x => x.id),
       done: waiting.length === 0,
       href: '#/shipments/' + sh.id
+    });
+  }
+
+  // Online bookings still waiting to be encoded. The sender chose the day themselves, so it
+  // belongs on the calendar the moment they choose it, not once an agent gets to it.
+  for (const r of (d.intake_requests || [])) {
+    if (r.status !== 'PENDING') continue;                 // reviewed ones become shipments
+    if (scope && r.origin_country !== scope) continue;
+    if (r.collection !== 'PICKUP') continue;
+    const pu = r.pickup || {};
+    if (!pu.date) continue;
+    events.push({
+      kind: 'PICKUP', pending: true, date: pu.date, window: pu.time_window || '',
+      ref: r.reference_code, who: personName(r.sender),
+      phone: (r.sender || {}).contact_numbers || '',
+      address: pu.address || (r.sender || {}).address_abroad || '',
+      note: pu.notes || '',
+      count: (r.boxes || []).length, total: (r.boxes || []).length,
+      box_numbers: [], box_ids: [],
+      done: false,
+      href: '#/shipments/new?intake=' + r.id
     });
   }
 
