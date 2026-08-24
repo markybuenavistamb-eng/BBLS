@@ -1126,14 +1126,18 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
   }
 });
 // ---------- driver passes ----------
-// A driver is not staff. They need one run's worth of access, on their own phone, for a few
-// hours — and then not to have it any more. So instead of an account there is a pass: a code
-// tied to a specific set of boxes, which stops working the moment that work is finished.
+// A driver is not staff. They need one run's worth of access, on their own phone — and then
+// not to have it any more. So instead of an account there is a pass: a code tied to a
+// specific set of boxes, which stops working the moment that work is finished.
 //
 // Two kinds, because the two ends of the journey are different jobs. In Manila a pass covers
 // a delivery trip and dies when every box on it has been delivered or come back. At origin it
 // covers a collection from the branch office and dies once the warehouse has the boxes.
-const DRIVER_PASS_TTL_MS = 16 * 60 * 60 * 1000;   // a long shift, not a standing key
+//
+// No clock runs against it. A run that takes longer than expected — traffic, a broken-down
+// truck, a stop that takes all afternoon — should not have the driver locked out mid-route
+// with boxes still in hand; a pass ends only when its own work is done or the office cancels
+// it by hand, never because a timer ran out underneath a driver who is still working.
 
 function driverPasses(d) { d.driver_passes = d.driver_passes || []; return d.driver_passes; }
 
@@ -1156,7 +1160,6 @@ function passOutstanding(d, pass) {
 
 function passState(d, pass) {
   if (pass.revoked_at) return 'REVOKED';
-  if (Date.now() > Date.parse(pass.expires_at)) return 'EXPIRED';
   if (!passOutstanding(d, pass).length) return 'COMPLETED';
   return 'ACTIVE';
 }
@@ -1198,7 +1201,7 @@ app.get('/api/driver-passes', requireRole(...ALL_STAFF), (req, res) => {
     .map(p => ({
       id: p.id, code: p.code, kind: p.kind, driver_name: p.driver_name,
       trip_id: p.trip_id || null, trip_number: p.trip_number || null,
-      branch: p.branch, created_at: p.created_at, expires_at: p.expires_at,
+      branch: p.branch, created_at: p.created_at,
       completed_at: p.completed_at || null, revoked_at: p.revoked_at || null,
       state: passState(d, p),
       boxes_total: p.box_ids.length,
@@ -1256,7 +1259,6 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     box_ids: boxIds,
     issued_by: req.user.id, issued_by_name: req.user.name || req.user.email,
     created_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + DRIVER_PASS_TTL_MS).toISOString(),
     completed_at: null, revoked_at: null
   };
   driverPasses(d).push(pass);
@@ -1284,13 +1286,14 @@ app.post('/api/driver/login', rateLimit, (req, res) => {
   if (!pass) return res.status(401).json({ error: 'That code is not recognised.' });
   const state = passState(d, pass);
   if (state !== 'ACTIVE') {
-    const why = state === 'COMPLETED' ? 'This run is already finished.'
-      : state === 'REVOKED' ? 'This pass was cancelled by the office.'
-      : 'This pass has expired.';
+    // Only two ways left for a pass to be non-active: the office ended it, one way or the
+    // other. There is no clock to have run out.
+    const why = state === 'COMPLETED' ? 'This run is already finished.' : 'This pass was cancelled by the office.';
     return res.status(403).json({ error: why });
   }
-  const ttl = Date.parse(pass.expires_at) - Date.now();
-  res.cookie(sess.DRIVER_COOKIE_NAME, sess.driverTokenFor(pass.id, ttl), { ...sess.cookieOptions, maxAge: ttl });
+  // No fixed lifetime on the pass itself, so the browser session just uses the same long
+  // default every other login gets — it is completion or revocation that actually ends it.
+  res.cookie(sess.DRIVER_COOKIE_NAME, sess.driverTokenFor(pass.id), sess.cookieOptions);
   res.json({ ok: true });
 });
 
@@ -1342,7 +1345,6 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
     kind: pass.kind, driver_name: pass.driver_name,
     trip_number: pass.trip_number || null,
     branch_label: BRANCH.BRANCH_LABELS[pass.branch] || pass.branch,
-    expires_at: pass.expires_at,
     boxes, outstanding: passOutstanding(d, pass).length
   });
 });

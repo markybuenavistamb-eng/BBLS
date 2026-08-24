@@ -3382,8 +3382,8 @@ async function pageDriverPasses() {
     : [];
   const pendingStops = sched ? (sched.events || []).filter(e => e.kind === 'PICKUP' && e.pending) : [];
   const hq = isHqSide();
-  const STATE_BADGE = { ACTIVE: 'st-received_origin', COMPLETED: 'st-delivered',
-                        EXPIRED: 'st-cancelled', REVOKED: 'st-cancelled' };
+  // Only three states now that nothing expires on its own: working, finished, or cancelled.
+  const STATE_BADGE = { ACTIVE: 'st-received_origin', COMPLETED: 'st-delivered', REVOKED: 'st-cancelled' };
   view(`
     <h1>Driver passes</h1>
     <div class="muted" style="margin-bottom:12px">
@@ -3530,7 +3530,8 @@ async function issuePass(kind) {
         <div style="font-size:32px;font-weight:800;letter-spacing:4px;margin:6px 0">${esc(r.code)}</div>
         <div class="muted" style="font-size:12px">
           They open <b>${esc(location.origin)}/driver.html</b> and enter it.
-          Covers ${r.boxes_total} box(es); expires ${fmtDay(r.expires_at)}.
+          Covers ${r.boxes_total} box(es) and stays open until the run is finished —
+          cancel it here if it is no longer needed.
         </div>
       </div>`;
     flash('Pass issued for ' + r.driver_name);
