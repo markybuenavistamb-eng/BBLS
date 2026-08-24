@@ -215,6 +215,31 @@ function personName(p) {
     .map(v => String(v).trim())
     .join(' ');
 }
+
+// A name is stored the way it will be read back — on a label, a printed form, a call list —
+// so it is Proper Cased at the point of writing rather than left as whatever case a phone's
+// autocapitalize or a tired data-entry pass happened to produce. This is the one place that
+// decides it, so a direct API call gets the same result as the form.
+//
+// "N/A" is a real answer on the BOC form (no middle name, no suffix), not a name to title-case
+// into "N/a" — NOT_GIVEN already recognises it whatever case it arrives in, so it is kept
+// exactly as the form expects it rather than run through the word-by-word rule below.
+const ROMAN_SUFFIX = /^(I{1,3}|IV|VI{0,3}|IX|X)\.?$/i;   // II, III, IV … X — not "Ii", "Iii"
+function properName(raw) {
+  const v = String(raw == null ? '' : raw).trim().replace(/\s+/g, ' ');
+  if (!v) return v;
+  if (NOT_GIVEN(v)) return 'N/A';
+  const capToken = (t) => {
+    if (!t) return t;
+    if (ROMAN_SUFFIX.test(t.replace(/\.$/, ''))) return t.toUpperCase();
+    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  };
+  // Capitalise after spaces, hyphens and apostrophes too, so "dela cruz-santos" and "o'brien"
+  // come out "Dela Cruz-Santos" and "O'Brien" instead of one capital for the whole word.
+  return v.split(' ').map(word =>
+    word.split('-').map(part => part.split("'").map(capToken).join("'")).join('-')
+  ).join(' ');
+}
 function boxDetail(box) {
   const d = db.get();
   const shipment = d.shipments.find(s => s.id === box.shipment_id) || null;
@@ -576,7 +601,7 @@ app.post('/api/customers', requireRole(...AGENTS), (req, res) => {
   const dup = b.phone_primary && d.customers.find(c => c.phone_primary === b.phone_primary);
   if (dup && !b.force) return res.status(409).json({ error: 'duplicate_phone', existing: customerPublic(dup) });
   const c = {
-    id: db.nextId('customer'), full_name: b.full_name,
+    id: db.nextId('customer'), full_name: properName(b.full_name),
     phone_primary: b.phone_primary || '', phone_alternate: b.phone_alternate || '', phone_history: [],
     email: b.email || '',
     address_line: b.address_line || '', barangay: b.barangay || '', city_municipality: b.city_municipality || '',
@@ -605,7 +630,7 @@ app.put('/api/customers/:id', requireRole(...AGENTS), (req, res) => {
     }
   }
   for (const k of ['full_name', 'phone_primary', 'phone_alternate', 'email', 'address_line', 'barangay', 'city_municipality', 'province', 'region', 'country', 'postal_code', 'landmark', 'notes', 'type']) {
-    if (k in b) c[k] = b[k];
+    if (k in b) c[k] = k === 'full_name' ? properName(b[k]) : b[k];
   }
   db.persist();
   res.json(c);
@@ -878,10 +903,10 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
     // --- A. Sender information (all required; email optional per the BOC form) ---
     const sender = {
       business_name: String(b.business_name || '').trim(),
-      family_name: need(b.sender_family_name, 'Sender Family Name'),
-      given_name: need(b.sender_given_name, 'Sender Given Name'),
-      middle_name: need(b.sender_middle_name, 'Sender Middle Name'),
-      suffix: need(b.sender_suffix, 'Sender Suffix'),
+      family_name: properName(need(b.sender_family_name, 'Sender Family Name')),
+      given_name: properName(need(b.sender_given_name, 'Sender Given Name')),
+      middle_name: properName(need(b.sender_middle_name, 'Sender Middle Name')),
+      suffix: properName(need(b.sender_suffix, 'Sender Suffix')),
       contact_numbers: need(b.sender_contact_numbers, 'Sender Contact Number/s'),
       email: String(b.sender_email || '').trim(),
       address_abroad: need(b.address_abroad, 'Complete Current Address Abroad'),
@@ -952,10 +977,10 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
       if (maxBoxValue && boxValue > maxBoxValue) throw new Error(`Box ${n}: declared value ₱${boxValue.toLocaleString('en-PH')} exceeds the ₱${maxBoxValue.toLocaleString('en-PH')} limit per box`);
       return {
         receiver: {
-          family_name: rq(r.family_name, 'Receiver Family Name'),
-          given_name: rq(r.given_name, 'Receiver Given Name'),
-          middle_name: rq(r.middle_name, 'Receiver Middle Name'),
-          suffix: rq(r.suffix, 'Receiver Suffix'),
+          family_name: properName(rq(r.family_name, 'Receiver Family Name')),
+          given_name: properName(rq(r.given_name, 'Receiver Given Name')),
+          middle_name: properName(rq(r.middle_name, 'Receiver Middle Name')),
+          suffix: properName(rq(r.suffix, 'Receiver Suffix')),
           contact_number: phone,
           email: String(r.email || '').trim(),
           region: rq(r.region, 'Region'),
@@ -1091,7 +1116,7 @@ app.post('/api/public/box-orders', rateLimit, (req, res) => {
     // The sender ordering boxes is abroad, so accept an international contact number.
     const phone = String(b.contact_phone || '').trim();
     if (phone.replace(/\D/g, '').length < 7) throw new Error('A valid contact number is required');
-    const contact = { name: need(b.contact_name, 'Name'), phone, email: String(b.contact_email || '').trim() };
+    const contact = { name: properName(need(b.contact_name, 'Name')), phone, email: String(b.contact_email || '').trim() };
     let address = null, pickup_branch = null;
     if (delivery === 'DELIVER_ADDRESS') {
       address = {
@@ -1215,7 +1240,7 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
   const d = db.get();
   const b = req.body || {};
   const kind = b.kind === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
-  const driverName = String(b.driver_name || '').trim();
+  const driverName = properName(b.driver_name);
   if (!driverName) return res.status(400).json({ error: "The driver's name is required." });
   const branch = chatBranchOf(req.user);
 
@@ -1398,7 +1423,7 @@ app.post('/api/driver/scan', requireDriver,
   }
 
   const body = req.body || {};
-  const receivedBy = String(body.received_by_name || '').trim();
+  const receivedBy = properName(body.received_by_name);
   const failureReason = String(body.failure_reason || '').trim();
 
   // A delivery outcome needs saying who took it, or the proof proves nothing.
@@ -2467,7 +2492,7 @@ app.post('/api/trips', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) => 
   const t = {
     id: db.nextId('trip'),
     trip_number: nextTripNumber(d),
-    driver_name: b.driver_name, driver_contact: b.driver_contact || '', plate_number: b.plate_number || '',
+    driver_name: properName(b.driver_name), driver_contact: b.driver_contact || '', plate_number: b.plate_number || '',
     trucking_company: b.trucking_company || '', region: b.region, scheduled_date: b.scheduled_date || null,
     status: 'PLANNED', created_at: new Date().toISOString()
   };
@@ -2493,7 +2518,7 @@ app.put('/api/trips/:id', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (req, res) 
   const b = req.body || {};
   if (b.status && !SM.TRIP_STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid trip status' });
   for (const k of ['driver_name', 'driver_contact', 'plate_number', 'trucking_company', 'region', 'scheduled_date', 'status']) {
-    if (k in b) t[k] = b[k];
+    if (k in b) t[k] = k === 'driver_name' ? properName(b[k]) : b[k];
   }
   db.persist();
   res.json(t);
@@ -2561,7 +2586,8 @@ app.post('/api/boxes/:id/delivery-attempts', requireAuth,
     const d = db.get();
     const box = getBox(req, res, req.params.id);
     if (!box) return;
-    const { outcome, failure_reason, received_by_name, notes } = req.body || {};
+    const { outcome, failure_reason, notes } = req.body || {};
+    const received_by_name = properName((req.body || {}).received_by_name);
     if (!['DELIVERED', 'FAILED'].includes(outcome)) return res.status(400).json({ error: 'Outcome must be DELIVERED or FAILED' });
     const files = req.files || {};
     const receipt = files.pod_receipt_photo ? '/files/' + await storage.save(files.pod_receipt_photo[0].buffer, files.pod_receipt_photo[0].originalname, 'pod') : null;
@@ -3083,7 +3109,7 @@ app.post('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
     return res.status(403).json({ error: 'You can only create staff accounts for your own branch' });
   }
   if (db.get().users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(400).json({ error: 'Email already in use' });
-  const u = { id: db.nextId('user'), name, email, role, password_hash: hashPassword(password), active: true, created_at: new Date().toISOString() };
+  const u = { id: db.nextId('user'), name: properName(name), email, role, password_hash: hashPassword(password), active: true, created_at: new Date().toISOString() };
   db.get().users.push(u);
   db.persist();
   const { password_hash, ...safe } = u;
@@ -3116,7 +3142,7 @@ app.put('/api/users/:id', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
     const otherAdmins = d.users.filter(x => x.id !== u.id && x.active && ROLE.ADMINS.includes(ROLE.normalizeRole(x.role)));
     if (!otherAdmins.length) return res.status(400).json({ error: 'This is the last active admin — assign another admin first' });
   }
-  for (const k of ['name', 'role', 'active']) if (k in b) u[k] = b[k];
+  for (const k of ['name', 'role', 'active']) if (k in b) u[k] = k === 'name' ? properName(b[k]) : b[k];
   if (b.password) u.password_hash = hashPassword(b.password);
   db.persist();
   const { password_hash, ...safe } = u;
@@ -3182,9 +3208,9 @@ app.post('/api/public/sender/signup', rateLimit, (req, res) => {
   const d = db.get();
   d.sender_accounts = d.sender_accounts || [];
   const b = req.body || {};
-  const given_name = String(b.given_name || '').trim();
-  const surname = String(b.surname || '').trim();
-  const name = [given_name, surname].filter(Boolean).join(' ') || String(b.name || '').trim();
+  const given_name = properName(b.given_name);
+  const surname = properName(b.surname);
+  const name = [given_name, surname].filter(Boolean).join(' ') || properName(b.name);
   const email = String(b.email || '').trim().toLowerCase();
   const password = String(b.password || '');
   if (!given_name && !name) return res.status(400).json({ error: 'Your given name is required' });

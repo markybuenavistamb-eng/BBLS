@@ -441,6 +441,9 @@ async function addBox() {
     if (rg) rg.addEventListener('change', () => setTimeout(renderQuotes, 0));
   }
   renderQuotes();
+  if (window.wireNameCase) {
+    ['rFam', 'rGiv', 'rMid', 'rSuf'].forEach(prefix => wireNameCase(prefix + n));
+  }
 }
 
 /* ---------- whole form ---------- */
@@ -596,6 +599,9 @@ function renderForm() {
   onSenderTypeChange();
   onCollectionChange();
   addBox();
+  if (window.wireNameCase) {
+    ['sFam', 'sGiv', 'sMid', 'sSuf'].forEach(id => wireNameCase(id));
+  }
 }
 
 function onSenderTypeChange() {

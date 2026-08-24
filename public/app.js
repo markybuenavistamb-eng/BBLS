@@ -1752,6 +1752,7 @@ async function pageShipmentNew(intakeId) {
       <div class="muted">Boxes start at CREATED. Confirm physical receipt on the shipment page to notify the sender.</div>
     </div>`);
   quoteShipmentFee();
+  if (window.wireNameCase) wireNameCase('ncName');
 
   if (!intake) return;
   PREFILL_INTAKE = intake;
@@ -2534,6 +2535,7 @@ async function pageBoxDetail(id) {
       ${b.notifications.map(n => `<tr><td>${fmtDate(n.created_at)}</td><td>${esc(n.recipient_phone)}</td><td>${esc(n.recipient_role)}</td><td class="wrap-cell" style="max-width:380px">${esc(n.message_body)}</td><td>${badge(n.status)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">None</td></tr>'}
       </table>
     </div>`);
+  if (window.wireNameCase) wireNameCase('podName');
 }
 async function doStatus(id, status, note = '', region = null) {
   try {
@@ -3457,6 +3459,7 @@ async function pageDriverPasses() {
       </tr>`).join('') || '<tr><td colspan="7" class="muted">No passes issued yet</td></tr>'}
       </table>
     </div>`);
+  if (window.wireNameCase) wireNameCase('dpName');
 }
 
 // Selecting the trip fills in who is driving it. Typed-over values are respected — an
@@ -3581,6 +3584,7 @@ async function pageTrips() {
       </tr>`).join('') || '<tr><td colspan="7" class="muted">None</td></tr>'}
       </table>
     </div>`);
+  if (window.wireNameCase) wireNameCase('tpDriver');
 }
 async function createTrip() {
   try {
@@ -3775,6 +3779,7 @@ async function pageCustomers() {
       </table>
     </div>`);
   document.getElementById('custQ').addEventListener('keydown', e => { if (e.key === 'Enter') location.hash = '#/customers?q=' + encodeURIComponent(e.target.value); });
+  if (window.wireNameCase) wireNameCase('ccName');
 }
 
 async function pageCustomerDetail(id) {
@@ -4765,6 +4770,7 @@ async function pageAdmin() {
 
   // Fill in the saved BIR particulars.
   BIR_FIELDS.forEach(k => { const el = document.getElementById('bir_' + k); if (el) el.value = bir[k] || ''; });
+  if (window.wireNameCase) wireNameCase('usName');
 }
 async function saveTemplate(key) {
   try {

@@ -183,6 +183,7 @@ function renderForm() {
 
   onDeliveryChange();
   renderTotal();
+  if (window.wireNameCase) wireNameCase('cName');
 }
 
 const val = (id) => { const e = gid(id); return e ? e.value.trim() : ''; };

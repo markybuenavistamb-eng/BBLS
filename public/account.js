@@ -140,6 +140,7 @@ function renderAuth(mode) {
     </div>`;
   const pass = gid('acPass');
   if (pass) pass.addEventListener('keydown', e => { if (e.key === 'Enter') signup ? doSignup() : doSignin(); });
+  if (signup && window.wireNameCase) { wireNameCase('acGiven'); wireNameCase('acSurname'); }
 }
 async function doSignup() {
   const err = gid('acErr'); err.textContent = '';
