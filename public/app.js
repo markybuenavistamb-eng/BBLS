@@ -3229,9 +3229,12 @@ async function pageSchedule() {
       </div>
     </div>
     <div class="muted" style="margin:-6px 0 12px">
-      Pick-ups of packed boxes and deliveries of empty boxes people have ordered.
-      <span class="sched-key"><i class="k-pickup"></i> pick-up</span>
-      <span class="sched-key"><i class="k-order"></i> empty boxes</span>
+      ${isHqSide()
+        ? 'Delivery trips — one truck, one driver, one region, one day.'
+        : 'Pick-ups of packed boxes and deliveries of empty boxes people have ordered.'}
+      ${isHqSide() ? `<span class="sched-key"><i class="k-trip"></i> trip</span>`
+        : `<span class="sched-key"><i class="k-pickup"></i> pick-up</span>
+      <span class="sched-key"><i class="k-order"></i> empty boxes</span>`}
     </div>
 
     <div class="card">
@@ -3243,11 +3246,20 @@ async function pageSchedule() {
           if (!dt) return '<div class="cal-cell empty"></div>';
           const key = ymd(dt);
           const evs = byDay[key] || [];
+          const trips = evs.filter(e => e.kind === 'TRIP');
           const pick = evs.filter(e => e.kind === 'PICKUP');
           const ord = evs.filter(e => e.kind === 'BOX_ORDER');
           return `<div class="cal-cell${key === today ? ' is-today' : ''}${key === SCHED_DAY ? ' is-open' : ''}${evs.length ? ' has' : ''}"
                        onclick="schedOpen('${key}')">
             <div class="cal-day">${dt.getDate()}</div>
+            ${(() => {
+              if (!trips.length) return '';
+              const running = trips.filter(t => !t.done).length;
+              // A day whose trips are all completed says so, the same way a finished pick-up does.
+              return running
+                ? `<div class="cal-pill k-trip">${running} trip${running === 1 ? '' : 's'}</div>`
+                : '<div class="cal-pill k-done">completed</div>';
+            })()}
             ${(() => {
               if (!pick.length) return '';
               const left = pick.reduce((n, e) => n + e.count, 0);
@@ -3267,18 +3279,19 @@ async function pageSchedule() {
     ${data.undated.length ? `<div class="card">
       <h2 style="margin-top:0">Not yet scheduled</h2>
       <div class="muted" style="margin-bottom:10px">
-        Orders waiting for a date. They are listed here rather than hidden, because the work
-        exists whether or not the calendar shows it.
+        ${isHqSide() ? 'Trips waiting for a day.' : 'Orders waiting for a date.'}
+        They are listed here rather than hidden, because the work exists whether or not the
+        calendar shows it.
       </div>
       <div class="table-scroll"><table>
-        <tr><th>Reference</th><th>Who</th><th>Boxes</th><th>Where</th><th>Give it a date</th></tr>
+        <tr><th>Reference</th><th>${isHqSide() ? 'Driver' : 'Who'}</th><th>Boxes</th><th>${isHqSide() ? 'Region' : 'Where'}</th><th>Give it a date</th></tr>
         ${data.undated.map(e => `<tr>
-          <td>${esc(e.ref)}</td><td>${esc(e.who)}</td>
+          <td>${esc(e.ref)}</td><td>${esc(e.who) || (e.kind === 'TRIP' ? '—' : '')}</td>
           <td>${esc(e.sizes || String(e.count))}</td>
-          <td class="wrap-cell">${esc(e.address)}</td>
+          <td class="wrap-cell">${esc(e.kind === 'TRIP' ? e.region : e.address)}</td>
           <td class="inline-actions">
             <input type="date" id="sd${e.id}" style="max-width:150px">
-            <button class="small" onclick="setOrderDate(${e.id})">Set</button>
+            <button class="small" onclick="${e.kind === 'TRIP' ? 'setTripDate' : 'setOrderDate'}(${e.id})">Set</button>
           </td>
         </tr>`).join('')}
       </table></div>
@@ -3310,7 +3323,16 @@ async function schedOpen(day, preloaded) {
   host.innerHTML = `
     <div class="card">
       <h2 style="margin-top:0">${esc(pretty)}</h2>
-      ${data.length ? data.map(e => `
+      ${data.length ? data.map(e => e.kind === 'TRIP' ? `
+        <div class="sched-item k-trip${e.done ? ' done' : ''}">
+          <div class="row" style="justify-content:space-between;align-items:baseline">
+            <b>Trip · <a href="${esc(e.href)}">${esc(e.ref)}</a></b>
+            <span class="badge ${e.status === 'COMPLETED' ? 'st-delivered' : e.status === 'DISPATCHED' ? 'st-received_origin' : 'st-created'}">${esc(e.status_label)}</span>
+          </div>
+          <div>${esc(e.who) || '<span class="muted">No driver named yet</span>'}${e.phone ? ` · <a href="tel:${esc(e.phone)}">${esc(e.phone)}</a>` : ''}</div>
+          <div class="muted">${esc(e.region)}${e.plate ? ` · Plate ${esc(e.plate)}` : ''}${e.company ? ` · ${esc(e.company)}` : ''}</div>
+          <div class="sched-boxes"><span class="drv-chip">${e.count} box${e.count === 1 ? '' : 'es'} assigned</span></div>
+        </div>` : `
         <div class="sched-item ${e.kind === 'PICKUP' ? 'k-pickup' : 'k-order'}${e.done ? ' done' : ''}">
           <div class="row" style="justify-content:space-between;align-items:baseline">
             <b>${e.kind === 'PICKUP' ? 'Pick-up' : 'Empty boxes'} · <a href="${esc(e.href)}">${esc(e.ref)}</a></b>
@@ -3330,6 +3352,12 @@ async function schedOpen(day, preloaded) {
   host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+async function setTripDate(id) {
+  const v = (document.getElementById('sd' + id) || {}).value;
+  if (!v) return flash('Choose a date first', 'error');
+  try { await api('/api/trips/' + id, { method: 'PUT', body: { scheduled_date: v } }); pageSchedule(); }
+  catch (e) { showErr(e); }
+}
 async function setOrderDate(id) {
   const v = (document.getElementById('sd' + id) || {}).value;
   if (!v) return flash('Choose a date first', 'error');

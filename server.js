@@ -1861,6 +1861,38 @@ app.get('/api/schedule', requireRole(...ALL_STAFF), (req, res) => {
   const inRange = (date) => !!date && (!from || date >= from) && (!to || date <= to);
 
   const events = [];
+  const mine = chatBranchOf(req.user);
+
+  if (mine === 'HQ_MANILA') {
+    // A trip is Manila's unit of scheduled work: one truck, one driver, one day, one region.
+    // Box count is read live rather than stored, so a trip topped up after booking still
+    // shows the right number without a second field to keep in sync.
+    for (const t of (d.trips || [])) {
+      const count = (d.boxes || []).filter(b => b.trucking_assignment_id === t.id).length;
+      // A trip's date has to match a calendar cell's plain YYYY-MM-DD key exactly, or it
+      // silently never appears in the grid despite being in the "dated" list — a full
+      // timestamp only ever bit us on old or hand-entered rows, so this is cheap insurance
+      // rather than something the normal booking path needs.
+      const tripDate = String(t.scheduled_date || '').slice(0, 10) || null;
+      events.push({
+        kind: 'TRIP', date: tripDate, window: '',
+        ref: t.trip_number, who: t.driver_name || '',
+        phone: t.driver_contact || '',
+        region: REGION.LABELS[t.region] || t.region || '',
+        plate: t.plate_number || '', company: t.trucking_company || '',
+        status: t.status, status_label: t.status === 'COMPLETED' ? 'Completed'
+          : t.status === 'DISPATCHED' ? 'Dispatched' : t.status === 'LOADING' ? 'Loading' : 'Planned',
+        count, total: count,
+        done: t.status === 'COMPLETED',
+        id: t.id,
+        href: '#/trips/' + t.id
+      });
+    }
+    const dated = events.filter(e => inRange(e.date))
+      .sort((a, b) => (a.date + (a.window || '')).localeCompare(b.date + (b.window || '')));
+    const undated = events.filter(e => !e.date);
+    return res.json({ events: dated, undated });
+  }
 
   // Pick-ups: a booking that asked to be collected and still has boxes waiting.
   const boxesByShipment = new Map();
