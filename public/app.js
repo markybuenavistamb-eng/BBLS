@@ -18,7 +18,12 @@ const PIPELINE = ['CREATED', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTA
 const NEXT_STATUS = {
   // Note: LOADED_CONTAINER → IN_TRANSIT is deliberately NOT a manual action — a box goes
   // In-Transit only when its container is marked Departed. 'RECEIVED_ORIGIN' here = unload.
-  CREATED: ['RECEIVED_ORIGIN'], RECEIVED_ORIGIN: ['LOADED_CONTAINER'], LOADED_CONTAINER: ['RECEIVED_ORIGIN'],
+  // A box is booked in at the branch counter, then trucked to the origin warehouse. Both are
+  // offered from Created because a sender who walks straight to the warehouse skips the first,
+  // and forcing a step that did not happen would put a lie in the timeline.
+  CREATED: ['RECEIVED_BRANCH', 'RECEIVED_ORIGIN'],
+  RECEIVED_BRANCH: ['RECEIVED_ORIGIN'],
+  RECEIVED_ORIGIN: ['LOADED_CONTAINER'], LOADED_CONTAINER: ['RECEIVED_ORIGIN'],
   IN_TRANSIT: ['ARRIVED_PORT'], ARRIVED_PORT: ['RECEIVED_WAREHOUSE'], RECEIVED_WAREHOUSE: ['SORTED'],
   SORTED: ['ASSIGNED'], ASSIGNED: ['LOADED_TRUCK', 'SORTED'], LOADED_TRUCK: ['OUT_FOR_DELIVERY'],
   OUT_FOR_DELIVERY: ['DELIVERED', 'RETURNED'], RETURNED: ['ASSIGNED'], DELIVERED: [], CANCELLED: []
