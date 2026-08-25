@@ -246,6 +246,12 @@ function properName(raw) {
     word.split('-').map(part => part.split("'").map(capToken).join("'")).join('-')
   ).join(' ');
 }
+// An undone action is kept as a tombstone rather than deleted, so that the undo itself can
+// replicate to the other portals. Nothing that reports history should see those rows, so every
+// read goes through here — a box's timeline must read the same in Manila as it does in Bangkok.
+const liveEvents = (d) => (d.status_events || []).filter(e => !e.undone_at);
+const liveAttempts = (d) => (d.delivery_attempts || []).filter(a => !a.undone_at);
+
 function boxDetail(box) {
   const d = db.get();
   const shipment = d.shipments.find(s => s.id === box.shipment_id) || null;
@@ -253,10 +259,10 @@ function boxDetail(box) {
   const receiver = d.customers.find(c => c.id === box.receiver_id) || null;
   const container = d.containers.find(c => c.id === box.container_id) || null;
   const trip = d.trips.find(t => t.id === box.trucking_assignment_id) || null;
-  const events = d.status_events.filter(e => e.box_id === box.id)
+  const events = liveEvents(d).filter(e => e.box_id === box.id)
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map(e => ({ ...e, actor: (d.users.find(u => u.id === e.actor_user_id) || {}).name || 'System' }));
-  const attempts = d.delivery_attempts.filter(a => a.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const attempts = liveAttempts(d).filter(a => a.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
   const notifications = d.notifications.filter(n => n.box_id === box.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
   return { ...box, shipment, sender, receiver, container, trip, events, attempts, notifications };
 }
@@ -1511,7 +1517,7 @@ app.post('/api/driver/scan', requireDriver,
     d.delivery_attempts.push({
       id: db.nextId('attempt'), box_id: box.id,
       trucking_assignment_id: box.trucking_assignment_id,
-      attempt_number: d.delivery_attempts.filter(a => a.box_id === box.id).length + 1,
+      attempt_number: liveAttempts(d).filter(a => a.box_id === box.id).length + 1,
       attempted_at: nowIso,
       outcome: action === 'DELIVER' ? 'DELIVERED' : 'FAILED',
       failure_reason: action === 'RETURN' ? failureReason : null,
@@ -2223,7 +2229,7 @@ app.post('/api/boxes/:id/revert', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS),
   const d = db.get();
   const box = getBox(req, res, req.params.id);
   if (!box) return;
-  const events = d.status_events.filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const events = liveEvents(d).filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
   if (events.length <= 1) return res.status(400).json({ error: 'Nothing to undo — box is at its initial status.' });
   const last = events[events.length - 1];
   // Warehouse can only undo warehouse-stage actions; only admin can undo a completed delivery/return/cancel.
@@ -2240,7 +2246,8 @@ app.post('/api/boxes/:id/revert', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS),
       error: `${box.box_number} has already left the origin — ask Manila to undo "${SM.FRIENDLY[last.to_status] || last.to_status}".`
     });
   }
-  d.status_events = d.status_events.filter(e => e.id !== last.id);
+  last.undone_at = new Date().toISOString();
+  last.undone_by = req.user.id;
   box.status = last.from_status;
   box.status_updated_at = new Date().toISOString();
   // Reconcile side effects of the undone action.
@@ -2250,8 +2257,11 @@ app.post('/api/boxes/:id/revert', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS),
   if (last.to_status === 'ASSIGNED') box.trucking_assignment_id = null; // removed from trip
   if (last.to_status === 'DELIVERED' || last.to_status === 'RETURNED') {
     // drop the matching delivery attempt so the count stays accurate
-    const att = d.delivery_attempts.filter(a => a.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
-    if (att.length) d.delivery_attempts = d.delivery_attempts.filter(a => a.id !== att[att.length - 1].id);
+    const att = liveAttempts(d).filter(a => a.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (att.length) {
+      att[att.length - 1].undone_at = new Date().toISOString();
+      att[att.length - 1].undone_by = req.user.id;
+    }
   }
   db.persist();
   res.json(boxDetail(box));
@@ -2541,7 +2551,7 @@ app.get('/api/trips/:id', requireRole(...ROLE.PH_SIDE, 'ACCOUNTING'), (req, res)
   const boxes = d.boxes.filter(b => b.trucking_assignment_id === t.id).map(b => {
     const row = boxRow(b);
     const receiver = d.customers.find(c => c.id === b.receiver_id) || {};
-    const attempts = d.delivery_attempts.filter(a => a.box_id === b.id && a.trucking_assignment_id === t.id);
+    const attempts = liveAttempts(d).filter(a => a.box_id === b.id && a.trucking_assignment_id === t.id);
     return { ...row, receiver, attempts };
   });
   res.json({ ...t, boxes });
@@ -2627,7 +2637,7 @@ app.post('/api/boxes/:id/delivery-attempts', requireAuth,
     const receipt = files.pod_receipt_photo ? '/files/' + await storage.save(files.pod_receipt_photo[0].buffer, files.pod_receipt_photo[0].originalname, 'pod') : null;
     const receiverPhoto = files.pod_receiver_photo ? '/files/' + await storage.save(files.pod_receiver_photo[0].buffer, files.pod_receiver_photo[0].originalname, 'pod') : null;
     let err;
-    const attemptNo = d.delivery_attempts.filter(a => a.box_id === box.id).length + 1;
+    const attemptNo = liveAttempts(d).filter(a => a.box_id === box.id).length + 1;
     if (outcome === 'DELIVERED') {
       if (!receipt || !receiverPhoto) return res.status(400).json({ error: 'Both POD photos (signed receipt + receiver with box) are required' });
       if (!received_by_name) return res.status(400).json({ error: 'Received-by name is required' });
@@ -2661,7 +2671,7 @@ app.get('/api/returns', requireAuth, (req, res) => {
   const d = db.get();
   const list = scopeBoxList(req.user, d.boxes, effectiveScope(req)).filter(b => b.status === 'RETURNED').map(b => {
     const row = boxRow(b);
-    const attempts = d.delivery_attempts.filter(a => a.box_id === b.id).sort((x, y) => y.created_at.localeCompare(x.created_at));
+    const attempts = liveAttempts(d).filter(a => a.box_id === b.id).sort((x, y) => y.created_at.localeCompare(x.created_at));
     const last = attempts[0] || {};
     const plannedTrips = d.trips.filter(t => ['PLANNED', 'LOADING'].includes(t.status) && t.region === (b.region || row.receiver_region));
     return { ...row, attempts_count: attempts.length, last_failure_reason: last.failure_reason || null, last_attempt_at: last.attempted_at || null, candidate_trips: plannedTrips };
@@ -4430,7 +4440,7 @@ app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
       }
       rows = boxes.map(b => {
         const c = d.containers.find(x => x.id === b.container_id) || {};
-        const ev = d.status_events.filter(e => e.box_id === b.id);
+        const ev = liveEvents(d).filter(e => e.box_id === b.id);
         const at = (st) => { const e = ev.find(x => x.to_status === st); return e ? e.created_at : ''; };
         const receiver = d.customers.find(x => x.id === b.receiver_id) || {};
         const row = {
@@ -4463,7 +4473,7 @@ app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
     }
     case 'delivery-performance': {
       rows = d.boxes.filter(b => b.status === 'DELIVERED').map(b => {
-        const ev = d.status_events.filter(e => e.box_id === b.id);
+        const ev = liveEvents(d).filter(e => e.box_id === b.id);
         const wh = ev.find(e => e.to_status === 'RECEIVED_WAREHOUSE');
         const del = ev.find(e => e.to_status === 'DELIVERED');
         const days = wh && del ? ((new Date(del.created_at) - new Date(wh.created_at)) / 86400000).toFixed(1) : '';
@@ -4473,7 +4483,7 @@ app.get('/api/reports/:name', requireRole(...AGENTS), (req, res) => {
     }
     case 'failed-reasons': {
       const counts = {};
-      for (const a of d.delivery_attempts.filter(a => a.outcome === 'FAILED')) counts[a.failure_reason] = (counts[a.failure_reason] || 0) + 1;
+      for (const a of liveAttempts(d).filter(a => a.outcome === 'FAILED')) counts[a.failure_reason] = (counts[a.failure_reason] || 0) + 1;
       rows = Object.entries(counts).map(([reason, count]) => ({ reason, count }));
       break;
     }
@@ -4535,7 +4545,7 @@ function buildJourney(box) {
   const trip = box.trucking_assignment_id ? d.trips.find(t => t.id === box.trucking_assignment_id) : null;
   const region = box.region || receiver.region || null;
   const regionLbl = regionLabelPub(region);
-  const ev = d.status_events.filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const ev = liveEvents(d).filter(e => e.box_id === box.id).sort((a, b) => a.created_at.localeCompare(b.created_at));
   const at = (status) => { const e = ev.find(x => x.to_status === status); return e ? e.created_at : null; };
   const reached = (status) => ev.some(e => e.to_status === status);
   const returned = box.status === 'RETURNED';
@@ -4590,7 +4600,7 @@ function publicTrackingPayload(box) {
   const d = db.get();
   const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
   const container = d.containers.find(c => c.id === box.container_id) || null;
-  const events = d.status_events.filter(e => e.box_id === box.id)
+  const events = liveEvents(d).filter(e => e.box_id === box.id)
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map(e => ({ status: e.to_status, label: SM.FRIENDLY[e.to_status] || e.to_status, at: e.created_at }));
   let etaText = null;
