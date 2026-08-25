@@ -4809,8 +4809,14 @@ async function pageAdmin() {
     <h2>SMS templates</h2>
     <div class="card">
       <div class="muted">Placeholders: ${tpl.placeholders.map(p => `<code>{${p}}</code>`).join(' ')}</div>
+      <div class="muted">Only the ticked messages are sent. Untick one and it stops being raised
+        at all, so turning it back on later will not release a backlog of old texts.</div>
       ${Object.entries(tpl.templates).map(([key, t]) => `
-        <label>${esc(key)} → ${esc(t.recipients.join(' + '))}</label>
+        <label style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="tplOn_${key}" ${t.enabled === false ? '' : 'checked'}
+                 style="width:auto;margin:0">
+          <span>${esc(key)} → ${esc(t.recipients.join(' + '))}</span>
+        </label>
         <div class="row" style="flex-wrap:nowrap">
           <textarea id="tpl_${key}" style="min-height:52px">${esc(t.body)}</textarea>
           <button class="small" onclick="saveTemplate('${key}')">Save</button>
@@ -4842,8 +4848,12 @@ async function pageAdmin() {
 }
 async function saveTemplate(key) {
   try {
-    await api('/api/templates/' + key, { method: 'PUT', body: { body: document.getElementById('tpl_' + key).value } });
-    flash('Template saved');
+    const on = document.getElementById('tplOn_' + key).checked;
+    await api('/api/templates/' + key, {
+      method: 'PUT',
+      body: { body: document.getElementById('tpl_' + key).value, enabled: on }
+    });
+    flash(on ? 'Template saved — this message will be sent' : 'Template saved — this message is off');
   } catch (e) { showErr(e); }
 }
 async function createUser() {

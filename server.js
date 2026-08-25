@@ -2730,17 +2730,25 @@ app.get('/api/templates', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   const merged = {};
   for (const [k, v] of Object.entries(notif.DEFAULT_TEMPLATES)) {
-    merged[k] = (d.settings.smsTemplates || {})[k] || v;
+    // Spread over the default so a template saved before a field existed still gains it.
+    merged[k] = { ...v, ...((d.settings.smsTemplates || {})[k] || {}) };
   }
   res.json({ templates: merged, placeholders: ['box_number', 'link', 'sender_first_name', 'receiver_first_name', 'driver_name', 'driver_contact', 'vfic_phone', 'received_by_name', 'reason'] });
 });
 app.put('/api/templates/:key', requireRole(...ADMINS), (req, res) => {
   const d = db.get();
   if (!notif.DEFAULT_TEMPLATES[req.params.key]) return res.status(404).json({ error: 'Unknown template' });
-  const { body } = req.body || {};
+  const { body, enabled } = req.body || {};
   if (!body) return res.status(400).json({ error: 'Template body required' });
+  // Saving new wording must not quietly switch a message on or off, so an unspecified switch
+  // keeps whatever it already was.
+  const current = (d.settings.smsTemplates || {})[req.params.key] || notif.DEFAULT_TEMPLATES[req.params.key];
   d.settings.smsTemplates = d.settings.smsTemplates || {};
-  d.settings.smsTemplates[req.params.key] = { recipients: notif.DEFAULT_TEMPLATES[req.params.key].recipients, body };
+  d.settings.smsTemplates[req.params.key] = {
+    recipients: notif.DEFAULT_TEMPLATES[req.params.key].recipients,
+    enabled: typeof enabled === 'boolean' ? enabled : current.enabled !== false,
+    body
+  };
   db.persist();
   res.json(d.settings.smsTemplates[req.params.key]);
 });
