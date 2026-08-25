@@ -269,3 +269,41 @@ A node only ever writes records it owns, so there is nothing to reconcile by han
   Vercel's Hobby plan allows one cron per day; if you want automatic replication on a schedule,
   move to a paid plan and add a cron hitting `/api/sync/run`, or call it from an external
   scheduler.
+
+## Text messages
+
+Nothing is sent until a provider is configured. With none, messages are written to the server
+log, which is right for testing and proves nothing to a customer. Set on **all three** projects,
+then redeploy each:
+
+| Variable | Value |
+| --- | --- |
+| `SMS_PROVIDER` | `semaphore` |
+| `SEMAPHORE_API_KEY` | from the Semaphore dashboard |
+| `SEMAPHORE_SENDER_NAME` | optional, defaults to `VFIC` |
+
+The check is exact — `SMS_PROVIDER === 'semaphore'` **and** a key present — so a typo leaves
+messages going quietly to the log.
+
+Which messages go out is set per message in **Admin → SMS templates**, as a tickbox beside the
+wording. Out of the box only the delivery-day messages are on: nearly there, out for delivery,
+delivered, and could-not-deliver. The origin-side ones are off, because Semaphore is a Philippine
+gateway and senders are in Thailand and Cambodia — **confirm with Semaphore that they deliver to
++66 and +855 before relying on anything addressed to a sender**, including the delivered
+notification, which goes to both parties.
+
+Sign-up verification texts a code to the sender's own number and so has the same limitation. It
+stays inactive until a provider is configured, and a provider that cannot reach the sender's
+country will not make it work.
+
+A message is sent by the request that raises it, so a driver's scan delivers the text before it
+answers. Nothing depends on a background worker, which serverless does not run reliably. The one
+gap is retrying a message that failed because the provider was down: `/api/cron/process-notifications`
+exists for that, but a cron is **not** declared in `vercel.json` — on the Hobby plan a schedule more
+frequent than daily is rejected and the whole deployment fails to build. On a paid plan, add:
+
+```json
+"crons": [{ "path": "/api/cron/process-notifications", "schedule": "*/5 * * * *" }]
+```
+
+Set `CRON_SECRET` alongside it, or the endpoint is open.
