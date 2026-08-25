@@ -109,6 +109,11 @@ function payBadge(p) { return `<span class="badge pay-${esc(String(p).toLowerCas
 function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION_LABELS[r] || r)}</span>` : '<span class="muted">—</span>'; }
 // Whether the branch collects the boxes or the sender brings them in. The words are the ones
 // staff use out loud, and the van says at a glance which shipments are somebody's errand today.
+// Mirrors the roles the endpoint allows, so the button is not offered to someone it would refuse.
+// The branch counter and head office count this stock; Manila's warehouse and delivery staff have
+// nothing to do with a box that has not left Bangkok yet.
+const canSeeBranchStock = () =>
+  !!ME && R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS).includes(ME.role);
 function collectionBadge(c) {
   if (c === 'PICKUP') return '<span class="badge col-pickup">🚚 Pick-up</span>';
   if (c === 'DROPOFF') return '<span class="badge col-dropoff">🏢 Drop-off</span>';
@@ -117,7 +122,7 @@ function collectionBadge(c) {
 
 // Endpoints that can be narrowed to a single branch. When head office is viewing a branch
 // block in the sidebar (#/shipments?branch=TH_BANGKOK), the filter rides along automatically.
-const BRANCH_FILTERABLE = ['/api/shipments', '/api/boxes', '/api/containers', '/api/intake-requests', '/api/origin-warehouse', '/api/accounting/pnl'];
+const BRANCH_FILTERABLE = ['/api/shipments', '/api/boxes', '/api/containers', '/api/intake-requests', '/api/origin-warehouse', '/api/branch-office', '/api/accounting/pnl'];
 function withBranchFilter(path) {
   const branch = new URLSearchParams(location.hash.split('?')[1] || '').get('branch');
   if (!branch) return path;
@@ -1148,7 +1153,8 @@ function renderShell() {
   const SUBMENUS = {
     accounting: [['#/accounting/rates', 'sub.rates'], ['#/accounting/interbranch', 'sub.interbranch'],
                  ['#/accounting/expenses', 'sub.expenses'], ['#/accounting/pnl', 'sub.pnl']],
-    origin_warehouse: [['#/origin-warehouse', 'sub.stock'], ['#/origin-warehouse-doc', 'sub.printable']],
+    origin_warehouse: [['#/origin-warehouse', 'sub.stock'], ['#/origin-warehouse-doc', 'sub.printable'],
+                       ['#/branch-office-doc', 'sub.branchstock']],
     reports: [['#/reports?at=rp-box-movement', 'sub.boxmovement'], ['#/reports?at=rp-boxes-per-container', 'sub.percontainer'],
               ['#/reports?at=rp-delivery-performance', 'sub.delivperf'], ['#/reports?at=rp-failed-reasons', 'sub.failed'],
               ['#/reports?at=rp-unpaid-shipments', 'sub.unpaid']],
@@ -1296,6 +1302,7 @@ async function route() {
     if (p[0] === 'containers' && p[1]) return pageContainerDetail(+p[1]);
     if (p[0] === 'containers') return pageContainers();
     if (p[0] === 'origin-warehouse-doc') return pageOriginWarehouseDoc();
+    if (p[0] === 'branch-office-doc') return pageBranchOfficeDoc();
     if (p[0] === 'origin-warehouse') return pageOriginWarehouse();
     if (p[0] === 'warehouse') return pageWarehouse();
     if (p[0] === 'trips' && p[1]) return pageTripDetail(+p[1]);
@@ -2491,7 +2498,10 @@ async function pageBoxes() {
   for (const k of ['status', 'region', 'q']) if (q.get(k)) params.set(k, q.get(k));
   const list = await api('/api/boxes?' + params.toString());
   view(`
-    <h1>Boxes</h1>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h1>Boxes</h1>
+      ${canSeeBranchStock() ? `<a href="#/branch-office-doc"><button class="secondary">📋 Branch office stock report</button></a>` : ''}
+    </div>
     <div class="card row">
       <input id="bq" placeholder="Search box #, sender, receiver, phone…" style="max-width:280px" value="${esc(q.get('q') || '')}">
       <select id="bstatus" style="max-width:210px"><option value="">All statuses</option>
@@ -3203,6 +3213,74 @@ async function loadPlannedBoxes() {
   flash(`Loaded ${loaded} box(es)${failures.length ? `, ${failures.length} refused` : ''}`, failures.length ? 'error' : 'success');
   if (failures.length) console.warn('Not loaded:\n' + failures.join('\n'));
   pageOriginWarehouse();
+}
+
+// What is standing in the branch office, on paper. A counter clerk walks the shelf with this and
+// ticks boxes off, so it is ordered by how long each has been waiting rather than by number —
+// the point of counting is to find what has stopped moving, not to admire what arrived today.
+async function pageBranchOfficeDoc() {
+  const st = await api('/api/branch-office');
+  const rows = st.boxes || [];
+  const printedAt = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
+  const AGE_LIMIT = 7;   // a week on the shelf is long enough to want an explanation
+  const stale = rows.filter(b => (b.days_waiting || 0) >= AGE_LIMIT).length;
+  view(`
+    <style>@page { size: 8.5in 13in; margin: 0.4in; }</style>
+    <div class="row no-print" style="justify-content:space-between">
+      <h1>Branch office — stock report</h1>
+      <div>
+        <a href="#/boxes"><button class="secondary">← Back</button></a>
+        <button onclick="window.print()" title="In the print dialog, choose “Save as PDF” · paper size Legal (8.5 × 13 in)">🖨 Print / Save as PDF</button>
+      </div>
+    </div>
+
+    <div class="manifest">
+      <div class="rc-company">VICTORS FREIGHT INTERNATIONAL CORPORATION</div>
+      <div class="rc-title">BRANCH OFFICE STOCK REPORT${st.scope ? ' — ' + esc(st.scope.toUpperCase()) : ''}</div>
+      <div class="rc-meta">
+        Printed: <b>${esc(printedAt)}</b> · Prepared by: <b>${esc(ME.name)}</b><br>
+        Boxes at the counter: <b>${st.totals.count}</b> ·
+        Total weight: <b>${st.totals.weight_kg} kg</b> ·
+        Total volume: <b>${st.totals.cbm} cbm</b><br>
+        Received at the branch and not yet sent to the origin warehouse.
+        ${st.totals.oldest_days ? `Longest waiting: <b>${st.totals.oldest_days} day(s)</b>.` : ''}
+        ${stale ? `<b>${stale}</b> box(es) waiting ${AGE_LIMIT} days or more.` : ''}
+      </div>
+
+      <div class="rc-label" style="margin-top:12px">SUMMARY BY BOX SIZE</div>
+      <table class="rc-table">
+        <tr><th>Size</th><th>Boxes</th><th>Weight (kg)</th><th>Volume (cbm)</th></tr>
+        ${(st.by_size || []).map(v => `<tr>
+          <td>${esc(v.label)}</td><td>${v.count}</td>
+          <td>${v.weight_kg.toFixed(1)}</td><td>${v.cbm.toFixed(3)}</td></tr>`).join('')
+          || '<tr><td colspan="4">None</td></tr>'}
+        <tr><td><b>TOTAL</b></td><td><b>${st.totals.count}</b></td>
+          <td><b>${st.totals.weight_kg}</b></td><td><b>${st.totals.cbm}</b></td></tr>
+      </table>
+
+      <div class="rc-label" style="margin-top:14px">BOX LIST (${rows.length}) — longest waiting first</div>
+      <table class="rc-table">
+        <tr><th>#</th><th>✓</th><th>Box number</th><th>Sender</th><th>Receiver</th><th>Destination</th>
+            <th>Size</th><th>Kg</th><th>Received</th><th>Days</th></tr>
+        ${rows.map((b, i) => `<tr>
+          <td>${i + 1}</td>
+          <td style="width:22px"></td>
+          <td><b>${esc(b.box_number)}</b></td>
+          <td>${esc(b.sender_name || '')}</td>
+          <td>${esc(b.receiver_name || '')}</td>
+          <td>${esc(b.receiver_city || '')}${b.region ? ' · ' + esc(REGION_LABELS[b.region] || b.region) : ''}</td>
+          <td>${esc(SIZE_LABEL(b.size_category))}</td>
+          <td>${b.weight_kg || ''}</td>
+          <td>${fmtDay(b.waiting_since)}</td>
+          <td${(b.days_waiting || 0) >= AGE_LIMIT ? ' style="font-weight:700"' : ''}>${b.days_waiting != null ? b.days_waiting : ''}</td>
+        </tr>`).join('') || '<tr><td colspan="10">Nothing is standing at the branch office.</td></tr>'}
+      </table>
+
+      <div class="rc-sign" style="margin-top:26px">
+        <div><div class="rc-sigline"></div>Counted by (Branch staff)</div>
+        <div><div class="rc-sigline"></div>Verified by (Branch Manager)</div>
+      </div>
+    </div>`);
 }
 
 async function pageOriginWarehouseDoc() {

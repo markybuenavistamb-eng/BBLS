@@ -42,6 +42,7 @@
       // Sidebar submenus (tabs inside a module)
       'sub.rates': 'Rate Cards', 'sub.interbranch': 'Inter-branch', 'sub.expenses': 'Expenses', 'sub.pnl': 'Profit & Loss',
       'sub.stock': 'Stock & load plan', 'sub.printable': 'Printable report',
+      'sub.branchstock': 'Branch office stock',
       'sub.boxmovement': 'Box movement', 'sub.percontainer': 'Boxes per container', 'sub.delivperf': 'Delivery performance',
       'sub.failed': 'Failed deliveries', 'sub.unpaid': 'Unpaid shipments',
       'sub.allshipments': 'All shipments', 'sub.newintake': 'New intake', 'sub.online': 'Online submissions',
@@ -200,6 +201,7 @@
       // Mga submenu sa sidebar (mga tab sa loob ng module)
       'sub.rates': 'Mga Rate Card', 'sub.interbranch': 'Sa pagitan ng sangay', 'sub.expenses': 'Mga Gastos', 'sub.pnl': 'Tubo at Lugi',
       'sub.stock': 'Stock at load plan', 'sub.printable': 'Ulat na naiimprenta',
+      'sub.branchstock': 'Stock sa branch office',
       'sub.boxmovement': 'Galaw ng kahon', 'sub.percontainer': 'Kahon kada container', 'sub.delivperf': 'Bilis ng paghahatid',
       'sub.failed': 'Hindi naihatid', 'sub.unpaid': 'Hindi pa bayad',
       'sub.allshipments': 'Lahat ng padala', 'sub.newintake': 'Bagong intake', 'sub.online': 'Mga online na isinumite',

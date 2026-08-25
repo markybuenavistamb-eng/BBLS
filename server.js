@@ -3547,11 +3547,14 @@ app.get('/api/public/sender/shipments', requireSender, (req, res) => {
 // ---------- origin warehouse: master list + container load planning ----------
 // Boxes physically sitting at the origin warehouse: received from the sender but not yet
 // stuffed into a container. A shipper agent only sees their own origin country.
-function originWarehouseBoxes(user, scopeOverride) {
+// Boxes sitting at one stage of the origin side, with everything a stock-take needs to identify
+// them. The branch counter and the warehouse hold stock the same way and count it the same way —
+// only the status differs — so they share this rather than drifting apart over time.
+function originSideBoxes(user, scopeOverride, status) {
   const d = db.get();
   const scope = scopeOverride !== undefined ? scopeOverride : ROLE.originScope(user.role);
   return d.boxes
-    .filter(b => b.status === 'RECEIVED_ORIGIN' && !b.container_id)
+    .filter(b => b.status === status && !b.container_id)
     .map(b => {
       const row = boxRow(b);
       const shipment = d.shipments.find(s => s.id === b.shipment_id) || {};
@@ -3568,6 +3571,45 @@ function originWarehouseBoxes(user, scopeOverride) {
     })
     .filter(b => !scope || b.origin_country === scope);
 }
+const originWarehouseBoxes = (user, scopeOverride) => originSideBoxes(user, scopeOverride, 'RECEIVED_ORIGIN');
+const branchOfficeBoxes = (user, scopeOverride) => originSideBoxes(user, scopeOverride, 'RECEIVED_BRANCH');
+
+// What is standing in the branch office right now. The counter takes boxes in all week and sends
+// them on to the warehouse in batches, so somebody has to be able to count the shelf against a
+// list — and see which boxes have been standing there longest, which is the whole reason for
+// counting. Same shape as the warehouse stock report, because it is the same job one step earlier.
+app.get('/api/branch-office', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
+  let list = branchOfficeBoxes(req.user, effectiveScope(req));
+  if (req.query.origin_country) list = list.filter(b => b.origin_country === req.query.origin_country);
+  const now = Date.now();
+  list = list.map(b => {
+    const since = b.status_updated_at || b.created_at;
+    const days = since ? Math.floor((now - Date.parse(since)) / 86400000) : null;
+    return { ...b, waiting_since: since, days_waiting: Number.isFinite(days) ? days : null };
+  });
+  const bySize = {};
+  for (const b of list) {
+    const k = BOXSIZE.canonicalSize(b.size_category) || 'OTHER';
+    bySize[k] = bySize[k] || { size: k, label: (BOXSIZE.bySize(k) || {}).label || k, count: 0, cbm: 0, weight_kg: 0 };
+    bySize[k].count += 1;
+    bySize[k].cbm = +(bySize[k].cbm + b.cbm).toFixed(3);
+    bySize[k].weight_kg = +(bySize[k].weight_kg + (+b.weight_kg || 0)).toFixed(1);
+  }
+  res.json({
+    scope: effectiveScope(req),
+    // Longest-waiting first: a stock report is read to find what has stopped moving.
+    boxes: list.sort((a, b) => (b.days_waiting || 0) - (a.days_waiting || 0)
+      || String(a.box_number).localeCompare(String(b.box_number))),
+    totals: {
+      count: list.length,
+      cbm: +list.reduce((n, b) => n + b.cbm, 0).toFixed(3),
+      weight_kg: +list.reduce((n, b) => n + (+b.weight_kg || 0), 0).toFixed(1),
+      oldest_days: list.reduce((n, b) => Math.max(n, b.days_waiting || 0), 0)
+    },
+    by_size: Object.values(bySize),
+    origins: [...new Set(list.map(b => b.origin_country).filter(Boolean))]
+  });
+});
 
 app.get('/api/origin-warehouse', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
   let list = originWarehouseBoxes(req.user, effectiveScope(req));
