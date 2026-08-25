@@ -1423,11 +1423,17 @@ app.post('/api/driver/scan', requireDriver,
   const pass = req.pass;
   const code = String((req.body || {}).box_number || '').trim();
   const action = String((req.body || {}).action || '');
-  const box = findScannedBox(d, code);
-  if (!box) return res.status(404).json({ error: 'That label is not a box we know.' });
-  if (!pass.box_ids.includes(box.id)) {
-    return res.status(403).json({ error: box.box_number + ' is not on this run.' });
+  const matches = findScannedBoxes(d, code);
+  if (!matches.length) return res.status(404).json({ error: 'That label is not a box we know.' });
+  // The run itself is the best answer to a number that names two boxes: only one of them was
+  // loaded onto this van. Matching first and checking the run afterwards told a driver holding
+  // a box that is plainly on their list that it is not on their run.
+  const onRun = matches.filter(b => pass.box_ids.includes(b.id));
+  if (!onRun.length) {
+    return res.status(403).json({ error: matches[0].box_number + ' is not on this run.' });
   }
+  if (onRun.length > 1) return res.status(409).json({ error: ambiguousBoxError(d, onRun) });
+  const box = onRun[0];
 
   const ALLOWED = pass.kind === 'DELIVERY'
     ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
@@ -2165,23 +2171,41 @@ function scanNeedle(raw) {
   const tokenMatch = key.match(/[?&]t=([A-Za-z0-9_-]+)/);
   return (tokenMatch ? tokenMatch[1] : key).toLowerCase();
 }
-function findScannedBox(d, raw) {
+// Every box a scanned code could mean, not just the first one in the array. A QR token is
+// random and unique by construction, so a token match answers on its own; a box number is
+// only as unique as the numbering that minted it, and numbers issued before lib/node.js gave
+// each deployment its own band can name a box in Bangkok *and* one in Manila. Picking
+// whichever sits first would quietly act on a stranger's box, so the caller is handed all of
+// them and decides with the context it has (whose run it is, who is asking).
+function findScannedBoxes(d, raw) {
   const needle = scanNeedle(raw);
-  if (!needle) return null;
-  return (d.boxes || []).find(b =>
-    String(b.qr_token || '').toLowerCase() === needle ||
-    String(b.box_number || '').toLowerCase() === needle) || null;
+  if (!needle) return [];
+  const byToken = (d.boxes || []).filter(b => String(b.qr_token || '').toLowerCase() === needle);
+  if (byToken.length) return byToken;
+  return (d.boxes || []).filter(b => String(b.box_number || '').toLowerCase() === needle);
+}
+// What to say when a number still names more than one box. Naming where each one is makes it
+// obvious this is the duplicate-number problem rather than a mis-scan.
+function ambiguousBoxError(d, matches) {
+  const where = matches.map(b => {
+    const s = d.shipments.find(x => x.id === b.shipment_id) || {};
+    return `${s.origin_country || 'unknown origin'} · ${SM.FRIENDLY[b.status] || b.status}`;
+  }).join('; ');
+  return `${matches[0].box_number} identifies ${matches.length} different boxes (${where}). `
+       + 'Scan the QR code on the label instead — it names one box only.';
 }
 
 app.get('/api/boxes/lookup/:key', requireAuth, (req, res) => {
   const d = db.get();
-  const box = findScannedBox(d, req.params.key);
-  if (!box) return res.status(404).json({ error: 'No box matches that code' });
-  // Scanning a code is still a read of that record, so the same rules apply.
-  const parent = d.shipments.find(x => x.id === box.shipment_id) || {};
-  if (outOfScope(req, res, parent.origin_country)) return;
-  if (notYetShipped(req, res, SM.hasShipped(box.status))) return;
-  res.json(boxDetail(box));
+  const matches = findScannedBoxes(d, req.params.key);
+  if (!matches.length) return res.status(404).json({ error: 'No box matches that code' });
+  // Scanning a code is still a read of that record, so the same rules apply — and narrowing to
+  // what this user may see settles most of the ambiguity on its own, since a Bangkok agent
+  // scanning their own box number has no business with Phnom Penh's copy of it.
+  const visible = scopeBoxList(req.user, matches);
+  if (!visible.length) return res.status(404).json({ error: 'Not found' });
+  if (visible.length > 1) return res.status(409).json({ error: ambiguousBoxError(d, visible) });
+  res.json(boxDetail(visible[0]));
 });
 app.put('/api/boxes/:id', requireRole(...AGENTS), (req, res) => {
   const box = getBox(req, res, req.params.id);
@@ -4635,16 +4659,23 @@ app.get('/api/track/:qrToken', rateLimit, (req, res) => {
 app.post('/api/track-lookup', rateLimit, (req, res) => {
   const d = db.get();
   const { box_number, phone_last4 } = req.body || {};
-  const box = d.boxes.find(b => b.box_number.toLowerCase() === String(box_number || '').trim().toLowerCase());
-  if (!box) return res.status(404).json({ error: 'No box found with that number.' });
-  const receiver = d.customers.find(c => c.id === box.receiver_id) || {};
-  const digits = String(receiver.phone_primary || '').replace(/\D/g, '');
-  const altDigits = String(receiver.phone_alternate || '').replace(/\D/g, '');
+  const needle = String(box_number || '').trim().toLowerCase();
+  const matches = needle ? d.boxes.filter(b => String(b.box_number || '').toLowerCase() === needle) : [];
+  if (!matches.length) return res.status(404).json({ error: 'No box found with that number.' });
+  // The phone digits prove who is asking, so they also decide which box is meant. Taking the
+  // first box with the number and checking the digits afterwards told the owner of the other
+  // box — a real customer, with the right digits — that they did not match.
   const last4 = String(phone_last4 || '').replace(/\D/g, '');
-  if (!last4 || last4.length !== 4 || (digits.slice(-4) !== last4 && altDigits.slice(-4) !== last4)) {
-    return res.status(403).json({ error: 'Box number and phone digits do not match.' });
+  const theirs = last4.length !== 4 ? [] : matches.filter(b => {
+    const receiver = d.customers.find(c => c.id === b.receiver_id) || {};
+    return String(receiver.phone_primary || '').replace(/\D/g, '').slice(-4) === last4
+        || String(receiver.phone_alternate || '').replace(/\D/g, '').slice(-4) === last4;
+  });
+  if (!theirs.length) return res.status(403).json({ error: 'Box number and phone digits do not match.' });
+  if (theirs.length > 1) {
+    return res.status(409).json({ error: 'That box number belongs to more than one box. Please open the tracking link in the QR code on your box label.' });
   }
-  res.json(publicTrackingPayload(box));
+  res.json(publicTrackingPayload(theirs[0]));
 });
 
 // ---------- QR code PNG (encodes public tracking URL) ----------

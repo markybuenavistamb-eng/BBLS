@@ -300,9 +300,12 @@
   };
 
   // Which stop a box belongs to, so one answer covers everything handed over together.
+  // A number that matches two boxes on the same run names no single stop, so it gets a key of
+  // its own rather than borrowing the signature and photographs from someone else's doorstep.
   function stopKeyFor(code) {
-    const b = (RUN.boxes || []).find(x =>
+    const hits = (RUN.boxes || []).filter(x =>
       String(x.box_number).toLowerCase() === String(code).trim().toLowerCase());
+    const b = hits.length === 1 ? hits[0] : null;
     return b ? [b.who || '', b.address || ''].join('¦') : String(code);
   }
 

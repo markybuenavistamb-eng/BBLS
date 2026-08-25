@@ -3,11 +3,24 @@
 Three deployments of this one repository, each with its own database, replicating to each
 other. Manila is head office; Thailand and Cambodia are branch nodes.
 
-| Node | Vercel project | Portal URL | `VFIC_NODE_ID` | Database | ID band |
-|---|---|---|---|---|---|
-| Manila HQ | `vfic-mnl` | `/mnl` (+ `/dev`) | `HQ_MANILA` | Supabase 1 | 0 – 999,999 |
-| Thailand | `vfic-th` | `/th` | `TH_BANGKOK` | Supabase 2 | 1,000,000 – 1,999,999 |
-| Cambodia | `vfic-kh` | `/kh` | `KH_PHNOMPENH` | Upstash Redis | 2,000,000 – 2,999,999 |
+| Node | Vercel project | Portal URL | `VFIC_NODE_ID` | Database | ID band | Number band |
+|---|---|---|---|---|---|---|
+| Manila HQ | `vfic-mnl` | `/mnl` (+ `/dev`) | `HQ_MANILA` | Supabase 1 | 0 – 999,999 | 000001 – 099999 |
+| Thailand | `vfic-th` | `/th` | `TH_BANGKOK` | Supabase 2 | 1,000,000 – 1,999,999 | 100001 – 199999 |
+| Cambodia | `vfic-kh` | `/kh` | `KH_PHNOMPENH` | Upstash Redis | 2,000,000 – 2,999,999 | 200001 – 299999 |
+
+The **ID band** keeps record ids apart. The **number band** does the same for the numbers people
+quote — shipment and box numbers, booking (`IR-`) and box-order (`BO-`) references — because
+their prefix names the country the cargo ships *from*, not the office that keyed it: Manila
+books Thailand shipments too, so `TH-2026-…` alone cannot say which node minted it. The digits
+can, and `TH-2026-100007` reads as Bangkok's. Counters run per node **and per prefix**, so
+Thailand's series and Cambodia's each count on their own instead of interleaving.
+
+Numbers minted before the bands existed all sit in Manila's band; `node lib/fix-duplicate-numbers.js`
+moves the duplicates among them into the right one. Because the mint is floored at the highest
+number already in use in its band, a counter can no longer fall behind the data — which is what
+`lib/fix-lagging-counters.js` was written to catch, and why that script is now a check rather
+than a repair.
 
 All three deploy from the **same GitHub repo** (`markybuenavistamb-eng/BBLS`, branch `main`).
 Nothing needs to be forked or branched — only the environment variables differ.
