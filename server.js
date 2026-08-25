@@ -1110,7 +1110,11 @@ app.get('/api/intake-requests', requireRole(...AGENTS), (req, res) => {
     }, {})).map(([k, n]) => `${n}× ${(BOXSIZE.bySize(k) || {}).label || k}`).join(', '),
     id_verdict: (r.id_check || {}).verdict || null,
     id_flag_count: ((r.id_check || {}).flags || []).length,
-    id_verification_status: (r.id_verification || {}).status || 'PENDING'
+    id_verification_status: (r.id_verification || {}).status || 'PENDING',
+    // Whether the branch has to fetch these boxes or the sender is bringing them in. It decides
+    // whether the booking is a job for a van, so the queue should say it without being opened.
+    collection: r.collection || null,
+    pickup_date: ((r.pickup || {}).date) || null
   })));
 });
 app.get('/api/intake-requests/:id', requireRole(...AGENTS), (req, res) => {

@@ -86,7 +86,11 @@ a { color: var(--primary); text-decoration: none; }
 .lang-btn.active { background: var(--primary); color: #fff; }
 .lang-toggle.on-light .lang-btn.active { background: var(--chrome); color: #fff; }
 
-.wrap { max-width: 1150px; margin: 0 auto; padding: 22px 22px 70px; width: 100%; }
+/* This is an operations screen, not an article: the tables carry ten or more columns and staff
+   read them all day on desktop monitors. A measure suited to prose left roughly a third of a
+   1920px screen as empty margin and squeezed the columns for no benefit. The ceiling still
+   exists so a very wide monitor does not stretch a row until the eye cannot track it. */
+.wrap { max-width: 1600px; margin: 0 auto; padding: 22px 22px 70px; width: 100%; }
 
 @media (max-width: 860px) {
   .sidebar {
@@ -144,6 +148,11 @@ td.wrap-cell { white-space: normal; }
 .pay-paid { background: #dcfce7; color: #166534; }
 .pay-partial { background: #fef3c7; color: #92400e; }
 .pay-unpaid { background: #fee2e2; color: #b91c1c; }
+/* How the boxes reach the branch. A pick-up is work the branch has to schedule a van for; a
+   drop-off is the sender's own errand. Colouring only the pick-up keeps the list quiet — what a
+   glance should find is the handful of shipments somebody has to go out for. */
+.col-pickup { background: #dbeafe; color: #1e3a8a; }
+.col-dropoff { background: #eef2f7; color: #475569; }
 
 /* Forms & buttons */
 label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; color: #374151; }

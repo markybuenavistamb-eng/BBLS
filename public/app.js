@@ -107,6 +107,13 @@ function badge(status) {
 }
 function payBadge(p) { return `<span class="badge pay-${esc(String(p).toLowerCase())}">${esc(p)}</span>`; }
 function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION_LABELS[r] || r)}</span>` : '<span class="muted">—</span>'; }
+// Whether the branch collects the boxes or the sender brings them in. The words are the ones
+// staff use out loud, and the van says at a glance which shipments are somebody's errand today.
+function collectionBadge(c) {
+  if (c === 'PICKUP') return '<span class="badge col-pickup">🚚 Pick-up</span>';
+  if (c === 'DROPOFF') return '<span class="badge col-dropoff">🏢 Drop-off</span>';
+  return '<span class="muted">Not stated</span>';
+}
 
 // Endpoints that can be narrowed to a single branch. When head office is viewing a branch
 // block in the sidebar (#/shipments?branch=TH_BANGKOK), the filter rides along automatically.
@@ -1511,15 +1518,16 @@ async function pageShipments() {
       <button class="small" onclick="location.hash='#/shipments?q='+encodeURIComponent(shipQ.value)">Search</button>
     </div>
     <div class="card table-scroll">
-      <table><tr><th>Shipment #</th><th>Sender</th><th>Boxes</th><th>Service</th><th>Origin</th><th>Fee</th><th>Payment</th><th>Created</th></tr>
+      <table><tr><th>Shipment #</th><th>Sender</th><th>Collection</th><th>Boxes</th><th>Service</th><th>Origin</th><th>Fee</th><th>Payment</th><th>Created</th></tr>
       ${list.map(s => `<tr>
         <td><a href="#/shipments/${s.id}">${esc(s.shipment_number)}</a></td>
-        <td>${esc(s.sender_name)}</td><td>${s.box_count}</td>
+        <td>${esc(s.sender_name)}</td>
+        <td>${collectionBadge(s.collection)}</td><td>${s.box_count}</td>
         <td>${esc(svcLevelLabel(s))}</td>
         <td>${esc(s.origin_agent || s.origin_country)}</td>
         <td>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'}</td>
         <td>${payBadge(s.payment_status)}</td><td>${fmtDay(s.created_at)}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">No shipments</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">No shipments</td></tr>'}
       </table>
     </div>`);
   document.getElementById('shipQ').addEventListener('keydown', e => { if (e.key === 'Enter') location.hash = '#/shipments?q=' + encodeURIComponent(e.target.value); });
@@ -1531,9 +1539,10 @@ async function pageIntakeRequests() {
     <h1>Online Intake Requests</h1>
     <div class="muted" style="margin-bottom:10px">Submitted by senders via the online receiving form (scan the QR code on the blank form to try it). Review and encode as a shipment, or dismiss duplicates/spam.</div>
     <div class="card table-scroll">
-      <table><tr><th>Reference</th><th>Sender</th><th>Phone</th><th>Boxes</th><th>Size per box</th><th>Submitted</th><th>Status</th><th>Actions</th></tr>
+      <table><tr><th>Reference</th><th>Sender</th><th>Phone</th><th>Collection</th><th>Boxes</th><th>Size per box</th><th>Submitted</th><th>Status</th><th>Actions</th></tr>
       ${list.map(r => `<tr>
         <td>${esc(r.reference_code)}</td><td>${esc(r.sender_name)}</td><td>${esc(r.sender_phone)}</td>
+        <td>${collectionBadge(r.collection)}${r.collection === 'PICKUP' && r.pickup_date ? `<div class="muted" style="font-size:11px">${esc(r.pickup_date)}</div>` : ''}</td>
         <td>${r.box_count}</td>
         <td class="wrap-cell" style="max-width:220px">${esc(r.size_summary || '—')}</td>
         <td>${fmtDate(r.submitted_at)}</td>
@@ -1542,7 +1551,7 @@ async function pageIntakeRequests() {
           ${r.status === 'PENDING' && canIntake() ? `<a href="#/shipments/new?intake=${r.id}"><button class="small">Review & encode</button></a>
             <button class="small secondary" onclick="dismissIntake(${r.id})">Dismiss</button>` : ''}
         </td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">No online submissions yet</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">No online submissions yet</td></tr>'}
       </table>
     </div>`);
 }
@@ -2203,7 +2212,10 @@ async function pageShipmentDetail(id) {
     </div>
     <div class="card form-grid">
       <div><label>Sender</label><a href="#/customers/${s.sender_id}">${esc(s.sender ? s.sender.full_name : '')}</a><div class="muted">${esc(s.sender ? s.sender.phone_primary : '')}</div></div>
-      <div><label>Service level</label>${esc(svcLevelLabel(s))}${s.collection ? ` · <span class="muted">${esc(COLLECTION_LABELS[s.collection] || '')}</span>` : ''}</div>
+      <div><label>Service level</label>${esc(svcLevelLabel(s))}</div>
+      <div><label>Collection</label>${collectionBadge(s.collection)}
+        <span class="muted">${s.collection === 'PICKUP' ? 'we collect from the sender'
+          : s.collection === 'DROPOFF' ? 'sender brings it to the branch office' : ''}</span></div>
       <div><label>Origin</label>${esc([s.origin_agent, s.origin_country].filter(Boolean).join(', '))}</div>
       <div><label>Fee</label>${s.shipping_fee_amount != null ? esc(s.currency) + ' ' + s.shipping_fee_amount : '—'} ${payBadge(s.payment_status)}
         ${canIntake() ? `<button class="small secondary" onclick="togglePayment(${s.id}, '${s.payment_status === 'PAID' ? 'UNPAID' : 'PAID'}')">Mark ${s.payment_status === 'PAID' ? 'unpaid' : 'paid'}</button>` : ''}</div>
