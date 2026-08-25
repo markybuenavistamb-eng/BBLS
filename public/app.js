@@ -386,7 +386,8 @@ function watchTables() {
 /* ---------- confirmation ---------- */
 // Returns a promise for yes/no. The body may be HTML, because the useful part of a
 // confirmation is usually a list of what is about to happen rather than a sentence about it.
-function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
+function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel = 'Cancel',
+                         danger = false, prompt = null }) {
   return new Promise(resolve => {
     document.querySelectorAll('.confirm-back').forEach(x => x.remove());
     const back = document.createElement('div');
@@ -395,6 +396,9 @@ function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel
       <div class="confirm-box" role="dialog" aria-modal="true">
         <h2>${esc(title)}</h2>
         <div class="confirm-body">${body}</div>
+        ${prompt ? `<label style="margin-top:10px">${esc(prompt.label || '')}</label>
+          <input id="confirmInput" placeholder="${esc(prompt.placeholder || '')}" maxlength="200">
+          <div class="error" id="confirmInputErr"></div>` : ''}
         <div class="confirm-actions">
           <button class="secondary" data-no>${esc(cancelLabel)}</button>
           <button class="${danger ? 'danger' : ''}" data-yes>${esc(confirmLabel)}</button>
@@ -402,14 +406,33 @@ function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel
       </div>`;
     const done = (answer) => { back.remove(); document.removeEventListener('keydown', onKey); resolve(answer); };
     const onKey = (e) => { if (e.key === 'Escape') done(false); };
+    // With a prompt the dialog resolves to the text typed; without one, to true. Either way a
+    // refusal is false, so callers can keep testing the result as a truthy answer.
+    const accept = () => {
+      if (!prompt) return done(true);
+      const input = back.querySelector('#confirmInput');
+      const v = String(input.value || '').trim();
+      if (prompt.required !== false && !v) {
+        back.querySelector('#confirmInputErr').textContent = prompt.requiredMessage || 'This is required.';
+        input.focus();
+        return;
+      }
+      done(v);
+    };
     back.addEventListener('click', (e) => {
       if (e.target.hasAttribute('data-no') || e.target === back) done(false);
-      if (e.target.hasAttribute('data-yes')) done(true);
+      if (e.target.hasAttribute('data-yes')) accept();
     });
     document.addEventListener('keydown', onKey);
     document.body.appendChild(back);
-    const yes = back.querySelector('[data-yes]');
-    if (yes) yes.focus();
+    const input = back.querySelector('#confirmInput');
+    if (input) {
+      input.focus();
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') accept(); });
+    } else {
+      const yes = back.querySelector('[data-yes]');
+      if (yes) yes.focus();
+    }
   });
 }
 
@@ -1288,6 +1311,15 @@ window.addEventListener('hashchange', route);
 
 const isAdmin = () => ME && R_ADMINS.includes(ME.role);
 const isAgent = () => ME && R_AGENTS.includes(ME.role);
+// Mirrors canCancel() in lib/statuses.js — head office may cancel anything before delivery,
+// a branch only while the box is still at its own end. The server is what enforces this; the
+// point of repeating it here is to not offer a button that would only come back refused.
+const ORIGIN_SIDE = ['CREATED', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER'];
+const canCancelBox = (status) => {
+  if (!ME || ['DELIVERED', 'CANCELLED'].includes(status)) return false;
+  if (R_ADMINS.includes(ME.role)) return true;
+  return R_BRANCH_ADMINS.includes(ME.role) && ORIGIN_SIDE.includes(status);
+};
 const canDispatch = () => ME && R_ADMINS.concat(['CONSIGNEE_AGENT']).includes(ME.role);
 const canIntake = () => ME && R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS).includes(ME.role);
 
@@ -1690,12 +1722,34 @@ function collectItems(itemsContainerId) {
 let PREFILL_INTAKE = null; // set when opened via a Pending Intake Request (#/shipments/new?intake=ID)
 
 async function createOrMatchCustomer(fields) {
+  let existing;
   try {
     return await api('/api/customers', { method: 'POST', body: fields });
   } catch (e) {
-    if (e.status === 409) return e.data.existing; // phone already on file — reuse it, don't duplicate
-    throw e;
+    if (e.status !== 409) throw e;
+    // Somebody is already on file with that number. Only reuse their record if the server says
+    // it is the same person in the same capacity — otherwise it is a relative sharing a phone,
+    // and adopting their record would silently send this box to their address instead.
+    if (e.data.match !== 'person') return api('/api/customers', { method: 'POST', body: { ...fields, force: true } });
+    existing = e.data.existing;
   }
+
+  // The same person, but people move. The address typed for this booking is the address for this
+  // booking, so a record that still holds the old one gets brought up to date rather than quietly
+  // overriding what the sender just told us — boxes carry no address of their own, only this link.
+  const stale = ['address_line', 'barangay', 'city_municipality', 'province', 'postal_code']
+    .some(k => fields[k] && addrKey(fields[k]) !== addrKey(existing[k]));
+  if (!stale) return existing;
+  try {
+    return await api('/api/customers/' + existing.id, { method: 'PUT', body: { ...existing, ...fields } });
+  } catch (_) {
+    return existing;   // a branch may not be allowed to edit them; better the match than nothing
+  }
+}
+// Addresses are compared on their letters and digits alone, so "St." against "Street" or a
+// stray double space does not read as a move to a new house.
+function addrKey(v) {
+  return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 async function pageShipmentNew(intakeId) {
@@ -2041,8 +2095,13 @@ async function createCustomerInline(prefix, force = false) {
     const senderSel = document.getElementById('shSender');
     if (senderSel) { const v = senderSel.value; senderSel.innerHTML = customerOptions('SENDER', +v || undefined); }
   } catch (e) {
-    if (e.status === 409 && confirm(`A customer with this phone already exists: ${e.data.existing.full_name}. Create anyway?`)) {
-      return createCustomerInline(prefix, true);
+    if (e.status === 409) {
+      const who = e.data.existing.full_name;
+      const ask = e.data.match === 'person'
+        ? `${who} is already on file with this number. Add a second record anyway?`
+        : `${who} already uses this number. That is normal for a household — add this person as well?`;
+      if (confirm(ask)) return createCustomerInline(prefix, true);
+      return;
     }
     showErr(e);
   }
@@ -2495,7 +2554,7 @@ async function pageBoxDetail(id) {
           ? `<select id="sortRegion" style="max-width:220px">${regionOptions(receiverRegion)}</select>
              <button onclick="doStatus(${b.id}, 'SORTED', '', document.getElementById('sortRegion').value)">→ Sorted</button>`
           : `<button onclick="doStatus(${b.id}, '${s}')">→ ${STATUS_LABELS[s]}</button>`).join('')}
-        ${isAdmin() && !['DELIVERED', 'CANCELLED'].includes(b.status) ? `<button class="danger" onclick="cancelBox(${b.id})">✗ Cancel box</button>` : ''}
+        ${canCancelBox(b.status) ? `<button class="danger" onclick="cancelBox(${b.id}, '${esc(b.box_number)}')">✗ Cancel box</button>` : ''}
         ${R_AGENTS.concat(['WAREHOUSE']).includes(ME.role) && b.events.length > 1 ? `<button class="secondary" onclick="revertBox(${b.id}, '${esc(STATUS_LABELS[b.events[b.events.length - 1].to_status] || b.status)}', '${esc(STATUS_LABELS[b.events[b.events.length - 1].from_status] || '')}')" title="Undo a mis-clicked Action">↩ Undo last action</button>` : ''}
         ${!nexts.length && b.status !== 'OUT_FOR_DELIVERY' ? '<span class="muted">No forward actions available at this status.</span>' : ''}
       </div>
@@ -2544,8 +2603,17 @@ async function doStatus(id, status, note = '', region = null) {
     route();
   } catch (e) { showErr(e); }
 }
-async function cancelBox(id) {
-  const reason = prompt('Cancellation reason (required):');
+async function cancelBox(id, boxNumber) {
+  const reason = await confirmAction({
+    title: 'Cancel this box?',
+    body: `<p>${boxNumber ? '<b>' + esc(boxNumber) + '</b> is' : 'This box is'} taken out of the shipment.
+             It stops moving through the pipeline and will not be delivered.</p>
+           <p class="muted">The reason is kept on the box's history, so whoever asks later can
+             see why it stopped.</p>`,
+    prompt: { label: 'Why is it being cancelled?', placeholder: 'e.g. Sender withdrew the booking',
+              requiredMessage: 'A reason is required — it goes on the record.' },
+    confirmLabel: 'Cancel the box', cancelLabel: 'Keep it', danger: true
+  });
   if (!reason) return;
   await doStatus(id, 'CANCELLED', reason);
 }

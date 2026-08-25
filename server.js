@@ -224,6 +224,12 @@ function personName(p) {
 // "N/A" is a real answer on the BOC form (no middle name, no suffix), not a name to title-case
 // into "N/a" — NOT_GIVEN already recognises it whatever case it arrives in, so it is kept
 // exactly as the form expects it rather than run through the word-by-word rule below.
+// Comparing people: a phone number written "+63 917…", "0917…" or "63917…" is one number, and a
+// name is the same name whether or not somebody typed "N/A" into the middle-name box.
+const phoneKey = (v) => String(v == null ? '' : v).replace(/\D/g, '').slice(-10);
+const nameKey = (v) => String(v == null ? '' : v).toLowerCase()
+  .replace(/\bn\/?a\b/g, ' ').replace(/[^a-z]+/g, ' ').trim();
+
 const ROMAN_SUFFIX = /^(I{1,3}|IV|VI{0,3}|IX|X)\.?$/i;   // II, III, IV … X — not "Ii", "Iii"
 function properName(raw) {
   const v = String(raw == null ? '' : raw).trim().replace(/\s+/g, ' ');
@@ -272,7 +278,14 @@ function boxRow(box) {
 function changeBoxStatus(box, to, actor, note = '', extraVars = {}) {
   if (!SM.BOX_STATUSES.includes(to)) return 'Invalid status';
   if (!SM.canTransition(box.status, to, actor ? actor.role : null)) {
-    return `Invalid transition ${box.status} → ${to}` + (to === 'CANCELLED' ? ' (admin only, pre-delivery only)' : '');
+    // A refusal to cancel should say which of the two reasons applies, rather than making
+    // someone guess whether it is the box's stage or their own role that is in the way.
+    if (to === 'CANCELLED') {
+      if (box.status === 'DELIVERED') return `${box.box_number} has already been delivered — it cannot be cancelled.`;
+      if (box.status === 'CANCELLED') return `${box.box_number} is already cancelled.`;
+      return `${box.box_number} has already left the origin — ask Manila to cancel it.`;
+    }
+    return `Invalid transition ${box.status} → ${to}`;
   }
   const d = db.get();
   const nowIso = new Date().toISOString();
@@ -597,9 +610,30 @@ app.post('/api/customers', requireRole(...AGENTS), (req, res) => {
   const b = req.body || {};
   if (!b.full_name) return res.status(400).json({ error: 'Full name is required' });
   if (b.region && !SM.REGIONS.includes(b.region)) return res.status(400).json({ error: 'Invalid region' });
-  // dedupe suggestion by phone
-  const dup = b.phone_primary && d.customers.find(c => c.phone_primary === b.phone_primary);
-  if (dup && !b.force) return res.status(409).json({ error: 'duplicate_phone', existing: customerPublic(dup) });
+  // Two people can share a telephone: a household keeps one landline, a family abroad passes one
+  // mobile between them, and a sender abroad often books using the number of the very person who
+  // will receive the box. A number on its own therefore does not identify anybody — it only
+  // narrows the search down. What makes it the same person is the name as well; what makes their
+  // record safe to reuse is that it already serves in the capacity being asked for, because one
+  // record holds one address and a sender's address abroad is not a delivery address in the
+  // Philippines. Matching on the number alone is how a receiver ends up wearing the sender's
+  // address, and the box is addressed straight back to the person who sent it.
+  const dupOnPhone = b.phone_primary
+    ? d.customers.filter(c => phoneKey(c.phone_primary) && phoneKey(c.phone_primary) === phoneKey(b.phone_primary))
+    : [];
+  const servesAs = (c) => !b.type || c.type === b.type || c.type === 'BOTH';
+  const samePerson = dupOnPhone.find(c => nameKey(c.full_name) === nameKey(b.full_name) && servesAs(c));
+  const dup = samePerson || dupOnPhone[0];
+  // `match` tells the caller which of the two it got: the same person in the same capacity, safe
+  // to reuse outright, or merely somebody else reachable on that number, which is worth a word to
+  // a human typing but must never be adopted automatically.
+  if (dup && !b.force) {
+    return res.status(409).json({
+      error: 'duplicate_phone',
+      match: samePerson ? 'person' : 'phone',
+      existing: customerPublic(dup)
+    });
+  }
   const c = {
     id: db.nextId('customer'), full_name: properName(b.full_name),
     phone_primary: b.phone_primary || '', phone_alternate: b.phone_alternate || '', phone_history: [],
