@@ -1416,6 +1416,18 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
 
 // Scanning is the whole interface. One box, one action, and the pass closes itself when the
 // last box is done rather than relying on anyone to remember to end it.
+// Send whatever this request just queued, before answering it. Best effort on purpose: the
+// scan itself has already been recorded, and a provider that is down must not turn a delivered
+// box into an error on the driver's phone.
+async function flushMessages() {
+  try {
+    const r = await notif.processOnce();
+    if (r.processed) await db.flush();
+  } catch (e) {
+    console.warn('Could not send queued messages:', e.message);
+  }
+}
+
 app.post('/api/driver/scan', requireDriver,
   podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }]),
   async (req, res) => {
@@ -1436,7 +1448,7 @@ app.post('/api/driver/scan', requireDriver,
   const box = onRun[0];
 
   const ALLOWED = pass.kind === 'DELIVERY'
-    ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
+    ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', NEARBY: null, DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
     : { PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
   if (!(action in ALLOWED)) return res.status(400).json({ error: 'Unknown action.' });
 
@@ -1447,6 +1459,38 @@ app.post('/api/driver/scan', requireDriver,
   // Collecting from the sender is a timeline entry rather than a state change: the box has
   // left the sender but nobody at VFIC has booked it in yet, and inventing a status for the
   // back of a van would be a place boxes could get lost.
+  // Telling the receiver the van is close, without moving the box anywhere. One text per
+  // doorstep, not per box: three boxes for one family is one message, the same way three boxes
+  // through one door is one signature.
+  if (pass.kind === 'DELIVERY' && action === 'NEARBY') {
+    if (box.status !== 'OUT_FOR_DELIVERY') {
+      return res.status(400).json({ error: box.box_number + ' is not out for delivery yet — scan "Out for delivery" first.' });
+    }
+    const sameDoor = (d.boxes || []).filter(b =>
+      pass.box_ids.includes(b.id) && b.receiver_id === box.receiver_id);
+    const alreadyTold = sameDoor.some(b => b.nearby_notified_at);
+    const nowIso = new Date().toISOString();
+    for (const b of sameDoor) b.nearby_notified_at = b.nearby_notified_at || nowIso;
+    if (!alreadyTold) {
+      d.status_events.push({
+        id: db.nextId('status_event'), box_id: box.id,
+        from_status: box.status, to_status: box.status,
+        actor_user_id: null,
+        note: 'Receiver told the driver is nearby, by ' + pass.driver_name,
+        created_at: nowIso
+      });
+      notif.queueForTrigger(box, 'NEARBY');
+    }
+    db.persist();
+    await flushMessages();
+    return res.json({
+      box_number: box.box_number, status: box.status,
+      message: alreadyTold
+        ? 'Receiver already told — no second text sent'
+        : 'Receiver told you are nearby' + (sameDoor.length > 1 ? ` (${sameDoor.length} boxes at this stop)` : '')
+    });
+  }
+
   if (pass.kind === 'PICKUP' && action === 'PICKUP') {
     if (box.status !== 'CREATED') {
       return res.status(400).json({ error: box.box_number + ' is not waiting for collection.' });
@@ -1548,6 +1592,7 @@ app.post('/api/driver/scan', requireDriver,
   }
   db.persist();
   settlePass(d, pass);
+  await flushMessages();
   const left = passOutstanding(d, pass).length;
   res.json({
     box_number: box.box_number, status: box.status,

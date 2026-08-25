@@ -4,5 +4,8 @@
   },
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index.js" }
+  ],
+  "crons": [
+    { "path": "/api/cron/process-notifications", "schedule": "*/5 * * * *" }
   ]
 }

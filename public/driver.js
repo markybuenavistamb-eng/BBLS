@@ -36,6 +36,7 @@
     DELIVERY: [
       { key: 'LOAD',    label: 'Loaded at PH warehouse', hint: 'Scan each box as it goes on the truck' },
       { key: 'DEPART',  label: 'Out for delivery',       hint: 'Scan when you set off on the route' },
+      { key: 'NEARBY',  label: 'Nearly there',           hint: 'Scan as you approach — texts the receiver you are close' },
       { key: 'DELIVER', label: 'Delivered',              hint: "Scan at the receiver's door, once handed over" },
       { key: 'RETURN',  label: 'Could not deliver',      hint: 'Scan if it is coming back with you', danger: true }
     ],
