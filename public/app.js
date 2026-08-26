@@ -166,7 +166,19 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   let data = null;
   try { data = await res.json(); } catch (e) { /* non-JSON */ }
-  if (!res.ok) throw Object.assign(new Error((data && data.error) || `Request failed (${res.status})`), { status: res.status, data });
+  // The account was opened somewhere else, so this session is no longer the one holding it.
+  // Saying so beats every screen quietly turning into "Not logged in" with no explanation.
+  if (res.status === 401 && ME && path !== '/api/login') {
+    ME = null;
+    renderLogin();
+    const err = document.getElementById('lgErr');
+    if (err) err.textContent = 'You have been signed out — this account was opened somewhere else.';
+    throw Object.assign(new Error('Signed out'), { status: 401, handled: true });
+  }
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error)) || `Request failed (${res.status})`;
+    throw Object.assign(new Error(msg), { status: res.status, data });
+  }
   return data;
 }
 
@@ -4977,11 +4989,22 @@ async function pageAdmin() {
       <button onclick="createUser()">Create user</button>
     </details>
     <div class="card table-scroll">
-      <table><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr>
+      <div class="muted" style="margin-bottom:8px;font-size:12.5px">
+        An account can be open in one place at a time. If somebody has gone home leaving theirs
+        signed in, free it here — otherwise it releases itself after about 15 minutes idle.
+      </div>
+      <table><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Signed in</th><th></th></tr>
       ${users.map(u => `<tr>
         <td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td>
         <td>${u.active ? '✓' : '✗'}</td>
-        <td>${u.id !== ME.id ? `<button class="small secondary" onclick="toggleUser(${u.id}, ${!u.active})">${u.active ? 'Deactivate' : 'Activate'}</button>` : '<span class="muted">you</span>'}</td>
+        <td>${u.signed_in
+          ? `<span class="badge st-received_origin">Open</span>${u.signed_in_where
+              ? `<div class="muted" style="font-size:11px">${esc(u.signed_in_where)}</div>` : ''}`
+          : '<span class="muted">—</span>'}</td>
+        <td class="inline-actions">
+          ${u.id !== ME.id ? `<button class="small secondary" onclick="toggleUser(${u.id}, ${!u.active})">${u.active ? 'Deactivate' : 'Activate'}</button>` : '<span class="muted">you</span>'}
+          ${u.signed_in && u.id !== ME.id ? `<button class="small secondary" onclick="freeSession(${u.id}, '${esc(u.name)}')">Sign out</button>` : ''}
+        </td>
       </tr>`).join('')}
       </table>
     </div>`);
@@ -4990,6 +5013,25 @@ async function pageAdmin() {
   BIR_FIELDS.forEach(k => { const el = document.getElementById('bir_' + k); if (el) el.value = bir[k] || ''; });
   if (window.wireNameCase) wireNameCase('usName');
 }
+// Free an account somebody left open. Whoever is holding it is signed out where they are, so
+// it is worth a moment's confirmation rather than a button that acts on the first click.
+async function freeSession(id, name) {
+  const ok = await confirmAction({
+    title: 'Sign this account out?',
+    body: `<p><b>${esc(name)}</b> will be signed out wherever it is currently open, and can sign
+             in again immediately.</p>
+           <p class="muted">Anything they had typed but not saved on that screen is lost, so this
+             is for accounts left open by mistake rather than one somebody is working in.</p>`,
+    confirmLabel: 'Sign them out', cancelLabel: 'Leave it'
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/users/' + id + '/sign-out', { method: 'POST' });
+    flash(r.message || 'Signed out');
+    route();
+  } catch (e) { showErr(e); }
+}
+
 async function saveTemplate(key) {
   try {
     const on = document.getElementById('tplOn_' + key).checked;

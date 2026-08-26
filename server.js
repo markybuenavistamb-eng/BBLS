@@ -68,12 +68,45 @@ const { ADMINS, SHIPPERS, AGENTS, PH_SIDE, ALL_STAFF, ACCOUNTING_ROLES } = {
 
 // Resolve the signed-cookie session to an active user, or null.
 // Legacy role names (ADMIN / SHIPPER_AGENT) are normalised so old accounts keep working.
+// ---------- one account, one place at a time ----------
+// Shared logins are how a box gets scanned twice and how nobody can say who did it. An account
+// may be open in one browser only; a second sign-in is refused while the first is still working.
+//
+// The lock has to be able to let go by itself, or a closed laptop strands somebody until an
+// admin intervenes. Every request stamps the session as alive, and a session that has not been
+// seen for this long is treated as gone — the next sign-in simply takes over.
+const SESSION_IDLE_MS = Math.max(60, +(process.env.VFIC_SESSION_IDLE_MINUTES || 15) * 60) * 1000;
+// Stamping "still here" on every single request would rewrite the whole document each time, so
+// it is only refreshed once a minute. The idle window is far longer, so this costs nothing.
+const SESSION_TOUCH_MS = 60 * 1000;
+
+const sessionLive = (s) => !!s && !!s.id && (Date.now() - Date.parse(s.seen_at || 0)) < SESSION_IDLE_MS;
+const sessionFreesAt = (s) => new Date(Date.parse(s.seen_at || 0) + SESSION_IDLE_MS);
+
 function userFromReq(req) {
   const token = req.cookies && req.cookies[sess.COOKIE_NAME];
   const payload = sess.verify(token);
   if (!sess.isStaffToken(payload)) return null; // a sender token must never authenticate staff
   const u = db.get().users.find(x => x.id === payload.uid && x.active) || null;
-  if (u) u.role = ROLE.normalizeRole(u.role);
+  if (!u) return null;
+  // A token only authenticates while it is the sign-in the account is actually holding.
+  // Replaced by a newer sign-in, or ended by signing out or by an admin freeing the account:
+  // either way there is nothing here to re-join, and a token must never revive a session that
+  // was deliberately closed — that would quietly undo both.
+  if (payload.sid) {
+    if (!u.session || !u.session.id || u.session.id !== payload.sid) return null;
+  } else if (!u.session) {
+    // Minted before this rule existed. Adopted once so nobody is thrown out mid-shift by the
+    // deploy that introduced it; from their next sign-in they carry a sid like everyone else.
+    u.session = { id: 'legacy', seen_at: new Date().toISOString(), started_at: new Date().toISOString(), where: deviceLabel(req) };
+    db.persist();
+  }
+  // Keep the session alive while they are working, without writing on every request.
+  if (u.session && Date.now() - Date.parse(u.session.seen_at || 0) > SESSION_TOUCH_MS) {
+    u.session.seen_at = new Date().toISOString();
+    db.persist();
+  }
+  u.role = ROLE.normalizeRole(u.role);
   return u;
 }
 
@@ -361,9 +394,46 @@ app.post('/api/login', (req, res) => {
         : 'This account cannot sign in at this branch portal.'
     });
   }
-  res.cookie(sess.COOKIE_NAME, sess.tokenFor(u.id), sess.cookieOptions);
+  // Already open somewhere else? Refuse, and say where and until when rather than leaving them
+  // to guess. Signing in again from the browser that already holds the session is not a second
+  // place — it is the same person re-authenticating, so that is allowed to continue.
+  const here = sess.verify((req.cookies || {})[sess.COOKIE_NAME]);
+  const sameBrowser = here && here.uid === u.id && u.session && here.sid === u.session.id;
+  if (sessionLive(u.session) && !sameBrowser) {
+    const mins = Math.max(1, Math.ceil((sessionFreesAt(u.session) - Date.now()) / 60000));
+    return res.status(409).json({
+      error: 'account_in_use',
+      message: `This account is already signed in${u.session.where ? ' on ' + u.session.where : ''}.`
+        + ` Sign out there first, or wait about ${mins} minute${mins === 1 ? '' : 's'} —`
+        + ' the session frees itself once it goes idle.'
+    });
+  }
+
+  const sid = sess.newSessionId();
+  u.session = {
+    id: sid,
+    seen_at: new Date().toISOString(),
+    started_at: new Date().toISOString(),
+    // Enough to recognise your own forgotten session, not enough to track anybody.
+    where: deviceLabel(req)
+  };
+  db.persist();
+  res.cookie(sess.COOKIE_NAME, sess.tokenFor(u.id, sid), sess.cookieOptions);
   res.json({ id: u.id, name: u.name, email: u.email, role });
 });
+
+// "Chrome on Windows" is enough for someone to recognise the machine they left it open on.
+// Deliberately coarse: the point is to help them find their own session, not to profile them.
+function deviceLabel(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari'
+    : /Firefox\//.test(ua) ? 'Firefox' : '';
+  const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android'
+    : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'Mac'
+    : /Linux/.test(ua) ? 'Linux' : '';
+  return [browser, os].filter(Boolean).join(' on ') || '';
+}
 
 // Public branding for a branch portal's sign-in page.
 // Which staff portals this deployment can actually sign someone into.
@@ -412,7 +482,22 @@ app.get('/api/portal/:slug', (req, res) => {
   const b = BRANCH.resolve(db.get().settings.branches).find(x => x.key === p.branch) || {};
   res.json({ ...p, label: b.label, country: b.country, type: b.type, address: b.address || '', contact: b.contact || '' });
 });
-app.post('/api/logout', (req, res) => { res.clearCookie(sess.COOKIE_NAME, { path: '/' }); res.json({ ok: true }); });
+app.post('/api/logout', (req, res) => {
+  // Releasing the lock here is what makes signing out worth doing: without it the account would
+  // sit unavailable for the whole idle window even though its user has plainly finished.
+  const payload = sess.verify((req.cookies || {})[sess.COOKIE_NAME]);
+  if (sess.isStaffToken(payload)) {
+    const u = db.get().users.find(x => x.id === payload.uid);
+    // Only the sign-in that is actually holding the lock may drop it, or a stale tab closing
+    // later would sign the current user out from under them.
+    if (u && u.session && (!payload.sid || u.session.id === payload.sid)) {
+      u.session = null;
+      db.persist();
+    }
+  }
+  res.clearCookie(sess.COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
 app.get('/api/me', requireAuth, (req, res) => {
   const { id, name, email, role } = req.user;
   res.json({ id, name, email, role });
@@ -3302,11 +3387,33 @@ app.get('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const myBranch = BRANCH.branchForRole(req.user.role);
   const scoped = ROLE.isBranchAdmin(req.user.role);
   res.json(db.get().users
-    .map(({ password_hash, ...u }) => {
+    .map(({ password_hash, session, ...u }) => {
       const role = ROLE.normalizeRole(u.role);
-      return { ...u, role, role_label: ROLE.ROLE_LABELS[role] || role, branch: BRANCH.branchForRole(role) };
+      return {
+        ...u, role, role_label: ROLE.ROLE_LABELS[role] || role, branch: BRANCH.branchForRole(role),
+        // Whether the account is open right now, so an admin can see who is holding it and
+        // free it if somebody has gone home with the session still running.
+        signed_in: sessionLive(session),
+        signed_in_where: sessionLive(session) ? (session.where || '') : '',
+        signed_in_since: sessionLive(session) ? session.started_at : null
+      };
     })
     .filter(u => !scoped || u.branch === myBranch));
+});
+
+// Free an account somebody left open. A laptop shut at the end of a shift holds the lock until
+// it goes idle, and the person who needs the account next should not have to wait it out.
+app.post('/api/users/:id/sign-out', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
+  const d = db.get();
+  const u = d.users.find(x => x.id === +req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found' });
+  if (ROLE.isBranchAdmin(req.user.role)
+      && BRANCH.branchForRole(ROLE.normalizeRole(u.role)) !== BRANCH.branchForRole(req.user.role)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  u.session = null;
+  db.persist();
+  res.json({ ok: true, message: `${u.name} has been signed out. They can sign in again now.` });
 });
 app.post('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const { name, email, role, password } = req.body || {};
