@@ -112,6 +112,22 @@ function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION
 // Mirrors the roles the endpoint allows, so the button is not offered to someone it would refuse.
 // The branch counter and head office count this stock; Manila's warehouse and delivery staff have
 // nothing to do with a box that has not left Bangkok yet.
+// Where a driver's van has got to, and — just as important — how long ago that was. A position
+// with no age on it is worse than none: half an hour later it still looks like the answer. The
+// link opens the point in a map rather than embedding one, so no page here loads a third party.
+function whereabouts(pass) {
+  const loc = pass.last_location;
+  if (pass.state !== 'ACTIVE') return '<span class="muted">—</span>';
+  if (!loc) return '<span class="muted" title="The driver has not shared a location. It is optional and the run works without it.">Not shared</span>';
+  const mins = Math.max(0, Math.round((Date.now() - Date.parse(loc.at)) / 60000));
+  const ago = mins < 1 ? 'just now' : mins < 60 ? mins + ' min ago'
+    : Math.floor(mins / 60) + ' hr ' + (mins % 60) + ' min ago';
+  // Anything older than a quarter of an hour is stale enough to be worth doubting.
+  const stale = mins > 15;
+  return `<a href="https://www.google.com/maps?q=${loc.lat},${loc.lng}" target="_blank" rel="noopener noreferrer">📍 On the map</a>
+    <div class="muted" style="font-size:11px${stale ? ';font-weight:700' : ''}">${esc(ago)}${loc.accuracy_m ? ' · ±' + loc.accuracy_m + ' m' : ''}</div>`;
+}
+
 const canSeeBranchStock = () =>
   !!ME && R_ADMINS.concat(R_BRANCH_ADMINS, R_SHIPPERS).includes(ME.role);
 function collectionBadge(c) {
@@ -3605,16 +3621,17 @@ async function pageDriverPasses() {
     </div>
 
     <div class="card table-scroll">
-      <table><tr><th>Code</th><th>Driver</th><th>Run</th><th>Boxes left</th><th>Issued</th><th>State</th><th></th></tr>
+      <table><tr><th>Code</th><th>Driver</th><th>Run</th><th>Boxes left</th><th>Where</th><th>Issued</th><th>State</th><th></th></tr>
       ${passes.map(x => `<tr>
         <td><code style="font-size:14px;font-weight:700">${esc(x.code)}</code></td>
         <td>${esc(x.driver_name)}</td>
         <td>${x.kind === 'DELIVERY' ? 'Delivery' + (x.trip_number ? ' · ' + esc(x.trip_number) : '') : 'Collection'}</td>
         <td>${x.boxes_left} of ${x.boxes_total}</td>
+        <td>${whereabouts(x)}</td>
         <td>${fmtDay(x.created_at)}</td>
         <td><span class="badge ${STATE_BADGE[x.state] || ''}">${esc(x.state)}</span></td>
         <td>${x.state === 'ACTIVE' ? `<button class="small secondary danger" onclick="revokePass(${x.id})">Cancel</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">No passes issued yet</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">No passes issued yet</td></tr>'}
       </table>
     </div>`);
   if (window.wireNameCase) wireNameCase('dpName');

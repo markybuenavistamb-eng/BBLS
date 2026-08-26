@@ -1306,6 +1306,11 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .drv-mode.on { background: var(--primary); color: #fff; border-color: var(--primary); }
 .drv-mode.danger.on { background: #b91c1c; border-color: #b91c1c; }
 .drv-hint { font-size: 12.5px; margin: 8px 2px 10px; }
+/* What the phone is doing in the driver's pocket, said plainly. Quiet when it is working and
+   plain grey when it is not — a refusal costs the run nothing, so it must not read as an error. */
+.drv-geo { font-size: 12px; margin: 0 2px 10px; color: #64748b; line-height: 1.4; }
+.drv-geo.on { color: #15803d; }
+.drv-geo.on::before { content: '📍 '; }
 
 .drv-scanner { background: #000; border-radius: 14px; overflow: hidden; min-height: 210px; }
 .drv-scanner video { width: 100% !important; height: auto !important; display: block; }

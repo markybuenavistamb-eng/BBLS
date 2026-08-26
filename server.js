@@ -1263,6 +1263,9 @@ function requireDriver(req, res, next) {
 app.get('/api/driver-passes', requireRole(...ALL_STAFF), (req, res) => {
   const d = db.get();
   const mine = chatBranchOf(req.user);
+  // The same people who may issue a pass are the ones who may see where that driver has got to.
+  const canDispatch = ROLE.isAdmin(req.user.role) || ROLE.isBranchAdmin(req.user.role)
+    || req.user.role === 'CONSIGNEE_AGENT';
   const list = driverPasses(d)
     .filter(p => mine === 'HQ_MANILA' || p.branch === mine)
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
@@ -1274,7 +1277,13 @@ app.get('/api/driver-passes', requireRole(...ALL_STAFF), (req, res) => {
       completed_at: p.completed_at || null, revoked_at: p.revoked_at || null,
       state: passState(d, p),
       boxes_total: p.box_ids.length,
-      boxes_left: passOutstanding(d, p).length
+      boxes_left: passOutstanding(d, p).length,
+      // Only while the run is live, and only to the people who dispatch it. A finished pass
+      // keeps whatever it last recorded, but there is no reason to keep showing where somebody
+      // was once their shift ended — and accounting reading this list for other reasons has no
+      // business knowing where a named person is standing. The rest of the row is unchanged;
+      // it is the location specifically that is narrowed to whoever sent the driver out.
+      last_location: (passState(d, p) === 'ACTIVE' && canDispatch) ? (p.last_location || null) : null
     }));
   res.json(list);
 });
@@ -1420,6 +1429,39 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
 
 // Scanning is the whole interface. One box, one action, and the pass closes itself when the
 // last box is done rather than relying on anyone to remember to end it.
+// Where the van is, while it is out. The office needs this to answer "where is my box" and to
+// see a run that has stopped moving, and the driver's phone is the only thing that knows.
+//
+// Deliberately narrow, because this is a person's location, not a vehicle's:
+//   · only while the pass is ACTIVE — the moment the last box is delivered the pass settles and
+//     nothing further is recorded, the same way the pass itself stops working;
+//   · the last known position only, not a trail. "Where is the van now" is an operational
+//     question; a saved record of everywhere somebody went all day is a different thing, and
+//     nothing here needs it;
+//   · the driver's phone asks their permission first and they can refuse, so the run must work
+//     without it — a refusal returns quietly rather than failing the shift.
+app.post('/api/driver/location', requireDriver, (req, res) => {
+  const d = db.get();
+  const pass = req.pass;
+  if (passState(d, pass) !== 'ACTIVE') {
+    return res.status(409).json({ error: 'run_finished', message: 'This run is finished — location is no longer recorded.' });
+  }
+  const lat = Number((req.body || {}).lat);
+  const lng = Number((req.body || {}).lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return res.status(400).json({ error: 'A latitude and longitude are required.' });
+  }
+  const accuracy = Number((req.body || {}).accuracy_m);
+  pass.last_location = {
+    lat: +lat.toFixed(5),          // ~1 m; more digits would be false precision from a phone
+    lng: +lng.toFixed(5),
+    accuracy_m: Number.isFinite(accuracy) ? Math.round(accuracy) : null,
+    at: new Date().toISOString()
+  };
+  db.persist();
+  res.json({ ok: true });
+});
+
 // Send whatever this request just queued, before answering it. Best effort on purpose: the
 // scan itself has already been recorded, and a provider that is down must not turn a delivered
 // box into an error on the driver's phone.

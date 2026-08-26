@@ -94,9 +94,72 @@
 
   window.drvLogout = async function () {
     await api('/api/driver/logout', { method: 'POST' }).catch(() => {});
+    stopSharing();
     RUN = null; LOG = [];
     renderLogin();
   };
+
+  /* ---------- where the van is ---------- */
+  // The office needs to know where a run has got to, and the phone in the driver's hand is the
+  // only thing that knows. The phone asks their permission, which they may refuse — so this is
+  // built to be optional throughout: a refusal costs the run nothing and is never asked twice.
+  //
+  // A fix every couple of minutes is what the question deserves. Watching continuously would
+  // drain the battery of the device the whole shift depends on, to answer "where is the van"
+  // more precisely than anybody needs.
+  let geoTimer = null;
+  let geoState = 'off';        // off | asking | on | refused | unavailable
+
+  function sendFix(pos) {
+    geoState = 'on';
+    paintGeo();
+    api('/api/driver/location', {
+      method: 'POST',
+      body: {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy_m: pos.coords.accuracy
+      }
+    }).catch(e => {
+      // The run finished between the fix and sending it. Nothing to fix, just stop.
+      if (e.error === 'run_finished') stopSharing();
+    });
+  }
+
+  function geoTrouble(err) {
+    // 1 = permission denied. Anything else is the phone failing to get a fix, which may pass.
+    geoState = err && err.code === 1 ? 'refused' : 'unavailable';
+    if (geoState === 'refused') stopSharing();
+    paintGeo();
+  }
+
+  function startSharing() {
+    if (!navigator.geolocation || geoTimer) return;
+    geoState = 'asking';
+    paintGeo();
+    const ask = () => navigator.geolocation.getCurrentPosition(sendFix, geoTrouble,
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 });
+    ask();
+    geoTimer = setInterval(ask, 120000);
+  }
+
+  function stopSharing() {
+    if (geoTimer) { clearInterval(geoTimer); geoTimer = null; }
+  }
+
+  function paintGeo() {
+    const el = gid('drvGeo');
+    if (!el) return;
+    const TEXT = {
+      asking: 'Asking your phone for its location…',
+      on: 'Sharing your location with the office while this run is open',
+      refused: 'Location is off. The run works without it — turn it on in your browser settings if the office asks.',
+      unavailable: 'Cannot get a location right now. The run is unaffected.',
+      off: ''
+    };
+    el.textContent = TEXT[geoState] || '';
+    el.className = 'drv-geo' + (geoState === 'on' ? ' on' : '');
+  }
 
   /* ---------- the run ---------- */
   async function loadRun() {
@@ -104,6 +167,7 @@
     catch (e) { return renderLogin(e.message); }
     if (!MODE) MODE = ACTIONS[RUN.kind][0].key;
     renderRun();
+    startSharing();
   }
 
   function renderRun() {
@@ -128,6 +192,7 @@
                   onclick="drvSetMode('${a.key}')">${esc(a.label)}</button>`).join('')}
       </div>
       <div class="muted drv-hint" id="drvHint"></div>
+      <div class="drv-geo" id="drvGeo"></div>
 
       <div id="drvScanner" class="drv-scanner"></div>
       <div class="drv-manual">
@@ -142,6 +207,7 @@
 
     gid('drvBox').addEventListener('keydown', e => { if (e.key === 'Enter') drvManual(); });
     paintHint();
+    paintGeo();
     paintLog();
     paintList();
     startScanner();
