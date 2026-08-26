@@ -1266,12 +1266,18 @@ app.get('/api/driver-passes', requireRole(...ALL_STAFF), (req, res) => {
   // The same people who may issue a pass are the ones who may see where that driver has got to.
   const canDispatch = ROLE.isAdmin(req.user.role) || ROLE.isBranchAdmin(req.user.role)
     || req.user.role === 'CONSIGNEE_AGENT';
+  const tripOf = (p) => (p.trip_id && (d.trips || []).find(t => t.id === p.trip_id)) || {};
   const list = driverPasses(d)
     .filter(p => mine === 'HQ_MANILA' || p.branch === mine)
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
     .slice(0, 50)
     .map(p => ({
       id: p.id, code: p.code, kind: p.kind, driver_name: p.driver_name,
+      // Read through to the trip when the pass has nothing of its own, so a plate filled in
+      // after the pass was issued still shows rather than the row staying blank for ever.
+      driver_contact: p.driver_contact || tripOf(p).driver_contact || '',
+      plate_number: p.plate_number || tripOf(p).plate_number || '',
+      trucking_company: p.trucking_company || tripOf(p).trucking_company || '',
       trip_id: p.trip_id || null, trip_number: p.trip_number || null,
       branch: p.branch, created_at: p.created_at,
       completed_at: p.completed_at || null, revoked_at: p.revoked_at || null,
@@ -1331,7 +1337,13 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     code: newPassCode(),
     kind, branch,
     driver_name: driverName,
-    driver_contact: String(b.driver_contact || '').trim(),
+    driver_contact: String(b.driver_contact || '').trim() || (trip ? trip.driver_contact : '') || '',
+    // Which truck actually went out. A delivery run has a trip to read this from, but a branch
+    // collection has no trip at all — so it is recorded on the pass, and the office can say what
+    // left the yard either way. Typed values win over the trip's, because the truck booked last
+    // week is not always the truck that turned up.
+    plate_number: String(b.plate_number || '').trim().toUpperCase() || (trip ? trip.plate_number : '') || '',
+    trucking_company: properName(b.trucking_company || '') || (trip ? trip.trucking_company : '') || '',
     trip_id: trip ? trip.id : null,
     trip_number: trip ? trip.trip_number : null,
     box_ids: boxIds,
@@ -1422,6 +1434,11 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
   res.json({
     kind: pass.kind, driver_name: pass.driver_name,
     trip_number: pass.trip_number || null,
+    // So the driver can see at a glance that the pass they were given is for the truck they are
+    // actually standing next to. Two runs going out at once is exactly when the wrong code gets
+    // read down the phone, and a plate is the fastest way to catch it.
+    plate_number: pass.plate_number || '',
+    trucking_company: pass.trucking_company || '',
     branch_label: BRANCH.BRANCH_LABELS[pass.branch] || pass.branch,
     boxes, outstanding: passOutstanding(d, pass).length
   });

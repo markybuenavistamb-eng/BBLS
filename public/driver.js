@@ -182,6 +182,7 @@
         <div>
           <div class="drv-title">${esc(title)}</div>
           <div class="muted">${stopsFor(RUN.boxes).length} stop(s) · ${RUN.boxes.length} box(es) · <b>${RUN.outstanding}</b> still to do</div>
+          ${RUN.plate_number || RUN.trucking_company ? `<div class="muted drv-truck">🚛 ${esc([RUN.plate_number, RUN.trucking_company].filter(Boolean).join(' · '))}</div>` : ''}
         </div>
         <button class="drv-out" onclick="drvLogout()">End</button>
       </div>

@@ -112,6 +112,17 @@ function regionBadge(r) { return r ? `<span class="badge st-sorted">${esc(REGION
 // Mirrors the roles the endpoint allows, so the button is not offered to someone it would refuse.
 // The branch counter and head office count this stock; Manila's warehouse and delivery staff have
 // nothing to do with a box that has not left Bangkok yet.
+// Which truck went out. The plate is what a guard at a gate, a customer on the phone, or a
+// police report actually refers to, so it leads; the hauler underneath matters when the run is
+// subcontracted and someone has to be rung about it.
+function truckDetails(pass) {
+  const plate = pass.plate_number || '';
+  const company = pass.trucking_company || '';
+  if (!plate && !company) return '<span class="muted">Not recorded</span>';
+  return `${plate ? `<b>${esc(plate)}</b>` : '<span class="muted">No plate</span>'}
+    ${company ? `<div class="muted" style="font-size:11px">${esc(company)}</div>` : ''}`;
+}
+
 // Where a driver's van has got to, and — just as important — how long ago that was. A position
 // with no age on it is worse than none: half an hour later it still looks like the answer. The
 // link opens the point in a map rather than embedding one, so no page here loads a third party.
@@ -3425,16 +3436,23 @@ async function pageSchedule() {
           const trips = evs.filter(e => e.kind === 'TRIP');
           const pick = evs.filter(e => e.kind === 'PICKUP');
           const ord = evs.filter(e => e.kind === 'BOX_ORDER');
+          // Hovering a day says who is out and in what, without having to open it — useful when
+          // scanning a week to find which truck was on the road on a particular day.
+          const hint = trips.map(t => [t.ref, t.who, t.plate, t.company].filter(Boolean).join(' · ')).join('\n');
           return `<div class="cal-cell${key === today ? ' is-today' : ''}${key === SCHED_DAY ? ' is-open' : ''}${evs.length ? ' has' : ''}"
+                       ${hint ? `title="${esc(hint)}"` : ''}
                        onclick="schedOpen('${key}')">
             <div class="cal-day">${dt.getDate()}</div>
             ${(() => {
               if (!trips.length) return '';
-              const running = trips.filter(t => !t.done).length;
+              const live = trips.filter(t => !t.done);
               // A day whose trips are all completed says so, the same way a finished pick-up does.
-              return running
-                ? `<div class="cal-pill k-trip">${running} trip${running === 1 ? '' : 's'}</div>`
-                : '<div class="cal-pill k-done">completed</div>';
+              if (!live.length) return '<div class="cal-pill k-done">completed</div>';
+              // One truck fits on the face of the cell and is what dispatch is actually looking
+              // for; several would not fit, so the count stands and the tooltip carries the rest.
+              const plate = live.length === 1 ? (live[0].plate || '') : '';
+              return `<div class="cal-pill k-trip">${live.length} trip${live.length === 1 ? '' : 's'}</div>
+                ${plate ? `<div class="cal-truck">🚛 ${esc(plate)}</div>` : ''}`;
             })()}
             ${(() => {
               if (!pick.length) return '';
@@ -3573,6 +3591,8 @@ async function pageDriverPasses() {
       <div class="form-grid">
         <div><label>Driver's name *</label><input id="dpName" placeholder="e.g. Ramon Cruz" oninput="this.dataset.touched='1'"></div>
         <div><label>Contact number</label><input id="dpPhone" placeholder="Optional" oninput="this.dataset.touched='1'"></div>
+        <div><label>Plate number</label><input id="dpPlate" placeholder="e.g. NBC 4471" oninput="this.dataset.touched='1'"></div>
+        <div><label>Trucking company</label><input id="dpCompany" placeholder="Own fleet, or the hauler's name" oninput="this.dataset.touched='1'"></div>
       </div>
       ${hq ? `
         <label>Delivery trip *</label>
@@ -3583,7 +3603,8 @@ async function pageDriverPasses() {
               data-driver="${esc(t.driver_name || '')}"
               data-contact="${esc(t.driver_contact || '')}"
               data-plate="${esc(t.plate_number || '')}"
-            >${esc(t.trip_number)} · ${esc(t.driver_name || '')} · ${t.box_count} box(es)</option>`).join('')}
+              data-company="${esc(t.trucking_company || '')}"
+            >${esc(t.trip_number)} · ${esc(t.driver_name || '')}${t.plate_number ? ' · ' + esc(t.plate_number) : ''} · ${t.box_count} box(es)</option>`).join('')}
         </select>
         <div class="muted" id="dpTripInfo" style="font-size:12px;margin-top:4px"></div>
         <div class="muted" style="font-size:12px;margin-top:4px">
@@ -3621,17 +3642,19 @@ async function pageDriverPasses() {
     </div>
 
     <div class="card table-scroll">
-      <table><tr><th>Code</th><th>Driver</th><th>Run</th><th>Boxes left</th><th>Where</th><th>Issued</th><th>State</th><th></th></tr>
+      <table><tr><th>Code</th><th>Driver</th><th>Truck</th><th>Run</th><th>Boxes left</th><th>Where</th><th>Issued</th><th>State</th><th></th></tr>
       ${passes.map(x => `<tr>
         <td><code style="font-size:14px;font-weight:700">${esc(x.code)}</code></td>
-        <td>${esc(x.driver_name)}</td>
+        <td>${esc(x.driver_name)}
+          ${x.driver_contact ? `<div class="muted" style="font-size:11px"><a href="tel:${esc(x.driver_contact)}">${esc(x.driver_contact)}</a></div>` : ''}</td>
+        <td>${truckDetails(x)}</td>
         <td>${x.kind === 'DELIVERY' ? 'Delivery' + (x.trip_number ? ' · ' + esc(x.trip_number) : '') : 'Collection'}</td>
         <td>${x.boxes_left} of ${x.boxes_total}</td>
         <td>${whereabouts(x)}</td>
         <td>${fmtDay(x.created_at)}</td>
         <td><span class="badge ${STATE_BADGE[x.state] || ''}">${esc(x.state)}</span></td>
         <td>${x.state === 'ACTIVE' ? `<button class="small secondary danger" onclick="revokePass(${x.id})">Cancel</button>` : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">No passes issued yet</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">No passes issued yet</td></tr>'}
       </table>
     </div>`);
   if (window.wireNameCase) wireNameCase('dpName');
@@ -3650,9 +3673,21 @@ function tripPicked() {
   const driver = opt.dataset.driver || '';
   const contact = opt.dataset.contact || '';
   const plate = opt.dataset.plate || '';
+  const company = opt.dataset.company || '';
+  const plateEl = document.getElementById('dpPlate');
+  const companyEl = document.getElementById('dpCompany');
+  // Anything the clerk has already typed is theirs and stays; the trip only fills the blanks,
+  // since the truck that turns up is not always the one that was booked.
   if (name && !name.dataset.touched) name.value = driver;
   if (phone && !phone.dataset.touched) phone.value = contact;
-  if (info) info.textContent = plate ? `Plate ${plate} — from the trip record.` : 'Driver details taken from the trip.';
+  if (plateEl && !plateEl.dataset.touched) plateEl.value = plate;
+  if (companyEl && !companyEl.dataset.touched) companyEl.value = company;
+  if (info) {
+    const known = [driver && 'driver', plate && 'plate', company && 'hauler'].filter(Boolean);
+    info.textContent = known.length
+      ? `Filled in from the trip record: ${known.join(', ')}. Change anything that is different today.`
+      : 'That trip has no driver or truck recorded — type them in.';
+  }
 }
 
 function passPickAll(on) {
@@ -3671,7 +3706,9 @@ async function issuePass(kind) {
   err.textContent = '';
   try {
     const body = { kind, driver_name: document.getElementById('dpName').value.trim(),
-                   driver_contact: document.getElementById('dpPhone').value.trim() };
+                   driver_contact: document.getElementById('dpPhone').value.trim(),
+                   plate_number: (document.getElementById('dpPlate') || {}).value?.trim() || '',
+                   trucking_company: (document.getElementById('dpCompany') || {}).value?.trim() || '' };
     if (!body.driver_name) { err.textContent = "The driver's name is required."; return; }
     const tripSel = document.getElementById('dpTrip');
     if (tripSel) body.trip_id = +tripSel.value || null;
