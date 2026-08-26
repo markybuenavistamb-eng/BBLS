@@ -1495,6 +1495,19 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .rate-extra { font-size: 13px; color: #4b5563; margin-top: 14px; padding-top: 14px; border-top: 1px solid #e8e8e8; }
 .rate-note { font-size: 11.5px; color: #9ca3af; margin-top: 12px; line-height: 1.45; }
 .rate-cta { margin-top: 16px; justify-content: center; }
+/* Measurements for a sender's own carton. Four small boxes on one line reads as one question
+   — "how big is it" — rather than four separate ones. */
+.rate-own { grid-column: 1 / -1; border-top: 1px solid #ececec; padding-top: 14px; }
+.rate-own-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.rate-own-note { font-size: 12px; color: #6b7280; margin-top: 8px; }
+.rate-hint { display: block; font-size: 11px; color: #9ca3af; margin-top: 5px; }
+.rate-warn {
+  font-size: 12px; color: #92400e; background: #fef3c7; border-radius: 5px;
+  padding: 8px 10px; margin-top: 10px; line-height: 1.45;
+}
+@media (max-width: 560px) {
+  .rate-own-grid { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 860px) {
   .rate-calc { grid-template-columns: 1fr; }
   .rate-out { border-left: 0; border-top: 1px solid #e4e4e4; }

@@ -92,7 +92,7 @@
       'dash.inTransit': 'Containers in transit', 'dash.activeTrips': 'Active trips', 'dash.recentSms': 'Recent SMS',
 
       /* landing */
-      'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.account': 'Sign-up / Sign-in', 'land.nav.how': 'How it works', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
+      'land.nav.services': 'Services', 'land.nav.track': 'Tracking', 'land.nav.account': 'Sign-up / Sign-in', 'land.nav.how': 'How it works', 'land.nav.rates': 'Rates', 'land.nav.send': 'Send a box', 'land.nav.contact': 'Contact', 'land.nav.login': 'Staff Login',
       // Staff portal picker on the landing page.
       'land.portal.title': 'Staff sign-in', 'land.portal.sub': 'Choose the portal for your branch.',
       'land.portal.branches': 'Branch sites', 'land.portal.note': 'Branch portals are separate sites with their own staff accounts.',
@@ -108,6 +108,9 @@
       'land.svc.door.t': 'Door to Door', 'land.svc.door.d': 'We pick up abroad and deliver right to the receiver’s doorstep anywhere in the Philippines.',
       'land.svc.customs.t': 'Customs Brokerage', 'land.svc.customs.d': 'FTEB-accredited handling of documentation and clearance so your box moves without delay.',
       'land.how.title': 'How it works', 'land.how.sub': 'From your hands to theirs in four simple steps.',
+      'land.rate.title': 'Check the price',
+      'land.rate.sub': 'Tell us where it is going and what you are sending. You will see the price straight away — no sign-up, no waiting for a reply.',
+      'land.rate.loading': 'Getting today’s rates…',
       'land.how.1t': 'Pack & book', 'land.how.1d': 'Fill out the receiving form online or at our branch and get your box number.',
       'land.how.2t': 'We consolidate', 'land.how.2d': 'Your box is loaded into a container and shipped to the Philippines.',
       'land.how.3t': 'Arrival & sorting', 'land.how.3d': 'On arrival we strip, sort by region, and schedule delivery.',
@@ -244,7 +247,7 @@
       'dash.returns': 'Pila ng naibalik', 'dash.unpaid': 'Hindi pa bayad na padala', 'dash.pipeline': 'Daloy',
       'dash.inTransit': 'Mga container sa biyahe', 'dash.activeTrips': 'Aktibong biyahe', 'dash.recentSms': 'Kamakailang SMS',
 
-      'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.account': 'Mag-sign up / Mag-sign in', 'land.nav.how': 'Paano gumagana', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
+      'land.nav.services': 'Serbisyo', 'land.nav.track': 'Tracking', 'land.nav.account': 'Mag-sign up / Mag-sign in', 'land.nav.how': 'Paano gumagana', 'land.nav.rates': 'Presyo', 'land.nav.send': 'Magpadala', 'land.nav.contact': 'Kontak', 'land.nav.login': 'Login ng Kawani',
       // Pampiling ng portal ng kawani sa landing page.
       'land.portal.title': 'Sign-in ng kawani', 'land.portal.sub': 'Piliin ang portal ng inyong sangay.',
       'land.portal.branches': 'Mga site ng sangay', 'land.portal.note': 'Hiwalay na site ang bawat sangay, may sariling account ang kanilang mga kawani.',
@@ -260,6 +263,9 @@
       'land.svc.door.t': 'Bahay hanggang Bahay', 'land.svc.door.d': 'Kinukuha namin sa abroad at inihahatid mismo sa pintuan ng tatanggap saanman sa Pilipinas.',
       'land.svc.customs.t': 'Customs Brokerage', 'land.svc.customs.d': 'FTEB-accredited na paghawak ng dokumento at clearance para walang antala ang inyong kahon.',
       'land.how.title': 'Paano ito gumagana', 'land.how.sub': 'Mula sa inyong kamay hanggang sa kanila sa apat na simpleng hakbang.',
+      'land.rate.title': 'Tingnan ang presyo',
+      'land.rate.sub': 'Sabihin lang kung saan ipapadala at ano ang laman. Makikita agad ninyo ang presyo — walang sign-up, hindi na kailangang maghintay ng sagot.',
+      'land.rate.loading': 'Kinukuha ang presyo ngayong araw…',
       'land.how.1t': 'Mag-empake at mag-book', 'land.how.1d': 'Sagutan ang receiving form online o sa aming branch at makuha ang box number.',
       'land.how.2t': 'Pagsasama-sama', 'land.how.2d': 'Ikakarga ang inyong kahon sa container at ipapadala sa Pilipinas.',
       'land.how.3t': 'Pagdating at pagbukod', 'land.how.3d': 'Pagdating, ibinababa, ibinubukod ayon sa rehiyon, at iniiskedyul para ihatid.',

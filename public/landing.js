@@ -97,30 +97,30 @@
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   let DATA = null;
-  const pick = { origin: '', zone: '', level: '', size: '', kg: '' };
+  const pick = { origin: '', zone: '', level: '', size: '', kg: '', L: '', W: '', H: '' };
+  const OWN = '__OWN__';   // "my own box" sits in the size list beside the standard ones
 
   const money = (amount, currency) => {
     const n = Number(amount) || 0;
     try {
       return new Intl.NumberFormat('en-PH', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n);
-    } catch (e) {
-      return currency + ' ' + n.toLocaleString();
-    }
+    } catch (e) { return currency + ' ' + n.toLocaleString(); }
   };
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
 
   async function load() {
     try {
       const res = await fetch('/api/public/rates');
-      if (!res.ok) throw new Error('rates unavailable');
+      if (!res.ok) throw new Error('unavailable');
       DATA = await res.json();
     } catch (e) {
-      host.innerHTML = `<div class="rate-loading">Rates are not available right now.
-        Please <a href="#contact">contact us</a> for a quote.</div>`;
+      host.innerHTML = '<div class="rate-loading">Rates are not available right now. '
+        + 'Please <a href="#contact">contact us</a> for a quote.</div>';
       return;
     }
     if (!DATA.origins.length) {
-      host.innerHTML = `<div class="rate-loading">Rates have not been published yet.
-        Please <a href="#contact">contact us</a> for a quote.</div>`;
+      host.innerHTML = '<div class="rate-loading">Rates have not been published yet. '
+        + 'Please <a href="#contact">contact us</a> for a quote.</div>';
       return;
     }
     pick.origin = DATA.origins[0].key;
@@ -132,74 +132,135 @@
 
   const originOf = () => DATA.origins.find(o => o.key === pick.origin) || DATA.origins[0];
   const isAir = () => pick.level === DATA.air_level;
+  const isOwnBox = () => pick.size === OWN;
+  // Only the levels this destination can actually be sold. Ocean Priority reaches Metro Manila
+  // only, so offering it elsewhere would quote a service the booking would then refuse.
+  const levelsHere = () => (DATA.levels_by_zone || {})[pick.zone]
+    || DATA.ocean_levels.concat([DATA.air_level]);
 
-  // The same arithmetic the office bills with: ocean is a flat price for the box, air is by the
-  // kilo. Kept deliberately simple — anything conditional belongs in the booking, not the quote.
+  // A sender's own carton is charged as the smallest standard box it would fit inside: what
+  // costs money is the space it takes in the container, not whose cardboard it is.
+  function ownBoxFit() {
+    const l = num(pick.L), w = num(pick.W), h = num(pick.H);
+    if (!l || !w || !h) return { incomplete: true };
+    const cbm = +((l * w * h) / 1e6).toFixed(4);
+    const sorted = DATA.sizes.slice().sort((a, b) => a.cbm - b.cbm);
+    const fit = sorted.find(s => cbm <= s.cbm + 1e-9);
+    return { cbm, fit: fit || null, overSized: !fit, largest: sorted[sorted.length - 1] };
+  }
+
+  // The size's included weight allowance. Above it the office charges excess on the scale, so a
+  // sender who has already told us the weight should hear about it now, not at the counter.
+  function overWeight(size) {
+    const kg = num(pick.kg);
+    const allow = Number(size.standard_weight_kg) || 0;
+    return (kg && allow && kg > allow) ? { kg, allow } : null;
+  }
+
   function quote() {
     const o = originOf();
     if (!o || !pick.zone) return null;
+
     if (isAir()) {
       const perKg = Number(((o.air || {})[DATA.air_level] || {})[pick.zone]) || 0;
-      const kg = Number(pick.kg) || 0;
+      const kg = num(pick.kg);
       if (!perKg) return { unavailable: true };
-      return { amount: perKg * kg, currency: o.currency, basis: `${money(perKg, o.currency)} per kilo × ${kg || 0} kg`, needsWeight: !kg };
+      if (!kg) return { needsMore: 'Enter the weight in kilos to see the price.', basis: money(perKg, o.currency) + ' per kilo' };
+      return { amount: perKg * kg, currency: o.currency, basis: money(perKg, o.currency) + ' per kilo × ' + kg + ' kg' };
     }
-    const amount = Number((((o.ocean || {})[pick.level] || {})[pick.zone] || {})[pick.size]) || 0;
+
+    let sizeKey = pick.size, own = null;
+    if (isOwnBox()) {
+      own = ownBoxFit();
+      if (own.incomplete) return { needsMore: 'Enter the length, width and height of your box.' };
+      if (own.overSized) return { oversized: own };
+      sizeKey = own.fit.key;
+    }
+
+    const amount = Number((((o.ocean || {})[pick.level] || {})[pick.zone] || {})[sizeKey]) || 0;
     if (!amount) return { unavailable: true };
-    const size = DATA.sizes.find(s => s.key === pick.size) || {};
-    // "Giga Box" already says box; "Large" does not. Appending blindly gave "one giga box box".
+    const size = DATA.sizes.find(s => s.key === sizeKey) || {};
     const name = String(size.label || '').toLowerCase();
-    return { amount, currency: o.currency, basis: `one ${/\bbox$/.test(name) ? name : name + ' box'}, all in` };
+    const asBox = /\bbox$/.test(name) ? name : name + ' box';
+    return {
+      amount, currency: o.currency, own,
+      basis: own ? own.cbm + ' cbm — charged as one ' + asBox : 'one ' + asBox + ', all in',
+      overWeight: overWeight(size)
+    };
   }
 
   function render() {
     const o = originOf();
+    // A destination that cannot take the chosen service falls back quietly rather than
+    // quoting nothing at all.
+    if (!levelsHere().includes(pick.level)) pick.level = levelsHere()[0];
     const q = quote();
-    const levels = DATA.ocean_levels.concat([DATA.air_level]);
-    const emptyPrice = (o.empty_box_price || {})[pick.size];
+    const own = isOwnBox() ? ownBoxFit() : null;
+    const emptyPrice = (!isAir() && !isOwnBox()) ? (o.empty_box_price || {})[pick.size] : null;
+
+    const sizeField = isAir() ? `
+      <label>
+        <span>Weight</span>
+        <input data-f="kg" type="number" min="0" step="0.5" inputmode="decimal" placeholder="kilos" value="${esc(pick.kg)}">
+      </label>` : `
+      <label>
+        <span>Box size</span>
+        <select data-f="size">
+          ${DATA.sizes.map(s => `<option value="${esc(s.key)}"${s.key === pick.size ? ' selected' : ''}>${esc(s.label)}${s.dimensions ? ' · ' + esc(s.dimensions) : ''}</option>`).join('')}
+          <option value="${OWN}"${isOwnBox() ? ' selected' : ''}>I have my own box — enter measurements</option>
+        </select>
+      </label>`;
+
+    const ownFields = !isOwnBox() ? '' : `
+      <div class="rate-own">
+        <div class="rate-own-grid">
+          <label><span>Length</span><input data-f="L" type="number" min="0" step="1" inputmode="decimal" placeholder="cm" value="${esc(pick.L)}"></label>
+          <label><span>Width</span><input data-f="W" type="number" min="0" step="1" inputmode="decimal" placeholder="cm" value="${esc(pick.W)}"></label>
+          <label><span>Height</span><input data-f="H" type="number" min="0" step="1" inputmode="decimal" placeholder="cm" value="${esc(pick.H)}"></label>
+          <label><span>Weight</span><input data-f="kg" type="number" min="0" step="0.5" inputmode="decimal" placeholder="kg" value="${esc(pick.kg)}"></label>
+        </div>
+        ${own && own.cbm ? `<div class="rate-own-note">${own.cbm} cbm${own.fit ? ' · fits our ' + esc(own.fit.label) + ' (' + esc(own.fit.dimensions) + ')' : ''}</div>` : ''}
+      </div>`;
+
+    let answer = '';
+    if (q && q.unavailable) {
+      answer = '<div class="rate-none">We do not have a published rate for that combination yet — '
+        + '<a href="#contact">ask us</a> and we will quote it.</div>';
+    } else if (q && q.oversized) {
+      answer = `<div class="rate-none"><b>${q.oversized.cbm} cbm</b> is larger than our biggest box
+        (${esc(q.oversized.largest.label)}, ${q.oversized.largest.cbm} cbm).
+        <a href="#contact">Talk to us</a> — we ship crates and pallets too.</div>`;
+    } else if (q && q.needsMore) {
+      answer = `<div class="rate-none">${esc(q.needsMore)}${q.basis ? '<br><span class="rate-basis">' + esc(q.basis) + '</span>' : ''}</div>`;
+    } else if (q) {
+      answer = `<div class="rate-amount">${esc(money(q.amount, q.currency))}</div>
+        <div class="rate-basis">${esc(q.basis)}</div>
+        ${q.overWeight ? `<div class="rate-warn">Over the ${q.overWeight.allow} kg allowance for that size by ${+(q.overWeight.kg - q.overWeight.allow).toFixed(1)} kg — excess is charged on the scale.</div>` : ''}
+        ${q.own && q.own.fit && q.own.fit.exceeds_boc_cbm ? `<div class="rate-warn">Above the ${DATA.boc_max_cbm} cbm customs limit for the Balikbayan Box privilege — duties may apply.</div>` : ''}`;
+    }
 
     host.innerHTML = `
       <div class="rate-form">
         <label>
           <span>Sending from</span>
-          <select data-f="origin">${DATA.origins.map(x =>
-            `<option value="${esc(x.key)}"${x.key === pick.origin ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
+          <select data-f="origin">${DATA.origins.map(x => `<option value="${esc(x.key)}"${x.key === pick.origin ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
         </label>
         <label>
           <span>Delivering to</span>
-          <select data-f="zone">${DATA.zones.map(z =>
-            `<option value="${esc(z.key)}"${z.key === pick.zone ? ' selected' : ''}>${esc(z.label)}</option>`).join('')}</select>
+          <select data-f="zone">${DATA.zones.map(z => `<option value="${esc(z.key)}"${z.key === pick.zone ? ' selected' : ''}>${esc(z.label)}</option>`).join('')}</select>
         </label>
         <label>
           <span>Service</span>
-          <select data-f="level">${levels.map(l =>
-            `<option value="${esc(l)}"${l === pick.level ? ' selected' : ''}>${esc(DATA.service_level_labels[l] || l)}</option>`).join('')}</select>
+          <select data-f="level">${levelsHere().map(l => `<option value="${esc(l)}"${l === pick.level ? ' selected' : ''}>${esc(DATA.service_level_labels[l] || l)}</option>`).join('')}</select>
+          ${pick.zone !== 'METRO_MANILA' ? '<span class="rate-hint">Ocean Priority is Metro Manila only.</span>' : ''}
         </label>
-        ${isAir() ? `
-          <label>
-            <span>Weight</span>
-            <input data-f="kg" type="number" min="0" step="0.5" inputmode="decimal"
-                   placeholder="kilos" value="${esc(pick.kg)}">
-          </label>`
-        : `
-          <label>
-            <span>Box size</span>
-            <select data-f="size">${DATA.sizes.map(s =>
-              `<option value="${esc(s.key)}"${s.key === pick.size ? ' selected' : ''}>${esc(s.label)}${s.dimensions ? ' · ' + esc(s.dimensions) : ''}</option>`).join('')}</select>
-          </label>`}
+        ${sizeField}
+        ${ownFields}
       </div>
 
       <div class="rate-out">
-        ${!q ? '' : q.unavailable
-          ? `<div class="rate-none">We do not have a published rate for that combination yet —
-               <a href="#contact">ask us</a> and we will quote it.</div>`
-          : q.needsWeight
-            ? `<div class="rate-none">Enter the weight in kilos to see the price.<br>
-                 <span class="rate-basis">${esc(q.basis)}</span></div>`
-            : `<div class="rate-amount">${esc(money(q.amount, q.currency))}</div>
-               <div class="rate-basis">${esc(q.basis)}</div>`}
-        ${!isAir() && emptyPrice ? `<div class="rate-extra">Need the box itself? ${esc(money(emptyPrice, o.currency))} —
-          <a href="/order-box.html">order one</a> and we will bring it to you.</div>` : ''}
+        ${answer}
+        ${emptyPrice ? `<div class="rate-extra">Need the box itself? ${esc(money(emptyPrice, o.currency))} — <a href="/order-box.html">order one</a> and we will bring it to you.</div>` : ''}
         <div class="rate-note">${esc(DATA.disclaimer)}</div>
         <a class="btn-lg btn-primary rate-cta" href="/intake-form.html">Book this shipment</a>
       </div>`;
@@ -208,13 +269,10 @@
       const ev = el.tagName === 'INPUT' ? 'input' : 'change';
       el.addEventListener(ev, () => {
         pick[el.dataset.f] = el.value;
-        // Switching between ocean and air swaps the size picker for a weight box, so the whole
-        // panel is redrawn; the field keeps focus so typing a weight is not interrupted.
         const active = el.dataset.f;
         render();
-        const again = host.querySelector(`[data-f="${active}"]`);
-        // A number input has no selection to move the caret within, and asking throws. Focus is
-        // all that is needed anyway — the caret stays where the browser left it.
+        // Redrawing loses focus mid-type, so it is handed straight back.
+        const again = host.querySelector('[data-f="' + active + '"]');
         if (again && el.tagName === 'INPUT') again.focus();
       });
     });
@@ -222,3 +280,4 @@
 
   load();
 })();
+

@@ -716,6 +716,21 @@ app.post('/api/shipments', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIP
   if (!b.passport_file) return res.status(400).json({ error: 'A scanned/soft copy of the sender\'s passport or government ID is required' });
   if (b.service_type && !SM.SERVICE_TYPES.includes(b.service_type)) return res.status(400).json({ error: 'Invalid service type' });
   if (b.service_level && !SM.SERVICE_LEVELS.includes(b.service_level)) return res.status(400).json({ error: 'Invalid service level' });
+  // Ocean Priority only reaches Metro Manila. Checked against every box's receiver, because one
+  // provincial address on a shipment is enough to make the whole booking undeliverable at that
+  // service, and finding out at the warehouse is far too late.
+  if (b.service_level === 'OCEAN_PRIORITY') {
+    const outside = b.boxes.map(bx => d.customers.find(c => c.id === +bx.receiver_id))
+      .filter(Boolean)
+      .filter(c => !RATES.serviceAvailable('OCEAN_PRIORITY', RATES.zoneForRegion(c.region)));
+    if (outside.length) {
+      return res.status(400).json({
+        error: `Ocean Priority delivers to Metro Manila only. ${outside.length === 1
+          ? outside[0].full_name + ' is'
+          : outside.length + ' receivers are'} outside NCR — use Ocean Economy or Express Air.`
+      });
+    }
+  }
   // Enforced here as well as in the form: saving is what mints box numbers and QR tokens,
   // and an unpriced shipment can never be receipted or collected on.
   if (!(+b.shipping_fee_amount > 0)) {
@@ -963,7 +978,7 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
       sender.business_name = need(b.business_name, 'Business Name');
     }
 
-    const service_level = SM.SERVICE_LEVELS.includes(b.service_level) ? b.service_level : 'OCEAN_ECONOMY';
+    let service_level = SM.SERVICE_LEVELS.includes(b.service_level) ? b.service_level : 'OCEAN_ECONOMY';
     const collection = SM.COLLECTION_METHODS.includes(b.collection) ? b.collection : 'PICKUP';
     const origin_agent = need(b.origin_agent, 'Sending From');
     const origin_country = need(b.origin_country, 'Country');
@@ -1041,6 +1056,19 @@ app.post('/api/public/intake-requests', rateLimit, intakeIdUpload, async (req, r
         goods
       };
     });
+
+    // Ocean Priority only reaches Metro Manila. A booking is one service level for the whole
+    // shipment, so one provincial address is enough to rule it out — better said now, while the
+    // sender is still on the form, than discovered at the warehouse.
+    if (service_level === 'OCEAN_PRIORITY') {
+      const away = boxes.filter(bx =>
+        !RATES.serviceAvailable('OCEAN_PRIORITY', RATES.zoneForRegion(REGION.mapPsgcRegion(bx.receiver.region))));
+      if (away.length) {
+        throw new Error('Ocean Priority delivers to Metro Manila only. '
+          + (away.length === 1 ? 'Box ' + (boxes.indexOf(away[0]) + 1) + ' is' : away.length + ' boxes are')
+          + ' going elsewhere — choose Ocean Economy or Express Air.');
+      }
+    }
 
     const d = db.get();
     // A booking carries a key minted once, when the sender is shown the review screen. A
@@ -3534,11 +3562,22 @@ app.get('/api/public/rates', rateLimit, (req, res) => {
     zones: RATES.ZONES,
     sizes: BOXSIZE.BOX_SIZES.map(s => ({
       key: s.key, label: s.label, dimensions: s.dimensions,
-      standard_weight_kg: s.standard_weight_kg
+      standard_weight_kg: s.standard_weight_kg,
+      // So an own-box quote can find the smallest standard size the carton fits inside, which
+      // is what it is charged as. Sent rather than recomputed on the page, or the two would
+      // disagree the first time a size changed.
+      cbm: s.cbm, length_cm: s.length_cm, width_cm: s.width_cm, height_cm: s.height_cm,
+      exceeds_boc_cbm: s.exceeds_boc_cbm
     })),
     ocean_levels: RATES.OCEAN_LEVELS,
     air_level: RATES.AIR_LEVEL,
     service_level_labels: SM.SERVICE_LEVEL_LABELS,
+    // Which levels each destination can actually be sold, so the calculator offers only what
+    // can be delivered rather than quoting a service and refusing it at booking.
+    levels_by_zone: Object.fromEntries(RATES.ZONES.map(z => [z.key, RATES.levelsForZone(z.key)])),
+    // A sender using their own carton is quoted on the standard size it fits inside, so the
+    // customs cap that applies to a box of that volume is worth saying out loud.
+    boc_max_cbm: BOXSIZE.BOC_MAX_CBM,
     // A quote is not a contract: weight, customs and season all move the final figure.
     disclaimer: 'Indicative only. The final charge is confirmed when your box is weighed and booked.'
   });
