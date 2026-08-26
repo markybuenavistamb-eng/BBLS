@@ -3509,6 +3509,41 @@ app.post('/api/public/sender/signout', (req, res) => {
   res.json({ ok: true });
 });
 
+// What a box costs to send, for the quote calculator on the public site. Somebody deciding
+// whether to ship should not have to ring the office to find out the price, and an answer they
+// can get at midnight is the difference between a booking and a closed tab.
+//
+// Only the customer-facing side of the rate card is published: what a sender pays for a box, and
+// what an empty box costs. The interbranch container fees, the extras and the partner commission
+// stay where they are — those are what VFIC settles with its own branches, and are nobody else's
+// business, least of all a competitor reading the site.
+app.get('/api/public/rates', rateLimit, (req, res) => {
+  const d = db.get();
+  const origins = BRANCH.BRANCHES.filter(b => b.type !== 'HQ').map(b => {
+    const card = rateCardFor(d, b.key);
+    return {
+      key: b.key, country: b.country, label: b.short || b.label,
+      currency: card.currency,
+      ocean: card.ocean,                 // level → zone → size → price per box
+      air: card.air,                     // level → zone → price per kilo
+      empty_box_price: card.empty_box_price
+    };
+  });
+  res.json({
+    origins,
+    zones: RATES.ZONES,
+    sizes: BOXSIZE.BOX_SIZES.map(s => ({
+      key: s.key, label: s.label, dimensions: s.dimensions,
+      standard_weight_kg: s.standard_weight_kg
+    })),
+    ocean_levels: RATES.OCEAN_LEVELS,
+    air_level: RATES.AIR_LEVEL,
+    service_level_labels: SM.SERVICE_LEVEL_LABELS,
+    // A quote is not a contract: weight, customs and season all move the final figure.
+    disclaimer: 'Indicative only. The final charge is confirmed when your box is weighed and booked.'
+  });
+});
+
 app.get('/api/public/sender/me', (req, res) => {
   const a = senderFromReq(req);
   if (!a) return res.status(401).json({ error: 'Not signed in' });
