@@ -243,7 +243,9 @@
       <div class="rate-form">
         <label>
           <span>Sending from</span>
-          <select data-f="origin">${DATA.origins.map(x => `<option value="${esc(x.key)}"${x.key === pick.origin ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
+          ${DATA.origin_locked || DATA.origins.length === 1
+            ? `<div class="rate-fixed">${esc(o.label)}</div>`
+            : `<select data-f="origin">${DATA.origins.map(x => `<option value="${esc(x.key)}"${x.key === pick.origin ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>`}
         </label>
         <label>
           <span>Delivering to</span>

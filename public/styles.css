@@ -1501,6 +1501,12 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .rate-own-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .rate-own-note { font-size: 12px; color: #6b7280; margin-top: 8px; }
 .rate-hint { display: block; font-size: 11px; color: #9ca3af; margin-top: 5px; }
+/* A lane with nothing to choose. Sized like the controls beside it so the row still lines up,
+   but plainly not a control — a disabled dropdown invites clicking at it. */
+.rate-fixed {
+  padding: 11px 12px; font-size: 15px; font-weight: 600; color: #2b2b2b;
+  background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 5px;
+}
 .rate-warn {
   font-size: 12px; color: #92400e; background: #fef3c7; border-radius: 5px;
   padding: 8px 10px; margin-top: 10px; line-height: 1.45;

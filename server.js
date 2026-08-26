@@ -3547,7 +3547,15 @@ app.post('/api/public/sender/signout', (req, res) => {
 // business, least of all a competitor reading the site.
 app.get('/api/public/rates', rateLimit, (req, res) => {
   const d = db.get();
-  const origins = BRANCH.BRANCHES.filter(b => b.type !== 'HQ').map(b => {
+  // A branch site serves senders in its own country and nobody else's, so it quotes that lane
+  // alone — the same rule /api/box-sizes already follows for the booking form. Offering a Thai
+  // visitor Cambodian rates on the Thai site is a price they could never actually be charged.
+  // Head office is not tied to one lane and still lists them all.
+  const ownCountry = NODE.SELF.type === 'BRANCH' ? NODE.SELF.country : null;
+  const origins = BRANCH.BRANCHES
+    .filter(b => b.type !== 'HQ')
+    .filter(b => !ownCountry || b.country === ownCountry)
+    .map(b => {
     const card = rateCardFor(d, b.key);
     return {
       key: b.key, country: b.country, label: b.short || b.label,
@@ -3559,6 +3567,9 @@ app.get('/api/public/rates', rateLimit, (req, res) => {
   });
   res.json({
     origins,
+    // Nothing to choose on a branch site: the calculator shows the lane as a plain statement
+    // rather than a picker with one entry, which reads as a question that has no answer.
+    origin_locked: !!ownCountry,
     zones: RATES.ZONES,
     sizes: BOXSIZE.BOX_SIZES.map(s => ({
       key: s.key, label: s.label, dimensions: s.dimensions,
