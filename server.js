@@ -1518,6 +1518,9 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
       id: x.id, box_number: x.box_number, status: x.status,
       status_label: SM.FRIENDLY[x.status] || x.status,
       picked_up: !!x.picked_up_at,
+      // So the stop can show that the receiver has already been told, instead of offering a
+      // button that would send nothing.
+      nearby_notified: !!x.nearby_notified_at,
       size_label: (BOXSIZE.bySize(x.size_category) || {}).label || x.size_category,
       weight_kg: x.weight_kg,
       receiver_name: receiver.full_name || '',

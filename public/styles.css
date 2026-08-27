@@ -1304,7 +1304,13 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
   font-size: 14px; font-weight: 700; cursor: pointer; padding: 8px;
 }
 .drv-mode.on { background: var(--primary); color: #fff; border-color: var(--primary); }
-.drv-mode.danger.on { background: #b91c1c; border-color: #b91c1c; }
+/* "Could not deliver" carries .danger, and the global button.danger rule — element plus class —
+   outranks .drv-mode, so it was painted solid red while keeping this component's dark text:
+   grey on red at 1.24:1, which is to say invisible. Both states are now stated outright, at a
+   specificity that wins. Unselected it reads as the destructive choice without shouting; chosen,
+   it is unmistakable. This is a phone held outdoors, so the margin matters. */
+button.drv-mode.danger { background: #fff; color: #b91c1c; border-color: #fca5a5; }
+button.drv-mode.danger.on { background: #b91c1c; color: #fff; border-color: #b91c1c; }
 .drv-hint { font-size: 12.5px; margin: 8px 2px 10px; }
 /* What the phone is doing in the driver's pocket, said plainly. Quiet when it is working and
    plain grey when it is not — a refusal costs the run nothing, so it must not read as an error. */
@@ -1338,6 +1344,15 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
   display: inline-flex; align-items: center; min-height: 44px; margin-top: 6px;
   font-weight: 700; text-decoration: none; color: var(--primary);
 }
+/* One tap on a doorstep, so it is a full-width target rather than something to aim at while
+   parking. Green because it is the friendly errand on the card, not the destructive one. */
+button.drv-near {
+  display: block; width: 100%; min-height: 46px; margin-top: 10px;
+  border-radius: 10px; border: 2px solid #15803d; background: #fff; color: #15803d;
+  font-size: 14.5px; font-weight: 700; cursor: pointer; padding: 8px;
+}
+button.drv-near:disabled { opacity: .6; cursor: default; }
+.drv-told { margin-top: 10px; font-size: 13px; font-weight: 700; color: #15803d; }
 .drv-done .drv-tick {
   width: 74px; height: 74px; margin: 0 auto 12px; border-radius: 50%;
   background: #16a34a; color: #fff; font-size: 40px; display: grid; place-items: center;
@@ -1400,8 +1415,12 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .drv-chip.loaded { background: #fef3c7; color: #92400e; }
 
 /* The site's buttons are white-on-orange. Anything in the driver app that paints itself pale
-   must say what colour its text is, or it inherits white and disappears. This is the floor. */
-.drv-main button:not(.drv-btn):not(.drv-mode.on) { color: var(--chrome, #0f2350); }
+   must say what colour its text is, or it inherits white and disappears. This is the floor.
+   Buttons that state both of their own colours are exempt — .danger and .drv-near each do, and
+   forcing navy over them would take away the very thing that marks them out. */
+.drv-main button:not(.drv-btn):not(.drv-mode.on):not(.danger):not(.drv-near) {
+  color: var(--chrome, #0f2350);
+}
 
 /* ---------- confirmation dialog ---------- */
 .confirm-back {

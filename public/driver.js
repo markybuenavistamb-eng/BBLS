@@ -36,7 +36,6 @@
     DELIVERY: [
       { key: 'LOAD',    label: 'Loaded at PH warehouse', hint: 'Scan each box as it goes on the truck' },
       { key: 'DEPART',  label: 'Out for delivery',       hint: 'Scan when you set off on the route' },
-      { key: 'NEARBY',  label: 'Nearly there',           hint: 'Scan as you approach — texts the receiver you are close' },
       { key: 'DELIVER', label: 'Delivered',              hint: "Scan at the receiver's door, once handed over" },
       { key: 'RETURN',  label: 'Could not deliver',      hint: 'Scan if it is coming back with you', danger: true }
     ],
@@ -475,6 +474,36 @@
     return [...stops.values()];
   }
 
+  /* ---------- telling one doorstep you are close ---------- */
+  // Not a scan. Approaching an address is not something there is a label in your hand for — the
+  // boxes are still in the back of the van — so it belongs on the stop, as one tap that sends
+  // one text to that receiver. The office already sends one message per doorstep however many
+  // boxes are on it, so tapping it with three boxes aboard still sends one.
+  function nearbyButton(st) {
+    if (RUN.kind !== 'DELIVERY') return '';
+    const out = st.boxes.filter(b => b.status === 'OUT_FOR_DELIVERY');
+    if (!out.length) return '';                       // not on the road yet, or already finished
+    if (out.some(b => b.nearby_notified)) {
+      return '<div class="drv-told">✓ Receiver told you are nearby</div>';
+    }
+    return `<button class="drv-near" onclick="drvNearby('${esc(out[0].box_number)}', this)">
+      📣 Tell them you are nearly there</button>`;
+  }
+
+  window.drvNearby = async function (boxNumber, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+      const r = await api('/api/driver/scan', { method: 'POST', body: { box_number: boxNumber, action: 'NEARBY' } });
+      LOG.unshift({ ok: true, text: r.message || 'Receiver told you are nearby' });
+      paintLog();
+      await loadRun();                                 // redraw so the stop shows it is done
+    } catch (e) {
+      LOG.unshift({ ok: false, text: e.message || 'Could not send the message' });
+      paintLog();
+      if (btn) { btn.disabled = false; btn.textContent = '📣 Tell them you are nearly there'; }
+    }
+  };
+
   function paintList() {
     const done = RUN.kind === 'DELIVERY'
       ? ['DELIVERED', 'RETURNED', 'CANCELLED']
@@ -509,6 +538,7 @@
           }).join('')}
         </div>
         ${st.phone ? `<a class="drv-call" href="tel:${esc(st.phone)}">📞 ${esc(st.phone)}</a>` : ''}
+        ${nearbyButton(st)}
       </div>`;
     }).join('');
   }
