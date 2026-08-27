@@ -1451,7 +1451,15 @@ button.drv-near:disabled { opacity: .6; cursor: default; }
   border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer; }
 .pass-stop:last-child { border-bottom: 0; }
 .pass-stop:hover { background: #fff7ed; }
-.pass-stop input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+/* Every tickbox in the picker, not just the ones in the rows. The global input rule stretches
+   an input to the full width of its row, which left "Select all" as a 335px-wide checkbox with
+   its label stranded on the far side. Stated once here so a new row cannot reintroduce it. */
+.pass-pick input[type="checkbox"] { width: 18px; height: 18px; flex: none; margin: 0; padding: 0; }
+.pass-stop input { margin-top: 3px; }
+.pass-group {
+  padding: 9px 12px; background: #eef2f7; border-bottom: 1px solid var(--border);
+  font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: #475569;
+}
 .pass-stop span { display: flex; flex-direction: column; gap: 1px; }
 .pass-stop .muted { font-size: 11.5px; }
 .pass-addr { font-size: 11.5px; }

@@ -1430,18 +1430,23 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     const scope = effectiveScope(req);
     const wanted = Array.isArray(b.box_ids) ? b.box_ids.map(Number) : null;
     const shipById = new Map((d.shipments || []).map(x => [x.id, x]));
-    boxIds = (d.boxes || [])
-      .filter(x => x.status === 'CREATED')
-      .filter(x => {
-        const sh = shipById.get(x.shipment_id);
-        if (!sh) return false;
-        if (scope && sh.origin_country !== scope) return false;
-        return sh.collection === 'PICKUP';
-      })
+    const mine = (x) => {
+      const sh = shipById.get(x.shipment_id);
+      if (!sh) return false;
+      return !scope || sh.origin_country === scope;
+    };
+    // Two kinds of collection, and a run can carry both. A sender waiting at their own address
+    // is a booking marked for pick-up; a box already standing at the branch counter is stock
+    // waiting to go on to the warehouse. Either way the driver ends the run at the warehouse,
+    // so they belong on one pass rather than two.
+    const fromSenders = (d.boxes || [])
+      .filter(x => x.status === 'CREATED' && mine(x) && shipById.get(x.shipment_id).collection === 'PICKUP');
+    const fromBranch = (d.boxes || []).filter(x => x.status === 'RECEIVED_BRANCH' && mine(x));
+    boxIds = fromSenders.concat(fromBranch)
       .filter(x => !wanted || wanted.includes(x.id))
       .map(x => x.id);
     if (!boxIds.length) {
-      return res.status(400).json({ error: 'No senders are waiting for a pick-up right now. Bookings marked for drop-off are brought in by the sender.' });
+      return res.status(400).json({ error: 'Nothing is waiting to be collected — no sender pick-ups outstanding, and nothing standing at the branch office.' });
     }
   }
 
@@ -1536,11 +1541,21 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
         landmark: receiver.landmark || '',
         window: '' };
     }
+    // A box already booked in at the counter is not a journey to anybody's house — it is stock
+    // to be loaded where the driver is standing. Grouping it under the branch keeps it as one
+    // stop on the run instead of scattering it among the senders' addresses.
+    if (x.status === 'RECEIVED_BRANCH') {
+      return { ...base,
+        from_branch: true,
+        who: BRANCH.BRANCH_LABELS[pass.branch] || 'Branch office',
+        phone: '', address: 'At the branch counter — ready to load', landmark: '', window: '' };
+    }
     // A collection driver is going to the sender's own address, so that is the address that
     // matters — the one the sender gave when they asked to be picked up, falling back to the
     // address on their record.
     const pu = (shipment.boc && shipment.boc.pickup) || {};
     return { ...base,
+      from_branch: false,
       who: sender.full_name || '',
       phone: sender.phone_primary || '',
       address: pu.address || sender.address_line || '',
@@ -1628,7 +1643,7 @@ app.post('/api/driver/scan', requireDriver,
 
   const ALLOWED = pass.kind === 'DELIVERY'
     ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', NEARBY: null, DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
-    : { PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
+    : { PICKUP: null, BRANCH_PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
   if (!(action in ALLOWED)) return res.status(400).json({ error: 'Unknown action.' });
 
   // A pass is not a user account, so the event records no user id — the note carries who
@@ -1668,6 +1683,30 @@ app.post('/api/driver/scan', requireDriver,
         ? 'Receiver already told — no second text sent'
         : 'Receiver told you are nearby' + (sameDoor.length > 1 ? ` (${sameDoor.length} boxes at this stop)` : '')
     });
+  }
+
+  // Collecting stock from the branch counter. The box has already been booked in there, so it
+  // does not change stage by getting into a van — it is still the branch's until the warehouse
+  // takes it. Recorded so the counter can see it has left and who took it.
+  if (pass.kind === 'PICKUP' && action === 'BRANCH_PICKUP') {
+    if (box.status !== 'RECEIVED_BRANCH') {
+      return res.status(400).json({
+        error: box.status === 'CREATED'
+          ? box.box_number + ' has not been booked in at the branch office yet — use "Picked up from sender" if you are collecting it from the sender.'
+          : box.box_number + ' is not standing at the branch office.'
+      });
+    }
+    d.status_events.push({
+      id: db.nextId('status_event'), box_id: box.id,
+      from_status: box.status, to_status: box.status,
+      actor_user_id: null,
+      note: 'Collected from the branch office by ' + pass.driver_name,
+      created_at: new Date().toISOString()
+    });
+    box.picked_up_at = new Date().toISOString();
+    db.persist();
+    return res.json({ box_number: box.box_number, status: box.status,
+                      message: box.box_number + ' collected from the branch office' });
   }
 
   if (pass.kind === 'PICKUP' && action === 'PICKUP') {

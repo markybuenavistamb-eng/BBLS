@@ -3647,11 +3647,15 @@ async function setOrderDate(id) {
 // back — and it deliberately shows what is left on each run, because that is what decides
 // whether a pass is still doing anything.
 async function pageDriverPasses() {
-  const [passes, trips, sched] = await Promise.all([
+  const [passes, trips, sched, branchStock] = await Promise.all([
     api('/api/driver-passes'),
     canDispatch() ? api('/api/trips').catch(() => []) : Promise.resolve([]),
-    canDispatch() ? Promise.resolve(null) : api('/api/schedule').catch(() => null)
+    canDispatch() ? Promise.resolve(null) : api('/api/schedule').catch(() => null),
+    // Boxes already standing at the counter, waiting to go on to the warehouse. A different
+    // errand from collecting at a sender's door, but the same van and the same run.
+    canDispatch() ? Promise.resolve(null) : api('/api/branch-office').catch(() => null)
   ]);
+  const atBranch = branchStock ? (branchStock.boxes || []) : [];
   // A branch hands a driver a route, and a route is a set of stops on particular days. Which
   // ones go on this run is the decision being made here, so it is made from the schedule
   // rather than by handing over everything outstanding.
@@ -3700,10 +3704,11 @@ async function pageDriverPasses() {
           Tick the stops going on this run. The pass closes on its own once the origin
           warehouse has booked in every box on it.
         </div>
-        ${stops.length ? `
+        ${stops.length || atBranch.length ? `
           <div class="pass-pick">
             <label class="pass-all"><input type="checkbox" id="dpAll" onchange="passPickAll(this.checked)"> Select all</label>
-            ${stops.map((e, i) => `
+            ${stops.length ? `<div class="pass-group">Collect from senders</div>` : ''}
+            ${stops.map((e) => `
               <label class="pass-stop">
                 <input type="checkbox" class="dpStop" data-ids="${esc((e.box_ids || []).join(','))}"
                        data-label="${esc(e.ref + ' · ' + e.who)}" onchange="passPickCount()">
@@ -3713,10 +3718,22 @@ async function pageDriverPasses() {
                   <span class="muted pass-addr">${esc(e.address)}</span>
                 </span>
               </label>`).join('')}
+            ${atBranch.length ? `
+              <div class="pass-group">Take from the branch office to the warehouse — ${atBranch.length} box(es)</div>
+              ${atBranch.map(b => `
+                <label class="pass-stop">
+                  <input type="checkbox" class="dpStop" data-ids="${b.id}"
+                         data-label="${esc(b.box_number)}" onchange="passPickCount()">
+                  <span>
+                    <b>${esc(b.box_number)}</b> — ${esc(b.receiver_name || 'no receiver named')}
+                    <span class="muted">${esc(b.sender_name || '')}${b.size_label ? ' · ' + esc(b.size_label) : ''}${b.weight_kg ? ' · ' + b.weight_kg + ' kg' : ''}</span>
+                    <span class="muted pass-addr">Standing at the counter${b.days_waiting != null ? ' · ' + b.days_waiting + ' day(s)' : ''}</span>
+                  </span>
+                </label>`).join('')}` : ''}
           </div>
           <div class="muted" id="dpCount" style="font-size:12px;margin-top:6px"></div>
           <button style="margin-top:12px" onclick="issuePass('PICKUP')">Issue pick-up pass</button>`
-        : '<div class="muted">Nothing is scheduled for collection yet. Bookings appear here once they are encoded as shipments.</div>'}
+        : '<div class="muted">Nothing to collect: no sender pick-ups are scheduled, and nothing is standing at the branch office.</div>'}
         ${pendingStops.length ? `<div class="note-warn" style="margin-top:12px;padding:10px 12px;border-radius:8px;font-size:12.5px">
           ${pendingStops.length} online booking(s) have a pick-up date but are not encoded yet, so they cannot go on a run.
           <a href="#/intake-requests">Review them →</a>

@@ -40,8 +40,9 @@
       { key: 'RETURN',  label: 'Could not deliver',      hint: 'Scan if it is coming back with you', danger: true }
     ],
     PICKUP: [
-      { key: 'PICKUP', label: 'Picked up from sender',  hint: "Scan each box as you load it at the sender's address" },
-      { key: 'DROP',   label: 'Handed to warehouse',    hint: 'Scan on arrival at the origin warehouse' }
+      { key: 'PICKUP',        label: 'Picked up from sender', hint: "Scan each box as you load it at the sender's address" },
+      { key: 'BRANCH_PICKUP', label: 'Picked up from branch office', hint: 'Scan each box as you load it at the branch counter' },
+      { key: 'DROP',          label: 'Handed to warehouse',   hint: 'Scan on arrival at the origin warehouse' }
     ]
   };
 
