@@ -1696,6 +1696,12 @@ app.post('/api/driver/scan', requireDriver,
           : box.box_number + ' is not standing at the branch office.'
       });
     }
+    // Collecting does not move the box on, so a repeat scan cannot be caught by the status —
+    // it has to be caught here, or the same box lands on the timeline twice.
+    if (box.picked_up_at) {
+      return res.json({ box_number: box.box_number, status: box.status, already: true,
+                        message: box.box_number + ' — already scanned. It is on the van.' });
+    }
     d.status_events.push({
       id: db.nextId('status_event'), box_id: box.id,
       from_status: box.status, to_status: box.status,
@@ -1713,6 +1719,12 @@ app.post('/api/driver/scan', requireDriver,
     if (box.status !== 'CREATED') {
       return res.status(400).json({ error: box.box_number + ' is not waiting for collection.' });
     }
+    // Same as the branch collection: nothing about the box changes stage, so a second scan has
+    // to be recognised here rather than by the state machine.
+    if (box.picked_up_at) {
+      return res.json({ box_number: box.box_number, status: box.status, already: true,
+                        message: box.box_number + ' — already scanned. It is on the van.' });
+    }
     d.status_events.push({
       id: db.nextId('status_event'), box_id: box.id,
       from_status: box.status, to_status: box.status,
@@ -1727,7 +1739,13 @@ app.post('/api/driver/scan', requireDriver,
 
   const target = ALLOWED[action];
   if (box.status === target) {
-    return res.json({ box_number: box.box_number, status: box.status, message: box.box_number + ' was already done' });
+    // Scanning the same label twice is ordinary — a pallet gets swept, a driver loses their
+    // place. It is not an error and must not read as one, but it does have to be unmistakable
+    // that nothing happened, or the same box gets counted twice by hand.
+    return res.json({
+      box_number: box.box_number, status: box.status, already: true,
+      message: box.box_number + ' — already scanned. Nothing to do.'
+    });
   }
 
   const body = req.body || {};

@@ -89,8 +89,22 @@
     try {
       await api('/api/driver/login', { method: 'POST', body: { code: gid('drvCode').value } });
       await loadRun();
+      welcome();
     } catch (e) { err.textContent = e.message; }
   };
+
+  // Say the code worked, and say what they have been handed. A driver typing a code read out
+  // over a phone line is not sure they heard it right, and a screen that simply changes leaves
+  // them guessing. Their own name back is the proof it was the right pass.
+  function welcome() {
+    if (!RUN) return;
+    const stops = stopsFor(RUN.boxes).length;
+    const what = RUN.kind === 'DELIVERY'
+      ? `${RUN.boxes.length} box${RUN.boxes.length === 1 ? '' : 'es'} to deliver across ${stops} stop${stops === 1 ? '' : 's'}`
+      : `${RUN.boxes.length} box${RUN.boxes.length === 1 ? '' : 'es'} to collect from ${stops} place${stops === 1 ? '' : 's'}`;
+    const truck = [RUN.plate_number, RUN.trucking_company].filter(Boolean).join(' · ');
+    scanFlash('ok', `Welcome, ${RUN.driver_name}\n${what}${truck ? '\n' + truck : ''}\nDrive safely.`, 2600);
+  }
 
   window.drvLogout = async function () {
     await api('/api/driver/logout', { method: 'POST' }).catch(() => {});
@@ -431,16 +445,18 @@
       LOG.unshift({ ok: false, text: String(code).slice(0, 30) + ' — ' + e.message });
       paintLog();
       buzz(false);
-      scanFlash(false, e.message);
+      scanFlash('bad', e.message);
       return;
     }
     if (r.pod && body instanceof FormData) {
       const key = stopKeyFor(code);
       podByStop[key] = { receipt: r.pod.receipt, receiver: r.pod.receiver };
     }
-    LOG.unshift({ ok: true, text: r.message });
-    buzz(true);
-    scanFlash(true, r.message);
+    LOG.unshift({ ok: true, text: r.message, already: !!r.already });
+    // A shorter buzz for a repeat, so a driver working by feel can tell the two apart without
+    // looking up from the box in their hands.
+    buzz(!r.already);
+    scanFlash(r.already ? 'already' : 'ok', r.message);
     if (typeof r.outstanding === 'number') RUN.outstanding = r.outstanding;
     // Refresh the manifest so the list and the tally agree with what just happened.
     try { RUN = await api('/api/driver/me'); } catch (e) { /* the log already told them */ }
@@ -462,21 +478,29 @@
   // signal — a driver holding a box at a tailgate should not have to find and read a line of
   // text to know whether to put it on the van. A red cross for a refusal, same idea.
   let flashTimer = null;
-  function scanFlash(ok, text) {
+  function scanFlash(kind, text, hold) {
     const host = gid('drvFlash');
     if (!host) return;
     clearTimeout(flashTimer);
-    host.className = 'drv-flash ' + (ok ? 'ok' : 'bad');
-    host.innerHTML = `<div class="drv-flash-mark">${ok ? '✓' : '✗'}</div>
+    // Three answers, not two. A repeat scan did no harm and is not a failure, but showing the
+    // same green tick as real work is how a box gets counted twice — so it gets its own amber
+    // mark, saying plainly that nothing happened.
+    const MARK = { ok: '✓', already: '↺', bad: '✗' };
+    const HOLD = { ok: 1100, already: 1500, bad: 1900 };
+    host.className = 'drv-flash ' + kind;
+    host.innerHTML = `<div class="drv-flash-mark">${MARK[kind] || '✓'}</div>
       ${text ? `<div class="drv-flash-text">${esc(text)}</div>` : ''}`;
     host.hidden = false;
     // Long enough to register, short enough not to be in the way of the next scan.
-    flashTimer = setTimeout(() => { host.hidden = true; }, ok ? 1100 : 1900);
+    flashTimer = setTimeout(() => { host.hidden = true; }, hold || HOLD[kind] || 1100);
   }
 
   function paintLog() {
-    gid('drvLog').innerHTML = LOG.slice(0, 8).map(l =>
-      `<div class="drv-line ${l.ok ? 'ok' : 'bad'}">${l.ok ? '✓' : '✗'} ${esc(l.text)}</div>`).join('');
+    gid('drvLog').innerHTML = LOG.slice(0, 8).map(l => {
+      const kind = l.already ? 'again' : (l.ok ? 'ok' : 'bad');
+      const mark = l.already ? '↺' : (l.ok ? '✓' : '✗');
+      return `<div class="drv-line ${kind}">${mark} ${esc(l.text)}</div>`;
+    }).join('');
   }
 
   // One card per stop. Boxes going to (or coming from) the same person at the same address

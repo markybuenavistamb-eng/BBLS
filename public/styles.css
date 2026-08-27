@@ -1119,10 +1119,12 @@ th.sorted[data-dir="desc"]::after { content: ' ↓'; }
 .pub-back:hover { background: rgba(255,255,255,.15); }
 
 /* An author `display` rule outranks the browser's own [hidden] { display: none }, so a panel
-   laid out with flex stays on screen no matter what the hidden property says. Both chat
-   panels set display, so both have to opt back out explicitly. */
+   laid out with flex or grid stays on screen no matter what the hidden property says. Anything
+   here that sets display has to opt back out explicitly — the scan mark learned this the hard
+   way, having covered the whole driver's screen and refused to leave. */
 .chat-panel[hidden],
 .bot-panel[hidden],
+.drv-flash[hidden],
 .bell-panel[hidden] { display: none !important; }
 
 /* ---------- chat notifications ---------- */
@@ -1331,6 +1333,8 @@ button.drv-mode.danger.on { background: #b91c1c; color: #fff; border-color: #b91
 .drv-line { padding: 8px 12px; border-radius: 10px; font-size: 13.5px; margin-bottom: 6px; font-weight: 600; }
 .drv-line.ok { background: #dcfce7; color: #166534; }
 .drv-line.bad { background: #fee2e2; color: #991b1b; }
+/* A repeat scan is neither work done nor a mistake, so it is neither green nor red. */
+.drv-line.again { background: #fef3c7; color: #92400e; }
 
 .drv-list-title { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .5px; color: var(--muted); margin: 6px 2px 8px; }
@@ -1616,13 +1620,15 @@ button.drv-near:disabled { opacity: .6; cursor: default; }
 }
 .drv-flash.ok  { background: rgba(22, 163, 74, .93); }
 .drv-flash.bad { background: rgba(185, 28, 28, .94); }
+.drv-flash.already { background: rgba(180, 122, 8, .95); }
 .drv-flash-mark {
   width: 128px; height: 128px; border-radius: 50%; background: rgba(255,255,255,.16);
   color: #fff; font-size: 76px; line-height: 1; display: grid; place-items: center;
   animation: markPop .34s cubic-bezier(.2,1.5,.4,1) both;
 }
 .drv-flash-text {
-  color: #fff; font-size: 16px; font-weight: 700; max-width: 22ch; line-height: 1.35;
+  color: #fff; font-size: 16px; font-weight: 700; max-width: 24ch; line-height: 1.45;
+  white-space: pre-line;                 /* the welcome is written as its own few lines */
   animation: flashIn .3s ease-out .1s both;
 }
 @keyframes flashIn { from { opacity: 0 } to { opacity: 1 } }
