@@ -1643,7 +1643,7 @@ app.post('/api/driver/scan', requireDriver,
 
   const ALLOWED = pass.kind === 'DELIVERY'
     ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', NEARBY: null, DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
-    : { PICKUP: null, BRANCH_PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
+    : { PICKUP: 'PICKED_UP', BRANCH_PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
   if (!(action in ALLOWED)) return res.status(400).json({ error: 'Unknown action.' });
 
   // A pass is not a user account, so the event records no user id — the note carries who
@@ -1716,25 +1716,16 @@ app.post('/api/driver/scan', requireDriver,
   }
 
   if (pass.kind === 'PICKUP' && action === 'PICKUP') {
-    if (box.status !== 'CREATED') {
+    // A box already collected falls through to the repeat check below, which says so kindly.
+    // Only a box at some other stage entirely is an actual mistake worth refusing.
+    if (box.status !== 'CREATED' && box.status !== 'PICKED_UP') {
       return res.status(400).json({ error: box.box_number + ' is not waiting for collection.' });
     }
-    // Same as the branch collection: nothing about the box changes stage, so a second scan has
-    // to be recognised here rather than by the state machine.
-    if (box.picked_up_at) {
-      return res.json({ box_number: box.box_number, status: box.status, already: true,
-                        message: box.box_number + ' — already scanned. It is on the van.' });
-    }
-    d.status_events.push({
-      id: db.nextId('status_event'), box_id: box.id,
-      from_status: box.status, to_status: box.status,
-      actor_user_id: null,
-      note: 'Collected from the sender by ' + pass.driver_name,
-      created_at: new Date().toISOString()
-    });
+    // A real stage of its own now, so the ordinary transition below records it and the repeat
+    // is caught by the status like every other action. It used to be filed as an event that
+    // left the box where it was, which is why a collected box grew a second "Booking Confirmed"
+    // line saying nothing had happened.
     box.picked_up_at = new Date().toISOString();
-    db.persist();
-    return res.json({ box_number: box.box_number, status: box.status, message: box.box_number + ' collected' });
   }
 
   const target = ALLOWED[action];
@@ -1780,6 +1771,7 @@ app.post('/api/driver/scan', requireDriver,
 
   const note = action === 'DELIVER' ? 'Delivered by ' + pass.driver_name + ' (driver pass)'
     : action === 'RETURN' ? 'Could not deliver — ' + failureReason + ' (' + pass.driver_name + ')'
+    : action === 'PICKUP' ? 'Collected from the sender by ' + pass.driver_name
     : 'Scanned by ' + pass.driver_name + ' (driver pass)';
   const extra = action === 'DELIVER' ? { received_by_name: receivedBy }
     : action === 'RETURN' ? { reason: notif.REASON_TEXT[failureReason] } : {};
@@ -4989,6 +4981,8 @@ function buildJourney(box) {
   const steps = [
     { key: 'CREATED', on: ['CREATED'], label: 'Booking registered',
       detail: 'Your box is registered in our system.' },
+    { key: 'PICKED_UP', on: ['PICKED_UP'], label: 'Picked up from sender',
+      detail: 'Our driver has collected your box.' },
     { key: 'RECEIVED_BRANCH', on: ['RECEIVED_BRANCH'], label: 'Received at origin branch office',
       detail: 'Your box is with our branch office.' },
     { key: 'RECEIVED_ORIGIN', on: ['RECEIVED_ORIGIN'], label: 'Received at origin warehouse',

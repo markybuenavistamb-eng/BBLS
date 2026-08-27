@@ -65,6 +65,7 @@
 
       /* statuses */
       'status.CREATED': 'Created',
+      'status.PICKED_UP': 'Picked up from sender',
       'status.RECEIVED_BRANCH': 'Received (branch office)',
       'status.RECEIVED_ORIGIN': 'Received (origin WH)',
       'status.LOADED_CONTAINER': 'Loaded in container', 'status.IN_TRANSIT': 'In transit',
@@ -131,6 +132,7 @@
       'track.loading': 'Looking up your box…', 'track.timeline': 'Shipment progress',
       'track.pending': 'Pending', 'track.detailedLog': 'View detailed status log',
       'journey.CREATED': 'Booking Confirmed',
+      'journey.PICKED_UP': 'Picked up from sender',
       'journey.RECEIVED_BRANCH': 'Received at origin branch office',
       'journey.RECEIVED_ORIGIN': 'Received at origin warehouse',
       'journey.LOADED_CONTAINER': 'Loaded into container', 'journey.IN_TRANSIT': 'On the way to Destination',
@@ -224,6 +226,7 @@
       'login.track': 'I-track ang kahon', 'login.home': 'Bumalik sa home',
 
       'status.CREATED': 'Nairehistro',
+      'status.PICKED_UP': 'Nakuha na sa nagpadala',
       'status.RECEIVED_BRANCH': 'Natanggap (tanggapan ng sangay)',
       'status.RECEIVED_ORIGIN': 'Natanggap (bodega)',
       'status.LOADED_CONTAINER': 'Nakakarga sa container', 'status.IN_TRANSIT': 'Nasa biyahe',
@@ -285,6 +288,7 @@
       'track.loading': 'Hinahanap ang inyong kahon…', 'track.timeline': 'Progreso ng padala',
       'track.pending': 'Nakabinbin', 'track.detailedLog': 'Tingnan ang detalyadong talaan ng status',
       'journey.CREATED': 'Kumpirmado ang Booking',
+      'journey.PICKED_UP': 'Nakuha na sa nagpadala',
       'journey.RECEIVED_BRANCH': 'Natanggap sa tanggapan ng sangay',
       'journey.RECEIVED_ORIGIN': 'Natanggap sa bodega ng pinagmulan',
       'journey.LOADED_CONTAINER': 'Nakakarga sa container', 'journey.IN_TRANSIT': 'Papunta na sa Destinasyon',

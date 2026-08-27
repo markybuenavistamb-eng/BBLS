@@ -3,7 +3,7 @@ let ME = null;
 let scanner = null;
 
 const STATUS_LABELS_EN = {
-  CREATED: 'Created', RECEIVED_BRANCH: 'Received (branch office)', RECEIVED_ORIGIN: 'Received (origin WH)',
+  CREATED: 'Created', PICKED_UP: 'Picked up from sender', RECEIVED_BRANCH: 'Received (branch office)', RECEIVED_ORIGIN: 'Received (origin WH)',
   LOADED_CONTAINER: 'Loaded in container',
   IN_TRANSIT: 'In transit', ARRIVED_PORT: 'Arrived (PH port)', RECEIVED_WAREHOUSE: 'Received (warehouse)',
   SORTED: 'Sorted', ASSIGNED: 'Assigned to trip', LOADED_TRUCK: 'Loaded on truck',
@@ -13,7 +13,7 @@ const STATUS_LABELS_EN = {
 const STATUS_LABELS = new Proxy(STATUS_LABELS_EN, {
   get: (tgt, k) => (typeof k === 'string' && tgt[k] != null) ? VI.t('status.' + k, tgt[k]) : tgt[k]
 });
-const PIPELINE = ['CREATED', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
+const PIPELINE = ['CREATED', 'PICKED_UP', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT', 'ARRIVED_PORT',
   'RECEIVED_WAREHOUSE', 'SORTED', 'ASSIGNED', 'LOADED_TRUCK', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
 const NEXT_STATUS = {
   // Note: LOADED_CONTAINER → IN_TRANSIT is deliberately NOT a manual action — a box goes
@@ -21,7 +21,8 @@ const NEXT_STATUS = {
   // A box is booked in at the branch counter, then trucked to the origin warehouse. Both are
   // offered from Created because a sender who walks straight to the warehouse skips the first,
   // and forcing a step that did not happen would put a lie in the timeline.
-  CREATED: ['RECEIVED_BRANCH', 'RECEIVED_ORIGIN'],
+  CREATED: ['PICKED_UP', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN'],
+  PICKED_UP: ['RECEIVED_BRANCH', 'RECEIVED_ORIGIN'],
   RECEIVED_BRANCH: ['RECEIVED_ORIGIN'],
   RECEIVED_ORIGIN: ['LOADED_CONTAINER'], LOADED_CONTAINER: ['RECEIVED_ORIGIN'],
   IN_TRANSIT: ['ARRIVED_PORT'], ARRIVED_PORT: ['RECEIVED_WAREHOUSE'], RECEIVED_WAREHOUSE: ['SORTED'],
@@ -1438,7 +1439,7 @@ const isAgent = () => ME && R_AGENTS.includes(ME.role);
 // Mirrors canCancel() in lib/statuses.js — head office may cancel anything before delivery,
 // a branch only while the box is still at its own end. The server is what enforces this; the
 // point of repeating it here is to not offer a button that would only come back refused.
-const ORIGIN_SIDE = ['CREATED', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER'];
+const ORIGIN_SIDE = ['CREATED', 'PICKED_UP', 'RECEIVED_BRANCH', 'RECEIVED_ORIGIN', 'LOADED_CONTAINER'];
 const canCancelBox = (status) => {
   if (!ME || ['DELIVERED', 'CANCELLED'].includes(status)) return false;
   if (R_ADMINS.includes(ME.role)) return true;
