@@ -487,13 +487,69 @@ function confirmAction({ title, body = '', confirmLabel = 'Confirm', cancelLabel
   });
 }
 
+// Whether to move at all. Someone who has asked their system for less motion has usually asked
+// for a reason, and an operations screen is exactly where that request deserves honouring.
+const MOTION_OK = () => !window.matchMedia || !matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 function flash(msg, cls = 'success') {
   const el = document.createElement('div');
-  el.className = cls;
+  el.className = cls + ' vf-toast';
   el.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 18px;box-shadow:0 4px 14px rgba(0,0,0,.15);z-index:99;font-weight:600;max-width:90vw';
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  // Leave the way it arrived, rather than vanishing mid-sentence.
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 320); }, 3200);
+}
+
+// Count a figure up to itself. A number that lands by climbing reads as something measured;
+// the same number simply appearing reads as decoration. Short enough not to be a wait — anyone
+// who glances away and back sees the final figure, because that is where it settles.
+function countUp(el, target, ms = 750) {
+  const end = Number(target) || 0;
+  // A hidden tab does not run animation frames, so a figure started at zero would sit at zero
+  // until somebody looked — showing a wrong number, which is worse than showing a still one.
+  if (!MOTION_OK() || end === 0 || document.hidden) { el.textContent = String(end); return; }
+  const started = performance.now();
+  const tick = (now) => {
+    const t = Math.min(1, (now - started) / ms);
+    // Fast at first, easing to a stop, so the last few digits are readable.
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = String(Math.round(end * eased));
+    if (t < 1) requestAnimationFrame(tick);
+    else el.textContent = String(end);
+  };
+  requestAnimationFrame(tick);
+}
+
+// Bring a freshly drawn dashboard to life: tiles rise in, their figures climb, and the charts
+// grow from nothing. Called after the markup is in the page, so it works no matter how the
+// dashboard was rendered. The stagger is capped — twelve tiles should not take three seconds.
+function animateDashboard(root) {
+  root = root || document.getElementById('view2') || document;
+  if (!root || !MOTION_OK()) return;
+  const step = (i, per, cap) => Math.min(i * per, cap) + 's';
+  root.querySelectorAll('.tile').forEach((tile, i) => {
+    tile.style.setProperty('--d', step(i, 0.045, 0.45));
+    tile.classList.add('animate-in');
+    const num = tile.querySelector('.num');
+    if (num) {
+      const target = num.textContent.trim();
+      // Only whole numbers climb. Money and percentages carry symbols that would read as
+      // nonsense part-way up, so they are left exactly as rendered.
+      if (/^\d+$/.test(target) && !document.hidden) {
+        num.textContent = '0';
+        setTimeout(() => countUp(num, target), i * 45 + 120);
+      }
+    }
+  });
+  root.querySelectorAll('.bar-fill').forEach((bar, i) => {
+    bar.style.setProperty('--d', step(i, 0.06, 0.5));
+    bar.classList.add('animate-in');
+  });
+  root.querySelectorAll('.col-bar').forEach((col, i) => {
+    col.style.setProperty('--d', step(i, 0.07, 0.5));
+    col.classList.add('animate-in');
+  });
 }
 function showErr(e) { flash(e.message || String(e), 'error'); }
 
@@ -789,10 +845,25 @@ let ALERT_SHOW = 'unread';        // an alert that has been read is done with, u
 let alertTimer = null;
 let alertMenuFor = null;          // which row has its ⋯ menu open
 
+// What the bell has already made a fuss about. The panel repaints on a timer, so without this
+// the badge would pulse every few seconds forever and be tuned out within a day. Movement is
+// reserved for the moment something actually arrives.
+let alertsSeen = { total: 0, keys: new Set() };
+let alertsFirstPaint = true;
+
 async function loadAlerts() {
+  const before = ALERTS.total || 0;
   try { ALERTS = await api('/api/alerts?show=' + ALERT_SHOW); }
   catch (e) { return; }                       // a failed poll is not worth a banner
-  paintBell();
+  // Only a rise counts. Reading one makes the number fall, and nothing about that is news.
+  const arrived = !alertsFirstPaint && (ALERTS.total || 0) > before;
+  const fresh = new Set();
+  for (const it of (ALERTS.items || [])) {
+    if (!alertsFirstPaint && !alertsSeen.keys.has(it.key) && !it.read) fresh.add(it.key);
+  }
+  alertsSeen = { total: ALERTS.total || 0, keys: new Set((ALERTS.items || []).map(i => i.key)) };
+  alertsFirstPaint = false;
+  paintBell({ arrived, fresh });
 }
 
 // Marking is what makes the list shrink, so it always repaints from the server's answer
@@ -825,7 +896,7 @@ async function openAlert(key, href) {
   if (href === '#chat') { toggleChat(); return; }
   location.hash = href;
 }
-function paintBell() {
+function paintBell(motion) {
   const host = document.getElementById('alertMount');
   if (!host) return;
   const open = host.querySelector('.bell-panel:not([hidden])');
@@ -834,9 +905,9 @@ function paintBell() {
   const showingAll = ALERT_SHOW === 'all';
   host.innerHTML = `
     <button type="button" class="bell" onclick="toggleAlerts()" title="Bookings, box orders, branch messages and anything else waiting on you">
-      <span class="bell-ico">🔔</span>
+      <span class="bell-ico${motion && motion.arrived ? ' is-new' : ''}">🔔</span>
       <span class="bell-txt">${VI.t('alerts.title')}</span>
-      ${n ? `<span class="bell-badge">${n > 99 ? '99+' : n}</span>` : ''}
+      ${n ? `<span class="bell-badge${motion && motion.arrived ? ' is-new' : ''}">${n > 99 ? '99+' : n}</span>` : ''}
     </button>
     <div class="bell-panel" ${open ? '' : 'hidden'}>
       <div class="bell-tools">
@@ -847,7 +918,7 @@ function paintBell() {
       </div>
       ${items.length ? '' : `<div class="bell-empty muted">${showingAll ? VI.t('alerts.noneAtAll') : VI.t('alerts.none')}</div>`}
       ${items.map(it => `
-        <div class="bell-item${it.read ? ' is-read' : ''}">
+        <div class="bell-item${it.read ? ' is-read' : ''}${motion && motion.fresh && motion.fresh.has(it.key) ? ' is-new' : ''}">
           <button type="button" class="bell-open" onclick="openAlert('${esc(it.key)}', '${esc(it.href)}')">
             <span class="bell-kind">${it.icon || '🔔'}</span>
             <span class="bell-body">
@@ -1445,7 +1516,7 @@ function columnChart(points, { height = 90 } = {}) {
   return `<div style="display:flex;align-items:flex-end;gap:8px;height:${height}px;margin-top:6px">
     ${points.map(p => `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%">
         <div style="font-size:11px;font-weight:700">${p.value}</div>
-        <div style="width:100%;background:var(--primary);border-radius:4px 4px 0 0;height:${Math.max(2, Math.round((p.value / top) * (height - 22)))}px"></div>
+        <div class="col-bar" style="width:100%;background:var(--primary);border-radius:4px 4px 0 0;height:${Math.max(2, Math.round((p.value / top) * (height - 22)))}px"></div>
       </div>`).join('')}
   </div>
   <div style="display:flex;gap:8px;margin-top:4px">
@@ -1539,6 +1610,7 @@ async function pageDashboard() {
       ${d.recentNotifications.map(n => `<tr><td>${esc(n.box_number)}</td><td>${esc(n.recipient_phone)}</td><td class="wrap-cell" style="max-width:420px">${esc(n.message_body)}</td><td>${badge(n.status)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">None yet</td></tr>'}
       </table>
     </div>`);
+  animateDashboard();
 }
 
 /* ---------- shipments ---------- */

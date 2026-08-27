@@ -13,6 +13,9 @@
     <span class="drv-who" id="drvWho"></span>
   </div>
   <main class="drv-main" id="drvApp">Loading…</main>
+  <!-- Sits above everything and is shown for a moment after each scan. Outside the app body so
+       redrawing the run cannot wipe it mid-flash. -->
+  <div class="drv-flash" id="drvFlash" hidden aria-live="polite"></div>
   <script src="/vendor/html5-qrcode.min.js"></script>
   <script src="/driver.js"></script>
 </body>

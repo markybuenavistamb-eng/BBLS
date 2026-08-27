@@ -430,6 +430,7 @@
       LOG.unshift({ ok: false, text: String(code).slice(0, 30) + ' — ' + e.message });
       paintLog();
       buzz(false);
+      scanFlash(false, e.message);
       return;
     }
     if (r.pod && body instanceof FormData) {
@@ -438,6 +439,7 @@
     }
     LOG.unshift({ ok: true, text: r.message });
     buzz(true);
+    scanFlash(true, r.message);
     if (typeof r.outstanding === 'number') RUN.outstanding = r.outstanding;
     // Refresh the manifest so the list and the tally agree with what just happened.
     try { RUN = await api('/api/driver/me'); } catch (e) { /* the log already told them */ }
@@ -452,6 +454,23 @@
   function buzz(ok) {
     if (!navigator.vibrate) return;
     navigator.vibrate(ok ? 40 : [60, 60, 60]);
+  }
+
+  // A scan that worked, said in the one way that reads at arm's length in daylight: a big green
+  // tick over the screen for a moment. The log line underneath is the record; this is the
+  // signal — a driver holding a box at a tailgate should not have to find and read a line of
+  // text to know whether to put it on the van. A red cross for a refusal, same idea.
+  let flashTimer = null;
+  function scanFlash(ok, text) {
+    const host = gid('drvFlash');
+    if (!host) return;
+    clearTimeout(flashTimer);
+    host.className = 'drv-flash ' + (ok ? 'ok' : 'bad');
+    host.innerHTML = `<div class="drv-flash-mark">${ok ? '✓' : '✗'}</div>
+      ${text ? `<div class="drv-flash-text">${esc(text)}</div>` : ''}`;
+    host.hidden = false;
+    // Long enough to register, short enough not to be in the way of the next scan.
+    flashTimer = setTimeout(() => { host.hidden = true; }, ok ? 1100 : 1900);
   }
 
   function paintLog() {
