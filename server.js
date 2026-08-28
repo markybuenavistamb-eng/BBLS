@@ -505,7 +505,24 @@ app.get('/api/me', requireAuth, (req, res) => {
 
 // ---------- file uploads (in-memory → storage adapter: Vercel Blob or local disk) ----------
 const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const podUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const POD_MAX_BYTES = 25 * 1024 * 1024;   // a 12-megapixel phone shot, with room to spare
+const podUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: POD_MAX_BYTES } });
+
+// Multer reports a rejected upload by throwing into the middleware chain, where Express's
+// default handler turns it into an HTML page. Every client here speaks JSON, so a wrapper puts
+// the failure back into the shape the caller can actually read and act on.
+function uploadOr400(mw) {
+  return (req, res, next) => mw(req, res, (err) => {
+    if (!err) return next();
+    const tooBig = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(400).json({
+      error: tooBig
+        ? `That photo is too large (limit ${Math.round(POD_MAX_BYTES / 1024 / 1024)} MB). Take it again at a lower resolution.`
+        : (err.message || 'That upload could not be read.'),
+      needs: tooBig ? 'smaller_photo' : undefined
+    });
+  });
+}
 
 // --- ID-document upload security (passport / government ID) ---
 // A passport scan is sensitive personal data, so the upload is constrained on every axis:
@@ -1773,7 +1790,7 @@ async function flushMessages() {
 }
 
 app.post('/api/driver/scan', requireDriver,
-  podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }]),
+  uploadOr400(podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }])),
   async (req, res) => {
   const d = db.get();
   const pass = req.pass;
@@ -3074,7 +3091,7 @@ app.post('/api/trips/:id/dispatch', requireRole(...ADMINS, 'CONSIGNEE_AGENT'), (
 
 // ---------- delivery attempts (POD) ----------
 app.post('/api/boxes/:id/delivery-attempts', requireAuth,
-  podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }]),
+  uploadOr400(podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }])),
   async (req, res) => {
     const d = db.get();
     const box = getBox(req, res, req.params.id);
@@ -5256,6 +5273,29 @@ app.all('/api/cron/process-notifications', async (req, res) => {
   if (secret && req.headers.authorization !== `Bearer ${secret}`) return res.status(401).json({ error: 'Unauthorized' });
   const result = await notif.processOnce();
   res.json({ ok: true, ...result });
+});
+
+// An /api path that matched no route is a mistake in a caller, not a page to render. Without
+// this it falls through to the static handler and comes back as HTML, which a client parsing
+// JSON reports as an unreadable failure rather than "no such endpoint".
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `No such endpoint: ${req.method} /api${req.path}` });
+});
+
+// Anything under /api answers in JSON, including when it fails. Express's default handler
+// returns an HTML crash page, which every client here reads as an unparseable body and reports
+// as "something went wrong" — true, useless, and indistinguishable from a network problem. A
+// driver at a door deserves to be told the photo was too big, not left guessing.
+app.use('/api', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error('API error', req.method, req.path, '—', err && err.message);
+  const tooBig = err && err.code === 'LIMIT_FILE_SIZE';
+  res.status(tooBig ? 400 : 500).json({
+    error: tooBig ? 'That file is too large.'
+      // The message is shown to whoever is holding the phone, so it says what to do rather than
+      // what broke; the detail is in the log above for whoever has to fix it.
+      : 'Something failed on our side saving that. Try once more — if it keeps happening, tell the office.'
+  });
 });
 
 // ---------- static ----------

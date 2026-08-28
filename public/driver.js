@@ -391,9 +391,41 @@
       back.addEventListener('click', (e) => {
         if (e.target.hasAttribute('data-no') || e.target === back) return done(null);
         if (e.target.hasAttribute('data-take')) return input.click();
-        if (e.target.hasAttribute('data-use')) return done(chosen);
+        if (e.target.hasAttribute('data-use')) {
+          use.disabled = true; use.textContent = 'Preparing…';
+          return shrink(chosen).then(done).catch(() => done(chosen));
+        }
       });
       document.body.appendChild(back);
+    });
+  }
+
+  // Send a photograph the size the job needs, not the size the camera happens to shoot. A modern
+  // phone produces eight to fifteen megabytes a frame; nobody reading a proof of delivery needs
+  // that, and pushing it up from a doorstep on mobile data is slow enough to fail. Resized here,
+  // before it leaves the phone, so the delivery saves in a second rather than timing out — and
+  // if anything about this goes wrong the original is sent unchanged rather than nothing at all.
+  const PHOTO_MAX_EDGE = 1600;      // plenty to read a signature or a face
+  const PHOTO_QUALITY = 0.82;
+  function shrink(file) {
+    return new Promise((resolve, reject) => {
+      if (!file || !/^image\//.test(file.type) || !window.createImageBitmap) return resolve(file);
+      createImageBitmap(file).then(bmp => {
+        const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(bmp.width, bmp.height));
+        if (scale === 1 && file.size < 2 * 1024 * 1024) { bmp.close(); return resolve(file); }
+        const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+        bmp.close();
+        canvas.toBlob(blob => {
+          if (!blob) return resolve(file);
+          // Keep whichever is actually smaller — a already-compressed shot can survive a resize
+          // larger than it started.
+          if (blob.size >= file.size) return resolve(file);
+          resolve(new File([blob], (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', PHOTO_QUALITY);
+      }).catch(reject);
     });
   }
 
