@@ -41,8 +41,7 @@
     ],
     PICKUP: [
       { key: 'PICKUP',        label: 'Picked up from sender', hint: "Scan each box as you load it at the sender's address" },
-      { key: 'BRANCH_PICKUP', label: 'Picked up from branch office', hint: 'Scan each box as you load it at the branch counter' },
-      { key: 'DROP',          label: 'Handed to warehouse',   hint: 'Scan on arrival at the origin warehouse' }
+      { key: 'BRANCH_PICKUP', label: 'Picked up from branch office', hint: 'Scan each box as you load it at the branch counter' }
     ]
   };
 
@@ -218,7 +217,8 @@
       <div id="drvLog" class="drv-log"></div>
 
       <div class="drv-list-title" id="drvListTitle">On this run</div>
-      <div id="drvList" class="drv-list"></div>`;
+      <div id="drvList" class="drv-list"></div>
+      <div id="drvArrival">${arrivalPanel()}</div>`;
 
     gid('drvBox').addEventListener('keydown', e => { if (e.key === 'Enter') drvManual(); });
     paintHint();
@@ -304,6 +304,30 @@
       input.addEventListener('keydown', e => { if (e.key === 'Enter') done(input.value.trim() || null); });
       document.body.appendChild(back);
       input.focus(); input.select();
+    });
+  }
+
+  // A plain yes or no. Used where a tap sets something in motion that other people then act on
+  // — the warehouse being told a van is at the gate — so it is worth one deliberate confirmation.
+  function askYesNo({ title, hint, confirmLabel = 'Yes' }) {
+    return new Promise(resolve => {
+      const back = document.createElement('div');
+      back.className = 'drv-ask';
+      back.innerHTML = `
+        <div class="drv-ask-box">
+          <h2>${esc(title)}</h2>
+          ${hint ? `<p class="muted">${esc(hint)}</p>` : ''}
+          <div class="drv-ask-actions">
+            <button class="drv-btn secondary" data-no>Not yet</button>
+            <button class="drv-btn" data-yes>${esc(confirmLabel)}</button>
+          </div>
+        </div>`;
+      const done = (v) => { back.remove(); resolve(v); };
+      back.addEventListener('click', (e) => {
+        if (e.target.hasAttribute('data-no') || e.target === back) done(false);
+        if (e.target.hasAttribute('data-yes')) done(true);
+      });
+      document.body.appendChild(back);
     });
   }
 
@@ -462,9 +486,56 @@
     try { RUN = await api('/api/driver/me'); } catch (e) { /* the log already told them */ }
     paintLog();
     paintList();
+    // The arrival button's wording depends on how much is still unscanned, so it is redrawn too.
+    if (gid('drvArrival')) gid('drvArrival').innerHTML = arrivalPanel();
     const left = gid('drvApp').querySelector('.drv-head b');
     if (left) left.textContent = RUN.outstanding;
+    if (MODE === 'DELIVER' && !r.already) await offerRestOfReceipt(code);
     if (r.finished) finishRun();
+  }
+
+  // One delivery receipt covers everything going to one door. Having signed for three boxes on
+  // one sheet, a receiver should not have to stand there while each label is found and scanned —
+  // so the rest of the receipt is offered in one go, carrying the same signature and the same
+  // photographs that were just taken. Offered, not assumed: the driver is the one who can see
+  // whether all three actually came off the van.
+  async function offerRestOfReceipt(code) {
+    const key = stopKeyFor(code);
+    const rest = (RUN.boxes || []).filter(b =>
+      [b.who || '', b.address || ''].join('¦') === key && b.status === 'OUT_FOR_DELIVERY');
+    if (!rest.length) return;
+
+    const ok = await askYesNo({
+      title: `${rest.length} more box${rest.length === 1 ? '' : 'es'} on this receipt`,
+      hint: `${rest.map(b => b.box_number).join(', ')} — going to the same person at the same address. `
+          + 'Mark them delivered too, on the same signature and photographs?',
+      confirmLabel: `Yes, deliver ${rest.length === 1 ? 'it' : 'all ' + rest.length}`
+    });
+    if (!ok) return;
+
+    const proof = podByStop[key] || {};
+    for (const b of rest) {
+      try {
+        const r = await api('/api/driver/scan', {
+          method: 'POST',
+          body: {
+            box_number: b.box_number, action: 'DELIVER',
+            received_by_name: receivedByStop[key] || '',
+            pod_receipt_ref: proof.receipt || '', pod_receiver_ref: proof.receiver || ''
+          }
+        });
+        LOG.unshift({ ok: true, text: r.message });
+      } catch (e) {
+        LOG.unshift({ ok: false, text: b.box_number + ' — ' + e.message });
+      }
+    }
+    try { RUN = await api('/api/driver/me'); } catch (e) { /* the log already told them */ }
+    paintLog();
+    paintList();
+    const tally = gid('drvApp').querySelector('.drv-head b');
+    if (tally) tally.textContent = RUN.outstanding;
+    scanFlash('ok', `${rest.length} more box${rest.length === 1 ? '' : 'es'} delivered on the same receipt`, 1800);
+    if (!RUN.outstanding) finishRun();
   }
 
   // A phone at a tailgate is often not being looked at; a short buzz says it landed.
@@ -528,23 +599,64 @@
     const out = st.boxes.filter(b => b.status === 'OUT_FOR_DELIVERY');
     if (!out.length) return '';                       // not on the road yet, or already finished
     if (out.some(b => b.nearby_notified)) {
-      return '<div class="drv-told">✓ Receiver told you are nearby</div>';
+      return '<div class="drv-told">✓ Receiver updated — you are nearby</div>';
     }
     return `<button class="drv-near" onclick="drvNearby('${esc(out[0].box_number)}', this)">
-      📣 Tell them you are nearly there</button>`;
+      📣 Update receiver — nearly there</button>`;
   }
 
   window.drvNearby = async function (boxNumber, btn) {
     if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
     try {
       const r = await api('/api/driver/scan', { method: 'POST', body: { box_number: boxNumber, action: 'NEARBY' } });
-      LOG.unshift({ ok: true, text: r.message || 'Receiver told you are nearby' });
+      LOG.unshift({ ok: true, text: r.message || 'Receiver updated — you are nearby' });
       paintLog();
       await loadRun();                                 // redraw so the stop shows it is done
     } catch (e) {
       LOG.unshift({ ok: false, text: e.message || 'Could not send the message' });
       paintLog();
-      if (btn) { btn.disabled = false; btn.textContent = '📣 Tell them you are nearly there'; }
+      if (btn) { btn.disabled = false; btn.textContent = '📣 Update receiver — nearly there'; }
+    }
+  };
+
+  /* ---------- arriving at the warehouse ---------- */
+  // There is nothing to scan at a gate. The driver says the van is here; the warehouse decides
+  // whether it agrees, and that is what ends the run. Scanning every box twice — once by the
+  // driver handing over, once by the warehouse booking in — recorded the same fact twice and
+  // made the driver responsible for a count that is not theirs to make.
+  function arrivalPanel() {
+    if (!RUN || RUN.kind !== 'PICKUP') return '';
+    if (RUN.arrived_at) {
+      return `<div class="drv-arrived">
+        <b>✓ Arrival reported</b>
+        <div>Waiting for the warehouse to check the load in. Your pass closes when they do.</div>
+      </div>`;
+    }
+    const left = RUN.outstanding;
+    return `<button class="drv-arrive" onclick="drvArrived(this)">
+        🏭 Arrived at warehouse
+      </button>
+      <div class="drv-arrive-note">Tap once when you reach the gate.${left
+        ? ' ' + left + ' box(es) are still unscanned — collect them first if they are with you.' : ''}</div>`;
+  }
+
+  window.drvArrived = async function (btn) {
+    const ok = await askYesNo({
+      title: 'Are you at the warehouse?',
+      hint: 'The warehouse will be told your van is here and will check the load in. Your pass closes once they do.',
+      confirmLabel: 'Yes, I have arrived'
+    });
+    if (!ok) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Reporting…'; }
+    try {
+      const r = await api('/api/driver/arrived', { method: 'POST' });
+      LOG.unshift({ ok: true, text: r.message });
+      scanFlash('ok', r.message, 2200);
+      await loadRun();
+    } catch (e) {
+      LOG.unshift({ ok: false, text: e.message });
+      scanFlash('bad', e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🏭 Arrived at warehouse'; }
     }
   };
 

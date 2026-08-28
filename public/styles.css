@@ -1637,3 +1637,30 @@ button.drv-near:disabled { opacity: .6; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .drv-flash, .drv-flash-mark, .drv-flash-text { animation: none !important; }
 }
+
+/* Arriving at the warehouse: one report for the whole van, so it is one wide target at the foot
+   of the run rather than a mode to select. Green because it is the good end of the shift. */
+button.drv-arrive {
+  display: block; width: 100%; min-height: 54px; margin-top: 14px;
+  border-radius: 12px; border: 2px solid #15803d; background: #15803d; color: #fff;
+  font-size: 16px; font-weight: 800; cursor: pointer; padding: 10px;
+}
+button.drv-arrive:disabled { opacity: .6; cursor: default; }
+.drv-arrive-note { font-size: 12px; color: var(--muted); margin: 6px 2px 0; line-height: 1.45; }
+.drv-arrived {
+  margin-top: 14px; padding: 12px 14px; border-radius: 12px;
+  background: #dcfce7; color: #166534; font-size: 13.5px; line-height: 1.5;
+}
+.drv-arrived b { display: block; font-size: 15px; margin-bottom: 2px; }
+
+/* Driver pass form: the dial code sits with the number rather than being something to remember. */
+.dp-phone { display: flex; align-items: stretch; gap: 0; }
+.dp-dial {
+  display: flex; align-items: center; padding: 0 10px; font-weight: 700; font-size: 14px;
+  background: #eef2f7; color: #475569; border: 1px solid var(--border); border-right: 0;
+  border-radius: 8px 0 0 8px; white-space: nowrap;
+}
+.dp-phone input { border-radius: 0 8px 8px 0; }
+.dp-dial:empty { display: none; }
+.dp-dial:empty + input { border-radius: 8px; }
+.dp-hint { display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }

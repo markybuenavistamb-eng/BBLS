@@ -3094,10 +3094,12 @@ async function containerRevert(id, status) {
 async function pageOriginWarehouse(size, util) {
   const planSize = size || 'C40';
   const planUtil = util || 0.85;
-  const [wh, plan, containers] = await Promise.all([
+  const [wh, plan, containers, arrivals] = await Promise.all([
     api('/api/origin-warehouse'),
     api(`/api/origin-warehouse/load-plan?size=${planSize}&utilisation=${planUtil}`),
-    canIntake() ? api('/api/containers').catch(() => []) : Promise.resolve([])
+    canIntake() ? api('/api/containers').catch(() => []) : Promise.resolve([]),
+    // Vans at the gate whose driver says they have arrived, waiting for somebody here to agree.
+    api('/api/origin-warehouse/arrivals').catch(() => [])
   ]);
   // Stuffing happens here, at the origin warehouse, against a container still being loaded.
   // One that has sailed is closed to further boxes.
@@ -3109,6 +3111,32 @@ async function pageOriginWarehouse(size, util) {
       <a href="#/origin-warehouse-doc"><button class="secondary">📄 Printable document (PDF)</button></a>
     </div>
     <div class="muted" style="margin-bottom:10px">Master list of boxes received at origin and waiting to be stuffed into a container${wh.scope ? ` — ${esc(wh.scope)} only` : ''}.</div>
+
+    ${(arrivals || []).length ? `
+      <h2>Vans at the gate</h2>
+      <div class="muted" style="margin-bottom:8px;font-size:12.5px">
+        The driver has reported arriving. Check the load is actually here, then confirm — that
+        closes their pass. Book the boxes in afterwards by scanning each label as you unload.
+      </div>
+      ${arrivals.map(v => `
+        <div class="card arrival-card">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <div>
+              <b>${esc(v.driver_name)}</b>
+              ${v.driver_contact ? ` · <a href="tel:${esc(v.driver_contact)}">${esc(v.driver_contact)}</a>` : ''}
+              <div class="muted" style="font-size:12.5px">
+                ${v.plate_number ? '🚛 ' + esc(v.plate_number) : 'no plate recorded'}${v.trucking_company ? ' · ' + esc(v.trucking_company) : ''}
+                · reported ${esc(sinceText(v.arrived_at))}
+              </div>
+              <div class="muted" style="font-size:12.5px">Pass <code>${esc(v.code)}</code> · ${v.boxes_total} box(es) on board</div>
+            </div>
+            <button onclick="verifyArrival(${v.id}, '${esc(v.driver_name)}', ${v.boxes_total})">✓ Confirm arrival</button>
+          </div>
+          <div class="drv-stop-boxes" style="margin-top:8px">
+            ${v.boxes.map(b => `<span class="drv-chip">${esc(b.box_number)}</span>`).join('')}
+          </div>
+        </div>`).join('')}
+    ` : ''}
 
     <div class="tiles">
       <div class="tile"><div class="num">${wh.totals.count}</div><div class="lbl">Boxes waiting</div></div>
@@ -3648,15 +3676,18 @@ async function setOrderDate(id) {
 // back — and it deliberately shows what is left on each run, because that is what decides
 // whether a pass is still doing anything.
 async function pageDriverPasses() {
-  const [passes, trips, sched, branchStock] = await Promise.all([
+  const [passes, trips, sched, branchStock, roster] = await Promise.all([
     api('/api/driver-passes'),
     canDispatch() ? api('/api/trips').catch(() => []) : Promise.resolve([]),
     canDispatch() ? Promise.resolve(null) : api('/api/schedule').catch(() => null),
     // Boxes already standing at the counter, waiting to go on to the warehouse. A different
     // errand from collecting at a sender's door, but the same van and the same run.
-    canDispatch() ? Promise.resolve(null) : api('/api/branch-office').catch(() => null)
+    canDispatch() ? Promise.resolve(null) : api('/api/branch-office').catch(() => null),
+    // Who this office has sent out before, and what a number here is supposed to look like.
+    api('/api/drivers').catch(() => ({ drivers: [], phone_format: null }))
   ]);
   const atBranch = branchStock ? (branchStock.boxes || []) : [];
+  KNOWN_DRIVERS = roster.drivers || [];
   // A branch hands a driver a route, and a route is a set of stops on particular days. Which
   // ones go on this run is the decision being made here, so it is made from the schedule
   // rather than by handing over everything outstanding.
@@ -3666,7 +3697,10 @@ async function pageDriverPasses() {
   const pendingStops = sched ? (sched.events || []).filter(e => e.kind === 'PICKUP' && e.pending) : [];
   const hq = isHqSide();
   // Only three states now that nothing expires on its own: working, finished, or cancelled.
-  const STATE_BADGE = { ACTIVE: 'st-received_origin', COMPLETED: 'st-delivered', REVOKED: 'st-cancelled' };
+  // ARRIVED = the driver says they are at the warehouse and it has not been confirmed yet.
+  const STATE_BADGE = { ACTIVE: 'st-received_origin', ARRIVED: 'st-sorted',
+                        COMPLETED: 'st-delivered', REVOKED: 'st-cancelled' };
+  const STATE_LABEL = { ARRIVED: 'AT THE GATE' };
   view(`
     <h1>Driver passes</h1>
     <div class="muted" style="margin-bottom:12px">
@@ -3678,8 +3712,25 @@ async function pageDriverPasses() {
     <div class="card">
       <h2 style="margin-top:0">Issue a pass</h2>
       <div class="form-grid">
-        <div><label>Driver's name *</label><input id="dpName" placeholder="e.g. Ramon Cruz" oninput="this.dataset.touched='1'"></div>
-        <div><label>Contact number</label><input id="dpPhone" placeholder="Optional" oninput="this.dataset.touched='1'"></div>
+        <div>
+          <label>Driver's name *</label>
+          <input id="dpName" list="dpKnownDrivers" placeholder="e.g. Ramon Cruz"
+                 oninput="this.dataset.touched='1'" onchange="driverPicked()" onblur="driverPicked()">
+          <datalist id="dpKnownDrivers">
+            ${(roster.drivers || []).map(x => `<option value="${esc(x.name)}">${esc([x.plate_number, x.contact].filter(Boolean).join(' · '))}</option>`).join('')}
+          </datalist>
+          ${(roster.drivers || []).length ? `<span class="dp-hint">Start typing — drivers you have sent out before fill themselves in.</span>` : ''}
+        </div>
+        <div>
+          <label>Contact number *</label>
+          <div class="dp-phone">
+            <span class="dp-dial">${esc((roster.phone_format || {}).dial_code || '')}</span>
+            <input id="dpPhone" inputmode="tel" placeholder="${esc(((roster.phone_format || {}).mobile || {}).example || '')}"
+                   oninput="this.dataset.touched='1'">
+          </div>
+          <span class="dp-hint">${esc(((roster.phone_format || {}).mobile || {}).hint || '')}${
+            (roster.phone_format || {}).note ? ' ' + esc(roster.phone_format.note) : ''}</span>
+        </div>
         <div><label>Plate number</label><input id="dpPlate" placeholder="e.g. NBC 4471" oninput="this.dataset.touched='1'"></div>
         <div><label>Trucking company</label><input id="dpCompany" placeholder="Own fleet, or the hauler's name" oninput="this.dataset.touched='1'"></div>
       </div>
@@ -3754,7 +3805,7 @@ async function pageDriverPasses() {
         <td>${x.boxes_left} of ${x.boxes_total}</td>
         <td>${whereabouts(x)}</td>
         <td>${fmtDay(x.created_at)}</td>
-        <td><span class="badge ${STATE_BADGE[x.state] || ''}">${esc(x.state)}</span></td>
+        <td><span class="badge ${STATE_BADGE[x.state] || ''}">${esc(STATE_LABEL[x.state] || x.state)}</span></td>
         <td>${x.state === 'ACTIVE' ? `<button class="small secondary danger" onclick="revokePass(${x.id})">Cancel</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">No passes issued yet</td></tr>'}
       </table>
@@ -3765,6 +3816,53 @@ async function pageDriverPasses() {
 // Selecting the trip fills in who is driving it. Typed-over values are respected — an
 // agent correcting the name is telling us the trip's own record is out of date, not making a
 // mistake — so only untouched fields are replaced.
+// Confirming a van is here is what closes the driver's run, so it is asked properly. The boxes
+// are booked in separately, label by label, which is the warehouse's own count and not the
+// driver's — confirming the van arrived is not the same as agreeing what was on it.
+async function verifyArrival(id, driver, total) {
+  const ok = await confirmAction({
+    title: 'Confirm this van has arrived?',
+    body: `<p><b>${esc(driver)}</b>'s van is here with <b>${total}</b> box(es).</p>
+           <p class="muted">This closes their pass — their phone stops working straight away.
+             You still book each box in by scanning it as you unload, which is what actually
+             moves them to Received at origin warehouse.</p>`,
+    confirmLabel: 'Yes, the van is here', cancelLabel: 'Not yet'
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/driver-passes/' + id + '/verify-arrival', { method: 'POST' });
+    flash(r.message || 'Arrival confirmed');
+    route();
+  } catch (e) { showErr(e); }
+}
+
+// Drivers this office has sent out before, so the form can fill itself in.
+let KNOWN_DRIVERS = [];
+
+// Typing a name we already know fills in the rest — their number, and the truck they were last
+// in. Only into blank fields: whatever the clerk has typed is theirs and stays, because the
+// point is to save typing, not to overrule somebody who knows today is different.
+function driverPicked() {
+  const name = document.getElementById('dpName');
+  if (!name || !name.value.trim()) return;
+  const key = (s) => String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  const hit = KNOWN_DRIVERS.find(x => key(x.name) === key(name.value));
+  if (!hit) return;
+  name.value = hit.name;                       // their name as it was last recorded
+  const fill = (id, v) => {
+    const el = document.getElementById(id);
+    if (el && v && !el.value.trim()) el.value = v;
+  };
+  fill('dpPhone', hit.contact);
+  fill('dpPlate', hit.plate_number);
+  fill('dpCompany', hit.trucking_company);
+  const err = document.getElementById('dpErr');
+  if (err && !err.textContent) {
+    err.className = 'muted';
+    err.textContent = `Filled in from ${hit.name}'s last run${hit.runs ? ' (' + hit.runs + ' so far)' : ''}. Change anything that is different today.`;
+  }
+}
+
 function tripPicked() {
   const sel = document.getElementById('dpTrip');
   const opt = sel.options[sel.selectedIndex];
@@ -3811,7 +3909,13 @@ async function issuePass(kind) {
                    driver_contact: document.getElementById('dpPhone').value.trim(),
                    plate_number: (document.getElementById('dpPlate') || {}).value?.trim() || '',
                    trucking_company: (document.getElementById('dpCompany') || {}).value?.trim() || '' };
+    err.className = 'error';
     if (!body.driver_name) { err.textContent = "The driver's name is required."; return; }
+    // The server checks the shape of it; this only catches an empty box before a round trip.
+    if (!body.driver_contact) {
+      err.textContent = 'A contact number for the driver is required — the office needs to be able to ring them.';
+      return;
+    }
     const tripSel = document.getElementById('dpTrip');
     if (tripSel) body.trip_id = +tripSel.value || null;
 

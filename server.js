@@ -1342,7 +1342,13 @@ function passOutstanding(d, pass) {
 
 function passState(d, pass) {
   if (pass.revoked_at) return 'REVOKED';
+  // An explicitly closed pass is closed, whatever its boxes are doing. A collection run ends
+  // when the warehouse agrees the load arrived, and the boxes it brought are still outstanding
+  // at that moment — they are booked in afterwards, by the warehouse, one label at a time.
+  if (pass.completed_at) return 'COMPLETED';
   if (!passOutstanding(d, pass).length) return 'COMPLETED';
+  // The van is at the gate and the driver has said so; the warehouse has not agreed yet.
+  if (pass.arrived_at) return 'ARRIVED';
   return 'ACTIVE';
 }
 
@@ -1362,7 +1368,10 @@ function driverFromRequest(req) {
   const d = db.get();
   const pass = driverPasses(d).find(p => p.id === payload.pid);
   if (!pass) return null;
-  return passState(d, pass) === 'ACTIVE' ? pass : null;
+  // A driver who has reported arriving is still on the pass until the warehouse agrees — they
+  // may still be unloading, and throwing them out at the gate would leave them unable to say
+  // anything if the report was premature. Their code stops the moment the arrival is confirmed.
+  return ['ACTIVE', 'ARRIVED'].includes(passState(d, pass)) ? pass : null;
 }
 
 function requireDriver(req, res, next) {
@@ -1416,6 +1425,31 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
   if (!driverName) return res.status(400).json({ error: "The driver's name is required." });
   const branch = chatBranchOf(req.user);
 
+  // A pass without a number for the driver is a van nobody can reach. The office rings them
+  // when a receiver is not answering, when a run has stalled, when plans change — so the number
+  // is part of issuing the pass, not an optional extra somebody fills in later.
+  const country = (BRANCH.byKey(branch) || {}).country || 'Philippines';
+  const fmt = REF.phoneFormatFor(country) || {};
+  const contact = String(b.driver_contact || '').trim();
+  if (!contact) {
+    return res.status(400).json({ error: `A contact number for the driver is required (${country}: ${fmt.dial_code || ''}).` });
+  }
+  // Accept the number however it was typed — with the dial code, with a local leading zero, or
+  // bare — and keep it in one shape so the office can always just tap it.
+  const digits = contact.replace(/\D/g, '');
+  const dial = String(fmt.dial_code || '').replace(/\D/g, '');
+  let national = digits;
+  if (dial && national.startsWith(dial)) national = national.slice(dial.length);
+  if (country !== 'Philippines') national = national.replace(/^0+/, '');   // the 0 is local-only
+  const okMobile = fmt.mobile && new RegExp(fmt.mobile.pattern).test(national);
+  const okLandline = fmt.landline && new RegExp(fmt.landline.pattern).test(national);
+  if (fmt.mobile && !okMobile && !okLandline) {
+    return res.status(400).json({ error: `That does not look like a ${country} number. ${fmt.mobile.hint}` });
+  }
+  const driverContact = fmt.dial_code && country !== 'Philippines'
+    ? `${fmt.dial_code} ${national}`
+    : national;
+
   let boxIds = [];
   let trip = null;
   if (kind === 'DELIVERY') {
@@ -1455,7 +1489,7 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     code: newPassCode(),
     kind, branch,
     driver_name: driverName,
-    driver_contact: String(b.driver_contact || '').trim() || (trip ? trip.driver_contact : '') || '',
+    driver_contact: driverContact,
     // Which truck actually went out. A delivery run has a trip to read this from, but a branch
     // collection has no trip at all — so it is recorded on the pass, and the office can say what
     // left the yard either way. Typed values win over the trip's, because the truck booked last
@@ -1470,8 +1504,105 @@ app.post('/api/driver-passes', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH
     completed_at: null, revoked_at: null
   };
   driverPasses(d).push(pass);
+  rememberDriver(d, branch, pass);
   db.persist();
   res.status(201).json({ ...pass, state: 'ACTIVE', boxes_total: boxIds.length, boxes_left: boxIds.length });
+});
+
+// The same handful of drivers come back week after week, and typing a number from memory is how
+// a wrong one gets onto a pass. What was used last time is kept against the driver's name, so
+// the next pass fills itself in and the clerk only corrects what has actually changed.
+// Deliberately not replicated, for the same reason staff accounts are not: a branch's drivers
+// are that branch's own business, and head office reading them would serve nothing.
+function rememberDriver(d, branch, pass) {
+  d.drivers = d.drivers || [];
+  const key = (s) => String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  const found = d.drivers.find(x => x.branch === branch && key(x.name) === key(pass.driver_name));
+  const entry = found || { id: db.nextId('driver'), branch, name: pass.driver_name, runs: 0 };
+  entry.name = pass.driver_name;                       // keep the latest spelling
+  entry.contact = pass.driver_contact || entry.contact || '';
+  // Only overwrite the vehicle when this pass actually named one, or a run in a borrowed truck
+  // would erase the driver's usual one.
+  if (pass.plate_number) entry.plate_number = pass.plate_number;
+  if (pass.trucking_company) entry.trucking_company = pass.trucking_company;
+  entry.runs = (entry.runs || 0) + 1;
+  entry.last_used_at = new Date().toISOString();
+  if (!found) d.drivers.push(entry);
+}
+
+// Vans waiting at the gate. A driver reporting their own arrival is a claim, not a receipt —
+// the warehouse says whether the load is actually standing in front of them, and that is what
+// closes the run. Until then the pass stays open, so a driver who spoke too soon can be found.
+app.get('/api/origin-warehouse/arrivals', requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
+  const d = db.get();
+  const scope = effectiveScope(req);
+  const list = driverPasses(d)
+    .filter(p => p.kind === 'PICKUP' && p.arrived_at && !p.completed_at && !p.revoked_at)
+    .filter(p => {
+      if (!scope) return true;
+      const c = (BRANCH.byKey(p.branch) || {}).country;
+      return c === scope;
+    })
+    .sort((a, b) => String(a.arrived_at).localeCompare(String(b.arrived_at)))
+    .map(p => {
+      const boxes = (d.boxes || []).filter(x => p.box_ids.includes(x.id));
+      return {
+        id: p.id, code: p.code, driver_name: p.driver_name, driver_contact: p.driver_contact || '',
+        plate_number: p.plate_number || '', trucking_company: p.trucking_company || '',
+        arrived_at: p.arrived_at, branch: p.branch,
+        boxes: boxes.map(x => ({ id: x.id, box_number: x.box_number, status: x.status,
+                                 status_label: SM.FRIENDLY[x.status] || x.status })),
+        boxes_total: p.box_ids.length,
+        // How much of the load the warehouse has actually booked in so far.
+        received: boxes.filter(x => !SM.ORIGIN_SIDE_STATUSES.slice(0, 3).includes(x.status)).length
+      };
+    });
+  res.json(list);
+});
+
+app.post('/api/driver-passes/:id/verify-arrival',
+  requireRole(...ADMINS, ...ROLE.BRANCH_ADMINS, ...SHIPPERS), (req, res) => {
+  const d = db.get();
+  const pass = driverPasses(d).find(p => p.id === +req.params.id);
+  if (!pass) return res.status(404).json({ error: 'Pass not found' });
+  const scope = effectiveScope(req);
+  if (scope && (BRANCH.byKey(pass.branch) || {}).country !== scope) {
+    return res.status(404).json({ error: 'Pass not found' });
+  }
+  if (!pass.arrived_at) {
+    return res.status(400).json({ error: 'That driver has not reported arriving yet.' });
+  }
+  if (pass.completed_at) return res.json({ ok: true, already: true, message: 'Already checked in.' });
+
+  pass.arrival_verified_at = new Date().toISOString();
+  pass.arrival_verified_by = req.user.name || req.user.email;
+  // Verifying is what ends the run: the driver has handed over and their code stops working.
+  // The boxes themselves are booked in separately, by the warehouse, as each label is scanned.
+  pass.completed_at = pass.arrival_verified_at;
+  db.persist();
+  res.json({
+    ok: true,
+    message: `${pass.driver_name}'s run is closed. Scan the boxes in as you unload them.`,
+    boxes_total: pass.box_ids.length
+  });
+});
+
+// Who this branch has sent out before, most recent first, for the pass form to fill from.
+app.get('/api/drivers', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH',
+                                   'SHIPPER_AGENT_TH', 'SHIPPER_AGENT_KH'), (req, res) => {
+  const d = db.get();
+  const branch = chatBranchOf(req.user);
+  const country = (BRANCH.byKey(branch) || {}).country || 'Philippines';
+  res.json({
+    phone_format: REF.phoneFormatFor(country) || null,
+    country,
+    drivers: (d.drivers || [])
+      .filter(x => x.branch === branch)
+      .sort((a, b) => String(b.last_used_at || '').localeCompare(String(a.last_used_at || '')))
+      .slice(0, 40)
+      .map(({ id, name, contact, plate_number, trucking_company, runs, last_used_at }) =>
+        ({ id, name, contact, plate_number, trucking_company, runs, last_used_at }))
+  });
 });
 
 app.post('/api/driver-passes/:id/revoke', requireRole(...ADMINS, 'CONSIGNEE_AGENT', 'BRANCH_ADMIN_TH', 'BRANCH_ADMIN_KH'), (req, res) => {
@@ -1570,6 +1701,9 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
     // read down the phone, and a plate is the fastest way to catch it.
     plate_number: pass.plate_number || '',
     trucking_company: pass.trucking_company || '',
+    // So the app can show the run is waiting on the warehouse rather than offering the button
+    // again to a driver who has already reported.
+    arrived_at: pass.arrived_at || null,
     branch_label: BRANCH.BRANCH_LABELS[pass.branch] || pass.branch,
     boxes, outstanding: passOutstanding(d, pass).length
   });
@@ -1610,6 +1744,22 @@ app.post('/api/driver/location', requireDriver, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/driver/arrived', requireDriver, (req, res) => {
+  const d = db.get();
+  const pass = req.pass;
+  if (pass.kind !== 'PICKUP') {
+    return res.status(400).json({ error: 'Only a collection run ends at the warehouse.' });
+  }
+  if (pass.arrived_at) {
+    return res.json({ ok: true, already: true, arrived_at: pass.arrived_at,
+                      message: 'Already reported. The warehouse still has to check the load in.' });
+  }
+  pass.arrived_at = new Date().toISOString();
+  db.persist();
+  res.json({ ok: true, arrived_at: pass.arrived_at,
+             message: 'Arrival reported. Wait for the warehouse to check the load in.' });
+});
+
 // Send whatever this request just queued, before answering it. Best effort on purpose: the
 // scan itself has already been recorded, and a provider that is down must not turn a delivered
 // box into an error on the driver's phone.
@@ -1643,7 +1793,9 @@ app.post('/api/driver/scan', requireDriver,
 
   const ALLOWED = pass.kind === 'DELIVERY'
     ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', NEARBY: null, DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
-    : { PICKUP: 'PICKED_UP', BRANCH_PICKUP: null, DROP: 'RECEIVED_ORIGIN' };
+    // No DROP any more: a driver arriving at the warehouse reports it once, through
+    // /api/driver/arrived, and the warehouse books the boxes in themselves.
+    : { PICKUP: 'PICKED_UP', BRANCH_PICKUP: null };
   if (!(action in ALLOWED)) return res.status(400).json({ error: 'Unknown action.' });
 
   // A pass is not a user account, so the event records no user id — the note carries who
