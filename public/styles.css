@@ -1664,3 +1664,10 @@ button.drv-arrive:disabled { opacity: .6; cursor: default; }
 .dp-dial:empty { display: none; }
 .dp-dial:empty + input { border-radius: 8px; }
 .dp-hint { display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+/* A delivery whose proof was never captured. Said plainly, on the box and on the printed
+   document, because a record that looks complete when it is not is worse than no record. */
+.pod-gap {
+  margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.5;
+  background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
+}

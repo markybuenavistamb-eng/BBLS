@@ -2585,6 +2585,12 @@ async function pageDeliveryReceipt(boxId) {
             ? ' The signed receipt and receiver photos are not attached yet — this is not complete proof until they are.'
             : ''}
       </div>` : ''}
+      ${attempt.proof_missing ? `<div class="pod-provisional" style="background:#fef3c7;border-color:#f59e0b">
+        <b>This document is not complete proof of delivery.</b>
+        ${attempt.proof_missing === 'no_record'
+          ? 'No proof was captured when this box was handed over. The delivery, its date and the driver are taken from the box history; who signed for it was never recorded.'
+          : 'No photographs were taken at the door. This delivery predates the rule requiring a signed receipt and a photo of the receiver holding the box.'}
+      </div>` : ''}
       <div class="rc-label" style="margin-top:14px">REQUIRED PHOTO EVIDENCE</div>
       <div class="rc-photos">
         <div>
@@ -2715,6 +2721,9 @@ async function pageBoxDetail(id) {
           <span class="muted">${fmtDate(a.attempted_at)}</span>
           ${a.received_by_name ? `<div>Received by: <b>${esc(a.received_by_name)}</b></div>` : ''}
           ${a.notes ? `<div class="muted">${esc(a.notes)}</div>` : ''}
+          ${a.proof_missing ? `<div class="pod-gap">⚠ ${a.proof_missing === 'no_record'
+            ? 'No proof of delivery was captured for this box. This record was reconstructed from the box history — it shows what happened and when, but nobody recorded who signed for it or photographed the handover.'
+            : 'No photographs were taken for this delivery. It predates the rule that requires a signed receipt and a photo of the receiver.'}</div>` : ''}
           <div class="photo-grid" style="margin-top:6px">
             ${a.pod_receipt_photo ? `<a href="${esc(a.pod_receipt_photo)}" target="_blank"><img src="${esc(a.pod_receipt_photo)}" alt="POD receipt"></a>` : ''}
             ${a.pod_receiver_photo ? `<a href="${esc(a.pod_receiver_photo)}" target="_blank"><img src="${esc(a.pod_receiver_photo)}" alt="Receiver with box"></a>` : ''}
