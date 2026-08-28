@@ -316,6 +316,19 @@ function boxRow(box) {
 // Returns error string or null.
 function changeBoxStatus(box, to, actor, note = '', extraVars = {}) {
   if (!SM.BOX_STATUSES.includes(to)) return 'Invalid status';
+  // Write the event and the status onto the same document.
+  //
+  // This used to push the event into db.get() — whatever document is current — while setting
+  // the status on whichever box object the caller happened to be holding. Those are usually the
+  // same thing, but not when the caller picked up its box before an upload and the document was
+  // replaced while that upload ran: the event was saved and the status change was left on an
+  // object nobody would write again. The box then carried delivery records and no delivery, and
+  // a second attempt would add a second event because the status had never moved.
+  //
+  // Resolving the box here means the status that is checked, the status that is set and the
+  // event that is written all come from one document — for every caller, not just the careful ones.
+  const live = db.get();
+  box = (live.boxes || []).find(x => x.id === box.id) || box;
   if (!SM.canTransition(box.status, to, actor ? actor.role : null)) {
     // A refusal to cancel should say which of the two reasons applies, rather than making
     // someone guess whether it is the box's stage or their own role that is in the way.
@@ -1792,7 +1805,9 @@ async function flushMessages() {
 app.post('/api/driver/scan', requireDriver,
   uploadOr400(podUpload.fields([{ name: 'pod_receipt_photo', maxCount: 1 }, { name: 'pod_receiver_photo', maxCount: 1 }])),
   async (req, res) => {
-  const d = db.get();
+  // Both are re-taken after the photo uploads, since the shared document can be replaced while
+  // they run — see the note further down.
+  let d = db.get();
   const pass = req.pass;
   const code = String((req.body || {}).box_number || '').trim();
   const action = String((req.body || {}).action || '');
@@ -1806,7 +1821,7 @@ app.post('/api/driver/scan', requireDriver,
     return res.status(403).json({ error: matches[0].box_number + ' is not on this run.' });
   }
   if (onRun.length > 1) return res.status(409).json({ error: ambiguousBoxError(d, onRun) });
-  const box = onRun[0];
+  let box = onRun[0];
 
   const ALLOWED = pass.kind === 'DELIVERY'
     ? { LOAD: 'LOADED_TRUCK', DEPART: 'OUT_FOR_DELIVERY', NEARBY: null, DELIVER: 'DELIVERED', RETURN: 'RETURNED' }
@@ -1944,14 +1959,17 @@ app.post('/api/driver/scan', requireDriver,
     : 'Scanned by ' + pass.driver_name + ' (driver pass)';
   const extra = action === 'DELIVER' ? { received_by_name: receivedBy }
     : action === 'RETURN' ? { reason: notif.REASON_TEXT[failureReason] } : {};
-  const err = changeBoxStatus(box, target, actor, note, extra);
-  if (err) return res.status(400).json({ error: err });
-
-  // The same record the office's delivery form writes, so Proof of Delivery has something to
-  // print and the failed-delivery report has something to count.
+  // Upload first, change the record afterwards.
+  //
+  // The document every handler writes to is one object shared by every request on the instance,
+  // and load() replaces it wholesale. Sending the photographs takes a few hundred milliseconds,
+  // and this used to happen halfway through the change: status moved, then the upload, then the
+  // delivery record. Any request arriving in that gap swapped the document, so the first half of
+  // the work was left on an object nobody would save again — a box with delivery records against
+  // it and no delivery, which is exactly what happened at Nene Villanueva's door. Marking three
+  // boxes at one address, one after another, is precisely the traffic that collides.
   const podRefs = { receipt: carried.receipt || null, receiver: carried.receiver || null };
   if (action === 'DELIVER' || action === 'RETURN') {
-    const nowIso = new Date().toISOString();
     if (files.pod_receipt_photo) {
       podRefs.receipt = '/files/' + await storage.save(files.pod_receipt_photo[0].buffer,
         files.pod_receipt_photo[0].originalname, 'pod');
@@ -1960,6 +1978,21 @@ app.post('/api/driver/scan', requireDriver,
       podRefs.receiver = '/files/' + await storage.save(files.pod_receiver_photo[0].buffer,
         files.pod_receiver_photo[0].originalname, 'pod');
     }
+  }
+
+  // ---- nothing below may await until the response: one uninterrupted change ----
+  // The document may have been replaced while those uploads ran, so both references are taken
+  // again from whatever is current now.
+  d = db.get();
+  box = (d.boxes || []).find(x => x.id === box.id) || box;
+
+  const err = changeBoxStatus(box, target, actor, note, extra);
+  if (err) return res.status(400).json({ error: err });
+
+  // The same record the office's delivery form writes, so Proof of Delivery has something to
+  // print and the failed-delivery report has something to count.
+  if (action === 'DELIVER' || action === 'RETURN') {
+    const nowIso = new Date().toISOString();
     d.delivery_attempts = d.delivery_attempts || [];
     d.delivery_attempts.push({
       id: db.nextId('attempt'), box_id: box.id,
@@ -3102,34 +3135,41 @@ app.post('/api/boxes/:id/delivery-attempts', requireAuth,
     const files = req.files || {};
     const receipt = files.pod_receipt_photo ? '/files/' + await storage.save(files.pod_receipt_photo[0].buffer, files.pod_receipt_photo[0].originalname, 'pod') : null;
     const receiverPhoto = files.pod_receiver_photo ? '/files/' + await storage.save(files.pod_receiver_photo[0].buffer, files.pod_receiver_photo[0].originalname, 'pod') : null;
+
+    // The uploads above can take long enough for another request to replace the shared document,
+    // which would leave the rest of this writing to an object nobody saves. Both references are
+    // taken again, and nothing below awaits.
+    const doc = db.get();
+    const rec = (doc.boxes || []).find(x => x.id === box.id) || box;
     let err;
-    const attemptNo = liveAttempts(d).filter(a => a.box_id === box.id).length + 1;
+    const attemptNo = liveAttempts(doc).filter(a => a.box_id === rec.id).length + 1;
     if (outcome === 'DELIVERED') {
       if (!receipt || !receiverPhoto) return res.status(400).json({ error: 'Both POD photos (signed receipt + receiver with box) are required' });
       if (!received_by_name) return res.status(400).json({ error: 'Received-by name is required' });
-      err = changeBoxStatus(box, 'DELIVERED', req.user, notes || '', { received_by_name });
+      err = changeBoxStatus(rec, 'DELIVERED', req.user, notes || '', { received_by_name });
     } else {
       if (!SM.FAILURE_REASONS.includes(failure_reason)) return res.status(400).json({ error: 'A failure reason is required' });
-      err = changeBoxStatus(box, 'RETURNED', req.user, notes || `Failed: ${failure_reason}`, { reason: notif.REASON_TEXT[failure_reason] });
+      err = changeBoxStatus(rec, 'RETURNED', req.user, notes || `Failed: ${failure_reason}`, { reason: notif.REASON_TEXT[failure_reason] });
     }
     if (err) return res.status(400).json({ error: err });
     const attempt = {
-      id: db.nextId('attempt'), box_id: box.id, trucking_assignment_id: box.trucking_assignment_id,
+      id: db.nextId('attempt'), box_id: rec.id, trucking_assignment_id: rec.trucking_assignment_id,
       attempt_number: attemptNo, attempted_at: new Date().toISOString(),
       outcome, failure_reason: outcome === 'FAILED' ? failure_reason : null,
       pod_receipt_photo: receipt, pod_receiver_photo: receiverPhoto,
       received_by_name: received_by_name || null, notes: notes || '',
       created_at: new Date().toISOString()
     };
-    d.delivery_attempts.push(attempt);
-    if (outcome === 'FAILED') box.trucking_assignment_id = null; // back to warehouse pool
+    doc.delivery_attempts = doc.delivery_attempts || [];
+    doc.delivery_attempts.push(attempt);
+    if (outcome === 'FAILED') rec.trucking_assignment_id = null; // back to warehouse pool
     // trip auto-complete when nothing left out for delivery
-    const trip = d.trips.find(t => t.id === attempt.trucking_assignment_id);
-    if (trip && !d.boxes.some(b => b.trucking_assignment_id === trip.id && ['OUT_FOR_DELIVERY', 'LOADED_TRUCK', 'ASSIGNED'].includes(b.status))) {
+    const trip = doc.trips.find(t => t.id === attempt.trucking_assignment_id);
+    if (trip && !doc.boxes.some(b => b.trucking_assignment_id === trip.id && ['OUT_FOR_DELIVERY', 'LOADED_TRUCK', 'ASSIGNED'].includes(b.status))) {
       trip.status = 'COMPLETED';
     }
     db.persist();
-    res.json({ attempt, box: boxDetail(box) });
+    res.json({ attempt, box: boxDetail(rec) });
   });
 
 // ---------- returns queue ----------
