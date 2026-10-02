@@ -5195,6 +5195,7 @@ async function pageAdmin() {
       <div class="muted" style="margin-bottom:8px;font-size:12.5px">
         An account can be open in one place at a time. If somebody has gone home leaving theirs
         signed in, free it here — otherwise it releases itself after about 15 minutes idle.
+        Five wrong passwords in a row lock an account's sign-in for 15 minutes; unlock it here sooner.
       </div>
       <table><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Signed in</th><th></th></tr>
       ${users.map(u => `<tr>
@@ -5203,10 +5204,13 @@ async function pageAdmin() {
         <td>${u.signed_in
           ? `<span class="badge st-received_origin">Open</span>${u.signed_in_where
               ? `<div class="muted" style="font-size:11px">${esc(u.signed_in_where)}</div>` : ''}`
-          : '<span class="muted">—</span>'}</td>
+          : '<span class="muted">—</span>'}${u.locked_until
+          ? `<div><span class="badge st-returned">Locked</span>
+               <div class="muted" style="font-size:11px">wrong passwords</div></div>` : ''}</td>
         <td class="inline-actions">
           ${u.id !== ME.id ? `<button class="small secondary" onclick="toggleUser(${u.id}, ${!u.active})">${u.active ? 'Deactivate' : 'Activate'}</button>` : '<span class="muted">you</span>'}
           ${u.signed_in && u.id !== ME.id ? `<button class="small secondary" onclick="freeSession(${u.id}, '${esc(u.name)}')">Sign out</button>` : ''}
+          ${u.locked_until ? `<button class="small secondary" onclick="unlockUser(${u.id})">Unlock</button>` : ''}
         </td>
       </tr>`).join('')}
       </table>
@@ -5231,6 +5235,15 @@ async function freeSession(id, name) {
   try {
     const r = await api('/api/users/' + id + '/sign-out', { method: 'POST' });
     flash(r.message || 'Signed out');
+    route();
+  } catch (e) { showErr(e); }
+}
+// Lift a wrong-password lock. No confirmation: nobody is signed out by it, and the lock would
+// have lifted itself within fifteen minutes anyway.
+async function unlockUser(id) {
+  try {
+    const r = await api('/api/users/' + id + '/unlock', { method: 'POST' });
+    flash(r.message || 'Unlocked');
     route();
   } catch (e) { showErr(e); }
 }

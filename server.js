@@ -391,13 +391,85 @@ function nextLoadCode(d, originCountry) {
   return `${prefix}-C${max + 1}`;
 }
 
+// ---------- wrong passwords ----------
+// Nothing used to stop somebody trying password after password against a staff account. Now
+// five wrong in a row lock that account's sign-in for fifteen minutes, and a connection that
+// gets twenty wrong — across any accounts — is turned away for fifteen minutes too, so one
+// machine cannot work its way down the staff list instead.
+//
+// The account's count is kept on the account rather than in memory. Every serverless instance
+// has memory of its own, and a count kept there is reset by nothing more than landing on a
+// different instance; the document is the one thing they all share. The per-connection count
+// is in memory and is only a backstop — the per-account lock is the real defence.
+//
+// A locked account is refused before its password is even looked at, so a guess made during the
+// lock cannot get in; otherwise the lock would only slow down someone who had already guessed
+// right. An email that is not an account is counted as well, in memory, and locks with the same
+// words, so the lock does not tell anyone which addresses are real.
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_MAX_FAILURES_PER_CONNECTION = 20;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const loginMisses = new Map();     // 'ip:…' / 'email:…' → { failures, first_at, locked_until }
+
+// How long a count has left to run, in ms; 0 when it is not locked.
+function lockLeft(rec) {
+  const until = rec && rec.locked_until ? Date.parse(rec.locked_until) : 0;
+  return Math.max(0, until - Date.now());
+}
+// One more wrong try. A window that has run out starts again from nothing, so a handful of typos
+// spread over a week never adds up to a lock. True when this is the try that locks.
+function countMiss(rec, max) {
+  const now = Date.now();
+  if (!rec.first_at || now - Date.parse(rec.first_at) > LOGIN_LOCK_MS) {
+    rec.failures = 0;
+    rec.first_at = new Date(now).toISOString();
+  }
+  rec.failures += 1;
+  if (rec.failures < max) return false;
+  rec.locked_until = new Date(now + LOGIN_LOCK_MS).toISOString();
+  rec.failures = 0;
+  rec.first_at = null;
+  return true;
+}
+function memoryMisses(key) {
+  // Guessing must not be able to grow the heap without end.
+  if (!loginMisses.has(key) && loginMisses.size >= 5000) loginMisses.clear();
+  if (!loginMisses.has(key)) loginMisses.set(key, { failures: 0, first_at: null, locked_until: null });
+  return loginMisses.get(key);
+}
+const minutesOf = (ms) => Math.max(1, Math.ceil(ms / 60000));
+const lockedMessage = (ms) => `Too many wrong passwords — sign-in is locked for about ${minutesOf(ms)} `
+  + `minute${minutesOf(ms) === 1 ? '' : 's'}. An admin can unlock it sooner.`;
+const connectionMessage = (ms) => `Too many wrong passwords from this connection — please wait about `
+  + `${minutesOf(ms)} minute${minutesOf(ms) === 1 ? '' : 's'} and try again.`;
+
 // ---------- auth routes ----------
 // `portal` is the branch slug the sign-in came from (th / kh / mnl). Branch staff can only
 // sign in at their own branch's portal; HQ admins may sign in anywhere.
 app.post('/api/login', (req, res) => {
   const { email, password, portal } = req.body || {};
-  const u = db.get().users.find(x => x.email.toLowerCase() === String(email || '').toLowerCase() && x.active);
-  if (!u || !verifyPassword(password || '', u.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
+  const address = String(email || '').trim().toLowerCase();
+  const connection = memoryMisses('ip:' + req.ip);
+  if (lockLeft(connection)) return res.status(429).json({ error: connectionMessage(lockLeft(connection)) });
+  const u = db.get().users.find(x => x.email.toLowerCase() === address && x.active);
+  // The account keeps its own count; an address that is not an account gets one in memory.
+  const misses = u ? (u.login_guard || { failures: 0, first_at: null, locked_until: null })
+                   : memoryMisses('email:' + address);
+  if (lockLeft(misses)) return res.status(429).json({ error: lockedMessage(lockLeft(misses)) });
+  if (!u || !verifyPassword(password || '', u.password_hash)) {
+    const lockedNow = countMiss(misses, LOGIN_MAX_FAILURES);
+    const connectionLockedNow = countMiss(connection, LOGIN_MAX_FAILURES_PER_CONNECTION);
+    if (u) { u.login_guard = misses; db.persist(); }
+    if (lockedNow) return res.status(429).json({ error: lockedMessage(LOGIN_LOCK_MS) });
+    if (connectionLockedNow) return res.status(429).json({ error: connectionMessage(LOGIN_LOCK_MS) });
+    // Warn while there is still a try to spare, rather than only once it is too late.
+    const left = LOGIN_MAX_FAILURES - misses.failures;
+    return res.status(401).json({ error: left <= 2
+      ? `Invalid email or password. ${left} more wrong ${left === 1 ? 'try locks' : 'tries lock'} sign-in for 15 minutes.`
+      : 'Invalid email or password' });
+  }
+  // The right password ends any run of wrong ones.
+  if (u.login_guard) { delete u.login_guard; db.persist(); }
   const role = ROLE.normalizeRole(u.role);
   if (portal && !BRANCH.roleAllowedAtPortal(role, portal)) {
     const own = BRANCH.portalForBranch(BRANCH.branchForRole(role));
@@ -3648,7 +3720,7 @@ app.get('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const myBranch = BRANCH.branchForRole(req.user.role);
   const scoped = ROLE.isBranchAdmin(req.user.role);
   res.json(db.get().users
-    .map(({ password_hash, session, ...u }) => {
+    .map(({ password_hash, session, login_guard, ...u }) => {
       const role = ROLE.normalizeRole(u.role);
       return {
         ...u, role, role_label: ROLE.ROLE_LABELS[role] || role, branch: BRANCH.branchForRole(role),
@@ -3656,7 +3728,9 @@ app.get('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
         // free it if somebody has gone home with the session still running.
         signed_in: sessionLive(session),
         signed_in_where: sessionLive(session) ? (session.where || '') : '',
-        signed_in_since: sessionLive(session) ? session.started_at : null
+        signed_in_since: sessionLive(session) ? session.started_at : null,
+        // Locked by wrong passwords, so an admin can see why someone cannot get in.
+        locked_until: lockLeft(login_guard) ? login_guard.locked_until : null
       };
     })
     .filter(u => !scoped || u.branch === myBranch));
@@ -3675,6 +3749,21 @@ app.post('/api/users/:id/sign-out', requireRole(...ROLE.ANY_ADMIN), (req, res) =
   u.session = null;
   db.persist();
   res.json({ ok: true, message: `${u.name} has been signed out. They can sign in again now.` });
+});
+
+// Let somebody back in after too many wrong passwords — the person at the counter who really
+// did mistype it — rather than making them wait the lock out. Nobody is signed out by this.
+app.post('/api/users/:id/unlock', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
+  const d = db.get();
+  const u = d.users.find(x => x.id === +req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found' });
+  if (ROLE.isBranchAdmin(req.user.role)
+      && BRANCH.branchForRole(ROLE.normalizeRole(u.role)) !== BRANCH.branchForRole(req.user.role)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  delete u.login_guard;
+  db.persist();
+  res.json({ ok: true, message: `${u.name} can sign in again now.` });
 });
 app.post('/api/users', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
   const { name, email, role, password } = req.body || {};
@@ -3723,9 +3812,10 @@ app.put('/api/users/:id', requireRole(...ROLE.ANY_ADMIN), (req, res) => {
     if (!otherAdmins.length) return res.status(400).json({ error: 'This is the last active admin — assign another admin first' });
   }
   for (const k of ['name', 'role', 'active']) if (k in b) u[k] = k === 'name' ? properName(b[k]) : b[k];
-  if (b.password) u.password_hash = hashPassword(b.password);
+  // A new password set by an admin ends any lock the old one was collecting.
+  if (b.password) { u.password_hash = hashPassword(b.password); delete u.login_guard; }
   db.persist();
-  const { password_hash, ...safe } = u;
+  const { password_hash, login_guard, ...safe } = u;
   res.json({ ...safe, role_label: ROLE.ROLE_LABELS[ROLE.normalizeRole(safe.role)] || safe.role });
 });
 
