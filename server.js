@@ -1754,6 +1754,10 @@ app.get('/api/driver/me', requireDriver, (req, res) => {
     const sender = (d.customers || []).find(c => c.id === shipment.sender_id) || {};
     const base = {
       id: x.id, box_number: x.box_number, status: x.status,
+      // A camera reads the label's QR, which is a tracking link rather than the box number. The
+      // phone needs the token to know which box — and so which doorstep — a scan means before it
+      // sends it. Nothing the driver is not already holding: it is printed on the box.
+      qr_token: x.qr_token || null,
       status_label: SM.FRIENDLY[x.status] || x.status,
       picked_up: !!x.picked_up_at,
       // So the stop can show that the receiver has already been told, instead of offering a

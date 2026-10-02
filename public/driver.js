@@ -194,7 +194,7 @@
       <div class="drv-head">
         <div>
           <div class="drv-title">${esc(title)}</div>
-          <div class="muted">${stopsFor(RUN.boxes).length} stop(s) · ${RUN.boxes.length} box(es) · <b>${RUN.outstanding}</b> still to do</div>
+          <div class="muted">${stopsFor(RUN.boxes).length} stop(s) · ${RUN.boxes.length} box(es) · <b>${toDo()}</b> still to do</div>
           ${RUN.plate_number || RUN.trucking_company ? `<div class="muted drv-truck">🚛 ${esc([RUN.plate_number, RUN.trucking_company].filter(Boolean).join(' · '))}</div>` : ''}
         </div>
         <button class="drv-out" onclick="drvLogout()">End</button>
@@ -437,14 +437,38 @@
     OTHER: 'Something else'
   };
 
+  // Which box on this run a code means, the same way the server decides. A typed box number
+  // names it directly; the camera reads the label's QR, which is a tracking link, so it is the
+  // token in the link that identifies the box. A delivery receipt's QR is its first box's link.
+  // Matching only box numbers meant every camera scan named no box at all: the name and both
+  // photographs were asked for again at the same door, and the rest of a receipt was never
+  // offered — only typing the number worked.
+  function boxFor(code) {
+    const raw = String(code || '').trim();
+    const needle = ((raw.match(/[?&]t=([A-Za-z0-9_-]+)/) || [])[1] || raw).toLowerCase();
+    const byToken = (RUN.boxes || []).filter(x => String(x.qr_token || '').toLowerCase() === needle);
+    const hits = byToken.length ? byToken
+      : (RUN.boxes || []).filter(x => String(x.box_number).toLowerCase() === needle);
+    return hits.length === 1 ? hits[0] : null;
+  }
+
   // Which stop a box belongs to, so one answer covers everything handed over together.
-  // A number that matches two boxes on the same run names no single stop, so it gets a key of
-  // its own rather than borrowing the signature and photographs from someone else's doorstep.
+  // A code that names no single box on this run gets a key of its own rather than borrowing the
+  // signature and photographs from someone else's doorstep.
   function stopKeyFor(code) {
-    const hits = (RUN.boxes || []).filter(x =>
-      String(x.box_number).toLowerCase() === String(code).trim().toLowerCase());
-    const b = hits.length === 1 ? hits[0] : null;
+    const b = boxFor(code);
     return b ? [b.who || '', b.address || ''].join('¦') : String(code);
+  }
+
+  // What is left for the driver's own hands. On a delivery that is every box not yet dealt with
+  // at a door. On a collection it is every box not yet on the van: the pass stays open until the
+  // warehouse books the load in, but that part is the warehouse's work — counting it here told
+  // a driver with every box aboard that two were "still unscanned".
+  function toDo() {
+    if (!RUN) return 0;
+    if (RUN.kind !== 'PICKUP') return RUN.outstanding;
+    return (RUN.boxes || []).filter(b => !b.picked_up
+      && !['RECEIVED_ORIGIN', 'LOADED_CONTAINER', 'IN_TRANSIT'].includes(b.status)).length;
   }
 
   // Photographs already taken at this stop, so a second and third box through the same door
@@ -521,8 +545,10 @@
     // The arrival button's wording depends on how much is still unscanned, so it is redrawn too.
     if (gid('drvArrival')) gid('drvArrival').innerHTML = arrivalPanel();
     const left = gid('drvApp').querySelector('.drv-head b');
-    if (left) left.textContent = RUN.outstanding;
-    if (MODE === 'DELIVER' && !r.already) await offerRestOfReceipt(code);
+    if (left) left.textContent = toDo();
+    // Nothing left on the run means nothing left on the receipt either — and the pass has just
+    // closed, so the copy of the run here is the one from before this box was delivered.
+    if (MODE === 'DELIVER' && !r.already && !r.finished) await offerRestOfReceipt(code);
     if (r.finished) finishRun();
   }
 
@@ -533,8 +559,9 @@
   // whether all three actually came off the van.
   async function offerRestOfReceipt(code) {
     const key = stopKeyFor(code);
-    const rest = (RUN.boxes || []).filter(b =>
-      [b.who || '', b.address || ''].join('¦') === key && b.status === 'OUT_FOR_DELIVERY');
+    const scanned = boxFor(code);
+    const rest = (RUN.boxes || []).filter(b => !(scanned && b.id === scanned.id)
+      && [b.who || '', b.address || ''].join('¦') === key && b.status === 'OUT_FOR_DELIVERY');
     if (!rest.length) return;
 
     const ok = await askYesNo({
@@ -546,6 +573,7 @@
     if (!ok) return;
 
     const proof = podByStop[key] || {};
+    let finished = false;
     for (const b of rest) {
       try {
         const r = await api('/api/driver/scan', {
@@ -557,17 +585,21 @@
           }
         });
         LOG.unshift({ ok: true, text: r.message });
+        if (r.finished) finished = true;
       } catch (e) {
         LOG.unshift({ ok: false, text: b.box_number + ' — ' + e.message });
       }
     }
-    try { RUN = await api('/api/driver/me'); } catch (e) { /* the log already told them */ }
+    // When these were the last boxes, the pass closed itself on the final one and the run can no
+    // longer be fetched — so it is the scans' own answer that says the run is over. Relying on a
+    // fresh copy left the driver on a stale screen saying a delivered box was still to do.
+    try { RUN = await api('/api/driver/me'); } catch (e) { /* closed, or the log already told them */ }
     paintLog();
     paintList();
     const tally = gid('drvApp').querySelector('.drv-head b');
-    if (tally) tally.textContent = RUN.outstanding;
+    if (tally) tally.textContent = toDo();
     scanFlash('ok', `${rest.length} more box${rest.length === 1 ? '' : 'es'} delivered on the same receipt`, 1800);
-    if (!RUN.outstanding) finishRun();
+    if (finished || !RUN.outstanding) finishRun();
   }
 
   // A phone at a tailgate is often not being looked at; a short buzz says it landed.
@@ -664,7 +696,7 @@
         <div>Waiting for the warehouse to check the load in. Your pass closes when they do.</div>
       </div>`;
     }
-    const left = RUN.outstanding;
+    const left = toDo();
     return `<button class="drv-arrive" onclick="drvArrived(this)">
         🏭 Arrived at warehouse
       </button>

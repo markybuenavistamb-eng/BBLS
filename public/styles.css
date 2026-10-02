@@ -1420,9 +1420,10 @@ button.drv-near:disabled { opacity: .6; cursor: default; }
 
 /* The site's buttons are white-on-orange. Anything in the driver app that paints itself pale
    must say what colour its text is, or it inherits white and disappears. This is the floor.
-   Buttons that state both of their own colours are exempt — .danger and .drv-near each do, and
-   forcing navy over them would take away the very thing that marks them out. */
-.drv-main button:not(.drv-btn):not(.drv-mode.on):not(.danger):not(.drv-near) {
+   Buttons that state both of their own colours are exempt — .danger, .drv-near and .drv-arrive
+   each do, and forcing navy over them would take away the very thing that marks them out (on
+   the green arrival button it left navy text nobody could read). */
+.drv-main button:not(.drv-btn):not(.drv-mode.on):not(.danger):not(.drv-near):not(.drv-arrive) {
   color: var(--chrome, #0f2350);
 }
 
